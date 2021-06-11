@@ -22,15 +22,29 @@ type Port struct {
 
 // get output channel
 func (p *Port) Ouput() (chan Message) {
-
+	return p.output
 }
 
 // get input channel
 func (p *Port) Input() (chan Message) {
+	return p.input
+}
 
+// send output msg
+func (p *Port) SendOutput(msg Message) (error) {
+	p.PkgOut += 1
+	p.output <- msg
+	return nil
+}
+
+// send input msg
+func (p *Port) SendInput(msg Message) (error) {
+	p.PkgIn += 1
+	p.input <- msg
+	return nil
 }
 
 // get address ipv4/mac
 func (p *Port) GetAddr() (string) {
-	return addr
+	return p.Addr
 }
