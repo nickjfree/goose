@@ -1,8 +1,10 @@
 package main
 
 import (
+	"context"
 	"log"
 	"os"
+	"time"
 	"goose/pkg/tunnel"
 )
 
@@ -12,20 +14,19 @@ var (
 )
 
 
-
-type TestMsg struct {
-	Src string
-	Dst string
-}
-
 func main() {
-	t := tunnel.NewTunnel()
-	p, err := t.AddPort("0.0.0.0")
-	if err != nil {
-		logger.Printf("error %s", err)
-	}
+	t := tunnel.NewTunSwitch()
+	t.AddPort("192.168.0.1", false)
+	local := t.GetPort("0.0.0.0")
 	go func() {
-		p.SendInput(TestMsg{"192.168.0.1", "192.168.0.2"})
+		ctx, cancel := context.WithTimeout(context.Background(), 1 * time.Second)
+		defer cancel()
+		if err := local.SendInput(
+			ctx, 
+			tunnel.NewTunMessage("192.168.0.1", "192.168.0.2", []byte("abcdefg"), local),
+		); err != nil {
+			logger.Print(err)
+		}
 	} ()
 	logger.Printf("quit: %s", <- t.Start())
 }

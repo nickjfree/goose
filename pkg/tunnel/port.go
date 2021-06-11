@@ -1,6 +1,13 @@
 package tunnel
 
 
+import (
+	"context"
+	"errors"
+	"fmt"
+	"sync"
+)
+
 // port
 type Port struct {
 	// addr
@@ -11,37 +18,71 @@ type Port struct {
 	PkgOut int
 	// disabled
 	Disabled bool
+	// isLocal
+	IsLocal bool
 	// in
 	input chan Message
 	// out
 	output chan Message
-	// client
-	client interface{}
+	// port lock
+	lock sync.Mutex
 }
 
-
 // get output channel
-func (p *Port) Ouput() (chan Message) {
+func (p *Port) Ouput() (<-chan Message) {
 	return p.output
 }
 
-// get input channel
-func (p *Port) Input() (chan Message) {
-	return p.input
+// disable port
+func (p *Port) Disable() {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	p.Disabled = true
+}
+
+// close the port
+func (p *Port) Close() error {
+	p.Disable()
+	// close the output channel
+	close(p.output)
+	return nil
 }
 
 // send output msg
-func (p *Port) SendOutput(msg Message) (error) {
-	p.PkgOut += 1
-	p.output <- msg
+func (p *Port) SendOutput(ctx context.Context, msg Message) (error) {
+	// lock the port when sending output
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	if p.Disabled {
+		return errors.New("port disabled")
+	}
+	select {
+	case <- ctx.Done():
+		// dead peer
+		return errors.New(fmt.Sprintf("dead peer: %s(outbound)", p.Addr))
+	case p.output <- msg:
+		p.PkgOut += 1
+		return nil
+	}
 	return nil
 }
 
 // send input msg
-func (p *Port) SendInput(msg Message) (error) {
-	p.PkgIn += 1
-	p.input <- msg
-	return nil
+func (p *Port) SendInput(ctx context.Context, msg Message) (error) {
+	// lock the port when sending input
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	if p.Disabled {
+		return errors.New("port disabled")
+	}
+	select {
+	case <- ctx.Done():
+		// busy tunnel
+		return errors.New(fmt.Sprintf("tunnel busy: %s(inbound)", p.Addr))
+	case p.input <- msg:
+		p.PkgIn += 1
+		return nil
+	}
 }
 
 // get address ipv4/mac

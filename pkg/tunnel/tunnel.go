@@ -5,56 +5,113 @@ import (
 	"errors"
 	"log"
 	"os"
+	"sync"
 	"time"
 )
 
 var (
-	logger = log.New(os.Stdout, "logger: ", log.Lshortfile)
+	logger = log.New(os.Stdout, "tunnel: ", log.Lshortfile)
 )
 
-
+// message
 type Message interface {
-
+	// get the sender port
+	GetPort() *Port
+	// get src addr
+	GetSrc() string
+	// get dst
+	GetDst() string
+	// payload
+	Payload() interface{}
+	// set port
+	SetPort(p *Port)
 }
 
-//
+// message handler
+type MessageHandler func(t *Tunnel, msg Message) (bool, error) 
+
+// tunnel
 type Tunnel struct {
+	// tunnel lock
+	lock sync.Mutex
 	// input mesages
 	input chan Message
-	// output
+	// ports
 	ports map[string]*Port
+	// local port
+	local *Port
 	// quit
 	q chan bool
 	// error
 	e chan error
+	// handlers
+	handlers []MessageHandler
 }
+
 
 func NewTunnel() (*Tunnel) {
 	return &Tunnel{
 		input: make (chan Message),
 		ports: make (map[string]*Port),
 		q: make (chan bool),
+		e: make (chan error),
 	}
 }
 
+func NewTunSwitch() (*Tunnel) {
+	t := NewTunnel()
+	// add tun logic
+	t.AddMessageHandler(Tun)
+	// add tun local port
+	t.AddPort("0.0.0.0", true)
+	return t
+}
+
+
+func (t *Tunnel) AddMessageHandler(h MessageHandler) {
+	t.handlers = append(t.handlers, h)
+}
+
 // add port with address
-func (t *Tunnel) AddPort(addr string) (*Port, error) {
+func (t *Tunnel) AddPort(addr string, local bool) (*Port, error) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
 	p, _ := t.ports[addr]
 	if p != nil {
 		return p, nil
 	}
 	p = &Port{
 		Addr: addr,
+		IsLocal: local,
 		input: t.input,
 		output: make(chan Message),
 	}
 	t.ports[addr] = p
+	// register local port
+	if local {
+		t.local = p
+	}
 	return p, nil
 }
 
 // remove port
-func (t *Tunnel) Remove(addr string) (error) {
+func (t *Tunnel) RemovePort(addr string) (error) {
+	t.lock.Lock()
+	defer t.lock.Unlock()
 	return nil
+}
+
+// get port by addr
+func (t *Tunnel) GetPort(addr string) *Port {
+	t.lock.Lock()
+	defer t.lock.Unlock()
+	p, _ := t.ports[addr]
+	return p
+}
+
+// get the local port
+func (t *Tunnel) GetLocalPort() *Port {
+	return t.local
 }
 
 // close tunnel
@@ -63,7 +120,7 @@ func (t *Tunnel) Close() (error) {
 	return nil
 }
 
-
+// start tunnel logic
 func (t *Tunnel) Start() (chan error) {
 	go func() {
 		t.e <- t.run()
@@ -71,17 +128,31 @@ func (t *Tunnel) Start() (chan error) {
 	return t.e
 }
 
-
-// main loop
+// tunnel main loop
 func (t *Tunnel) run() (error) {
 
 	for {
 		select {
-			// handle inbound messages
 			case msg := <- t.input:
-				logger.Printf("%+v", msg)
+				// handle inbound messages
+				for i := len(t.handlers)-1; i >= 0; i--  {
+					h := t.handlers[i]
+					done, err := h(t, msg)
+					if err != nil {
+						return err
+					}
+					if done {
+						break
+					}
+				}
 			case <- t.q:
+				// try close all the ports
+				for addr, port := range t.ports {
+					logger.Printf("closing port %s", addr)
+					port.Close()
+				}
 				// quit
+				logger.Printf("tunnel closed")
 				return errors.New("quit")
 			case <- time.Tick(time.Second * 30):
 				logger.Println("tick")
