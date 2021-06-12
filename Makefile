@@ -1,2 +1,2 @@
 build:
-	go build -o goose cmd/main.go
+	go build -o bin/goose cmd/main.go

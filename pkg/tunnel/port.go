@@ -28,23 +28,23 @@ type Port struct {
 	lock sync.Mutex
 }
 
-// get output channel
-func (p *Port) Ouput() (<-chan Message) {
-	return p.output
-}
-
 // disable port
-func (p *Port) Disable() {
-	p.lock.Lock()
-	defer p.lock.Unlock()
+func (p *Port) Disable() bool {
+	if p.Disabled {
+		return false
+	}
 	p.Disabled = true
+	return true
 }
 
 // close the port
 func (p *Port) Close() error {
-	p.Disable()
-	// close the output channel
-	close(p.output)
+	if ok := p.Disable(); ok {
+		// close the output channel
+		p.lock.Lock()
+		defer p.lock.Unlock()
+		close(p.output)
+	}
 	return nil
 }
 
@@ -70,8 +70,8 @@ func (p *Port) SendOutput(ctx context.Context, msg Message) (error) {
 // send input msg
 func (p *Port) SendInput(ctx context.Context, msg Message) (error) {
 	// lock the port when sending input
-	p.lock.Lock()
-	defer p.lock.Unlock()
+	// p.lock.Lock()
+	// defer p.lock.Unlock()
 	if p.Disabled {
 		return errors.New("port disabled")
 	}
@@ -84,6 +84,22 @@ func (p *Port) SendInput(ctx context.Context, msg Message) (error) {
 		return nil
 	}
 }
+
+// read output
+func (p *Port) ReadOutput(ctx context.Context) (Message, error) {
+	select {
+	case <- ctx.Done():
+		// dead port
+		return nil, errors.New(fmt.Sprintf("dead port: %s(outbound)", p.Addr))
+	case msg, ok := <- p.output:
+		if !ok {
+			return nil, errors.New(fmt.Sprintf("port closed %s(outbound)", p.Addr))
+		}
+		return msg, nil
+	}
+}
+
+
 
 // get address ipv4/mac
 func (p *Port) GetAddr() (string) {

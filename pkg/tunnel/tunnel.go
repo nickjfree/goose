@@ -13,20 +13,6 @@ var (
 	logger = log.New(os.Stdout, "tunnel: ", log.Lshortfile)
 )
 
-// message
-type Message interface {
-	// get the sender port
-	GetPort() *Port
-	// get src addr
-	GetSrc() string
-	// get dst
-	GetDst() string
-	// payload
-	Payload() interface{}
-	// set port
-	SetPort(p *Port)
-}
-
 // message handler
 type MessageHandler func(t *Tunnel, msg Message) (bool, error) 
 

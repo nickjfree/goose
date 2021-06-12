@@ -1,0 +1,9 @@
+# github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
+## explicit
+github.com/songgao/water
+github.com/songgao/water/waterutil
+# golang.org/x/sys v0.0.0-20210611083646-a4fc73990273
+## explicit
+golang.org/x/sys/internal/unsafeheader
+golang.org/x/sys/windows
+golang.org/x/sys/windows/registry

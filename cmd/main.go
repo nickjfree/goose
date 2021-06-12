@@ -1,11 +1,13 @@
 package main
 
 import (
-	"context"
+	// "context"
 	"log"
 	"os"
-	"time"
+	"os/signal"
+	// "time"
 	"goose/pkg/tunnel"
+	"goose/pkg/wire"
 )
 
 
@@ -13,20 +15,27 @@ var (
 	logger = log.New(os.Stdout, "logger: ", log.Lshortfile)
 )
 
+// test tun wire
+func TestTunWire() {
 
-func main() {
 	t := tunnel.NewTunSwitch()
 	t.AddPort("192.168.0.1", false)
 	local := t.GetPort("0.0.0.0")
-	go func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 1 * time.Second)
-		defer cancel()
-		if err := local.SendInput(
-			ctx, 
-			tunnel.NewTunMessage("192.168.0.1", "192.168.0.2", []byte("abcdefg"), local),
-		); err != nil {
-			logger.Print(err)
-		}
-	} ()
-	logger.Printf("quit: %s", <- t.Start())
+
+	tun, err := wire.NewTunWire("tun1")
+	if err != nil {
+		logger.Fatal(err)
+	}
+
+	go func() { logger.Printf("tunnel quit: %s", <- t.Start()) } ()
+	go func() { logger.Printf("wire quit: %s", wire.Communicate(tun, local, 0)) } ()
+
+	c := make(chan os.Signal, 1)
+	signal.Notify(c, os.Interrupt)
+	<- c
+}
+
+
+func main() {
+	TestTunWire()
 }
