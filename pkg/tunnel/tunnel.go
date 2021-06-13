@@ -32,8 +32,8 @@ type Tunnel struct {
 	input chan Message
 	// ports
 	ports map[string]*Port
-	// local port
-	local *Port
+	// fallback port
+	fallback *Port
 	// quit
 	q chan bool
 	// error
@@ -56,8 +56,8 @@ func NewTunSwitch() (*Tunnel) {
 	t := NewTunnel()
 	// add tun logic
 	t.AddMessageHandler(Tun)
-	// add tun local port
-	t.AddPort("0.0.0.0", true)
+	// add tun fallback port
+	// t.AddPort("0.0.0.0", true)
 	return t
 }
 
@@ -67,7 +67,7 @@ func (t *Tunnel) AddMessageHandler(h MessageHandler) {
 }
 
 // add port with address
-func (t *Tunnel) AddPort(addr string, local bool) (*Port, error) {
+func (t *Tunnel) AddPort(addr string, fallback bool) (*Port, error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
 	p, _ := t.ports[addr]
@@ -76,14 +76,14 @@ func (t *Tunnel) AddPort(addr string, local bool) (*Port, error) {
 	}
 	p = &Port{
 		Addr: addr,
-		IsLocal: local,
+		IsFallback: fallback,
 		input: t.input,
 		output: make(chan Message),
 	}
 	t.ports[addr] = p
-	// register local port
-	if local {
-		t.local = p
+	// register fallbck port
+	if fallback {
+		t.fallback = p
 	}
 	return p, nil
 }
@@ -104,9 +104,9 @@ func (t *Tunnel) GetPort(addr string) *Port {
 	return p
 }
 
-// get the local port
-func (t *Tunnel) GetLocalPort() *Port {
-	return t.local
+// get the fallback port
+func (t *Tunnel) GetFallbackPort() *Port {
+	return t.fallback
 }
 
 // close tunnel

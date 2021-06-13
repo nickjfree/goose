@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"sync"
+	"time"
 )
 
 // port
@@ -18,8 +19,8 @@ type Port struct {
 	PkgOut int
 	// disabled
 	Disabled bool
-	// isLocal
-	IsLocal bool
+	// isFallbacl
+	IsFallback bool
 	// in
 	input chan Message
 	// out
@@ -49,13 +50,17 @@ func (p *Port) Close() error {
 }
 
 // send output msg
-func (p *Port) SendOutput(ctx context.Context, msg Message) (error) {
+func (p *Port) WriteOutput(msg Message) (error) {
 	// lock the port when sending output
 	p.lock.Lock()
 	defer p.lock.Unlock()
 	if p.Disabled {
 		return errors.New("port disabled")
 	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 1 * time.Second)
+	defer cancel()
+
 	select {
 	case <- ctx.Done():
 		// dead peer
@@ -68,35 +73,25 @@ func (p *Port) SendOutput(ctx context.Context, msg Message) (error) {
 }
 
 // send input msg
-func (p *Port) SendInput(ctx context.Context, msg Message) (error) {
+func (p *Port) WriteInput(msg Message) (error) {
 	// lock the port when sending input
 	// p.lock.Lock()
 	// defer p.lock.Unlock()
 	if p.Disabled {
 		return errors.New("port disabled")
 	}
-	select {
-	case <- ctx.Done():
-		// busy tunnel
-		return errors.New(fmt.Sprintf("tunnel busy: %s(inbound)", p.Addr))
-	case p.input <- msg:
-		p.PkgIn += 1
-		return nil
-	}
+	p.input <- msg
+	p.PkgIn += 1
+	return nil
 }
 
 // read output
-func (p *Port) ReadOutput(ctx context.Context) (Message, error) {
-	select {
-	case <- ctx.Done():
-		// dead port
-		return nil, errors.New(fmt.Sprintf("dead port: %s(outbound)", p.Addr))
-	case msg, ok := <- p.output:
-		if !ok {
-			return nil, errors.New(fmt.Sprintf("port closed %s(outbound)", p.Addr))
-		}
-		return msg, nil
+func (p *Port) ReadOutput() (Message, error) {
+	msg, ok := <- p.output
+	if !ok {
+		return nil, errors.New(fmt.Sprintf("port closed %s(outbound)", p.Addr))
 	}
+	return msg, nil
 }
 
 

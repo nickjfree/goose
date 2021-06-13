@@ -1,14 +1,13 @@
 package wire
 
 import (
-	"context"
 	"goose/pkg/tunnel"
 	"github.com/songgao/water"
 	"github.com/songgao/water/waterutil"
 )
 
 
-const BUFFERSIZE = 2048
+const TUN_BUFFERSIZE = 2048
 
 // tun device
 type TunWire struct {
@@ -35,12 +34,12 @@ func NewTunWire(name string) (Wire, error) {
 	return &TunWire{
 		BaseWire: BaseWire{},
 		ifTun: ifTun,
-		buffer: make([]byte, BUFFERSIZE),
+		buffer: make([]byte, TUN_BUFFERSIZE),
 	}, nil
 }
 
 // read message from tun 
-func (w *TunWire) Read(ctx context.Context) (tunnel.Message, error) {
+func (w *TunWire) Read() (tunnel.Message, error) {
 	n, err := w.ifTun.Read(w.buffer)
 	if err != nil {
 		return nil, err
@@ -62,7 +61,7 @@ func (w *TunWire) Read(ctx context.Context) (tunnel.Message, error) {
 
 
 // send message to tun
-func (w *TunWire) Write(ctx context.Context, msg tunnel.Message) (error) {
+func (w *TunWire) Write(msg tunnel.Message) (error) {
 
 	payload, ok := msg.Payload().([]byte)
 	if !ok {
@@ -84,4 +83,18 @@ func (w *TunWire) Write(ctx context.Context, msg tunnel.Message) (error) {
 
 	logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
 	return nil
+}
+
+
+// attach tun deivce to wire
+func ServeTun(t *tunnel.Tunnel, localAddr string, fallback bool) {
+	local, err := t.AddPort(localAddr, fallback)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	tun, err := NewTunWire("goose")
+	if err != nil {
+		logger.Fatal(err)
+	}
+	logger.Printf("wire quit: %s", Communicate(tun, local))
 }

@@ -2,12 +2,10 @@ package wire
 
 
 import (
-	"context"
 	"errors"
 	"fmt"
 	"log"
 	"os"
-	"time"
 	"goose/pkg/tunnel"
 )
 
@@ -21,9 +19,9 @@ type Wire interface {
 	// attach to port
 	Attach(p *tunnel.Port) (error)
 	// read a message
-	Read(context.Context) (tunnel.Message, error)
+	Read() (tunnel.Message, error)
 	// write a message
-	Write(context.Context, tunnel.Message) (error)
+	Write(tunnel.Message) (error)
 	// get port
 	GetPort() (*tunnel.Port)
 	// detach port
@@ -57,20 +55,20 @@ func (w *BaseWire) Detach() {
 }
 
 // read message from tun 
-func (w *BaseWire) Read(ctx context.Context) (tunnel.Message, error) {
+func (w *BaseWire) Read() (tunnel.Message, error) {
 	log.Fatal(errors.New("basewire read on implemented"))
 	return nil, nil
 }
 
 
 // send message to tun
-func (w *BaseWire) Write(context.Context, tunnel.Message) (error) {
+func (w *BaseWire) Write(tunnel.Message) (error) {
 	log.Fatal(errors.New("basewire write on implemented"))
 	return nil
 }
 
 
-func Communicate(w Wire, port *tunnel.Port, idleTimeout int) (error) {
+func Communicate(w Wire, port *tunnel.Port) (error) {
 
 	inDone := make(chan error)
 	outDone := make(chan error)
@@ -79,9 +77,7 @@ func Communicate(w Wire, port *tunnel.Port, idleTimeout int) (error) {
 	// read wire data
 	go func () {
 		for {
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second * time.Duration(idleTimeout))
-			defer cancel()
-			msg, err := w.Read(ctx)
+			msg, err := w.Read()
 			if err != nil {
 				logger.Printf("read wire %+v error %s", w, err)
 				w.Detach()
@@ -89,7 +85,7 @@ func Communicate(w Wire, port *tunnel.Port, idleTimeout int) (error) {
 				return 
 			}
 			// send msg to port
-			if err = port.SendInput(context.Background(), msg); err != nil {
+			if err = port.WriteInput(msg); err != nil {
 				logger.Printf("send to port %+v error %s", port, err)
 				w.Detach()
 				inDone <- err
@@ -101,7 +97,7 @@ func Communicate(w Wire, port *tunnel.Port, idleTimeout int) (error) {
 	// read port data
 	go func () {
 		for {
-			msg, err := port.ReadOutput(context.Background())
+			msg, err := port.ReadOutput()
 			if err != nil {
 				logger.Printf("read port %+v error %s", port, err)
 				w.Detach()
@@ -109,9 +105,7 @@ func Communicate(w Wire, port *tunnel.Port, idleTimeout int) (error) {
 				return
 			}
 			// send msg to port
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second * time.Duration(idleTimeout))
-			defer cancel()
-			if err = w.Write(ctx, msg); err != nil {
+			if err = w.Write(msg); err != nil {
 				logger.Printf("send to wire %+v error %s", w, err)
 				w.Detach()
 				outDone <- err

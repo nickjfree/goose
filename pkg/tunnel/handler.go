@@ -1,10 +1,6 @@
 package tunnel
 
 import (
-	"context"
-	// "errors"
-	// "log"
-	"time"
 )
 
 // tun mode handler
@@ -14,17 +10,14 @@ func Tun(t *Tunnel, msg Message) (bool, error) {
 	dst := msg.GetDst()
 	dstPort := t.GetPort(dst)
 	if dstPort == nil {
-		// fallback to local port
-		logger.Printf("AAAAAAA %+v", msg)
-		dstPort = t.GetLocalPort()
+		// fallback to fallback port
+		dstPort = t.GetFallbackPort()
 	}
 	if dstPort != nil {
 		// relay msg to dstPort
-		ctx, cancel := context.WithTimeout(context.Background(), 1 * time.Second)
-		defer cancel()
-		if err := dstPort.SendOutput(ctx, msg); err != nil {
+		if err := dstPort.WriteOutput(msg); err != nil {
 			// dstPort error. close it
-			logger.Printf("warning dstPort(%s) dead, force closed", dstPort.GetAddr())
+			logger.Printf("warning dstPort(%s) dead err %s, force closed", dstPort.GetAddr(), err)
 			dstPort.Close()
 		}
 	} else {
