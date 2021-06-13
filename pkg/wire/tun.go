@@ -56,8 +56,8 @@ func (w *TunWire) Read(ctx context.Context) (tunnel.Message, error) {
 	dstIP := waterutil.IPv4Destination(payload)
 	proto := waterutil.IPv4Protocol(payload)
 	// log the packet
-	logger.Printf("recv: src %s, des %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
-	return tunnel.NewTunMessage(string(srcIP), string(dstIP), payload), nil
+	logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
+	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload), nil
 }
 
 
@@ -82,6 +82,6 @@ func (w *TunWire) Write(ctx context.Context, msg tunnel.Message) (error) {
 	dstIP := waterutil.IPv4Destination(payload)
 	proto := waterutil.IPv4Protocol(payload)
 
-	logger.Printf("send: src %s, des %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
+	logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
 	return nil
 }

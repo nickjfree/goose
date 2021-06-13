@@ -19,7 +19,10 @@ var (
 func TestTunWire() {
 
 	t := tunnel.NewTunSwitch()
-	t.AddPort("192.168.0.1", false)
+	_, err := t.AddPort("192.168.0.1", false)
+	if err != nil {
+		logger.Fatal(err)
+	}
 	local := t.GetPort("0.0.0.0")
 
 	tun, err := wire.NewTunWire("tun1")

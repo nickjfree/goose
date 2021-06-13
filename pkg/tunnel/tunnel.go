@@ -16,6 +16,14 @@ var (
 // message handler
 type MessageHandler func(t *Tunnel, msg Message) (bool, error) 
 
+// port event
+type PortEvent struct {
+	// action
+	Action int
+	// port
+	Port *Port
+}
+
 // tunnel
 type Tunnel struct {
 	// tunnel lock
@@ -64,7 +72,7 @@ func (t *Tunnel) AddPort(addr string, local bool) (*Port, error) {
 	defer t.lock.Unlock()
 	p, _ := t.ports[addr]
 	if p != nil {
-		return p, nil
+		return nil, errors.New("port exists")
 	}
 	p = &Port{
 		Addr: addr,
@@ -84,6 +92,7 @@ func (t *Tunnel) AddPort(addr string, local bool) (*Port, error) {
 func (t *Tunnel) RemovePort(addr string) (error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
+	delete(t.ports, addr)	
 	return nil
 }
 
@@ -142,6 +151,7 @@ func (t *Tunnel) run() (error) {
 				return errors.New("quit")
 			case <- time.Tick(time.Second * 30):
 				logger.Println("tick")
+
 		}
 	}
 	return nil

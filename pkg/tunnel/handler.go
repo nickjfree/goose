@@ -15,6 +15,7 @@ func Tun(t *Tunnel, msg Message) (bool, error) {
 	dstPort := t.GetPort(dst)
 	if dstPort == nil {
 		// fallback to local port
+		logger.Printf("AAAAAAA %+v", msg)
 		dstPort = t.GetLocalPort()
 	}
 	if dstPort != nil {

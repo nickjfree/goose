@@ -42,8 +42,8 @@ func (p *Port) Close() error {
 	if ok := p.Disable(); ok {
 		// close the output channel
 		p.lock.Lock()
-		defer p.lock.Unlock()
 		close(p.output)
+		p.lock.Unlock()
 	}
 	return nil
 }
