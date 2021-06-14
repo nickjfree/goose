@@ -3,10 +3,9 @@ package tunnel
 
 import (
 	"context"
-	"errors"
-	"fmt"
 	"sync"
 	"time"
+	"github.com/pkg/errors"
 )
 
 // port
@@ -27,10 +26,12 @@ type Port struct {
 	output chan Message
 	// port lock
 	lock sync.Mutex
+	// tunnel
+	t *Tunnel
 }
 
 // disable port
-func (p *Port) Disable() bool {
+func (p *Port) disable() bool {
 	if p.Disabled {
 		return false
 	}
@@ -40,11 +41,11 @@ func (p *Port) Disable() bool {
 
 // close the port
 func (p *Port) Close() error {
-	if ok := p.Disable(); ok {
+	p.lock.Lock()
+	defer p.lock.Unlock()
+	if ok := p.disable(); ok {
 		// close the output channel
-		p.lock.Lock()
 		close(p.output)
-		p.lock.Unlock()
 	}
 	return nil
 }
@@ -64,7 +65,7 @@ func (p *Port) WriteOutput(msg Message) (error) {
 	select {
 	case <- ctx.Done():
 		// dead peer
-		return errors.New(fmt.Sprintf("dead peer: %s(outbound)", p.Addr))
+		return errors.Errorf("dead peer: %s(outbound)", p.Addr)
 	case p.output <- msg:
 		p.PkgOut += 1
 		return nil
@@ -89,7 +90,7 @@ func (p *Port) WriteInput(msg Message) (error) {
 func (p *Port) ReadOutput() (Message, error) {
 	msg, ok := <- p.output
 	if !ok {
-		return nil, errors.New(fmt.Sprintf("port closed %s(outbound)", p.Addr))
+		return nil, errors.Errorf("port closed %s(outbound)", p.Addr)
 	}
 	return msg, nil
 }

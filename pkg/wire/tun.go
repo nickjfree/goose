@@ -4,6 +4,7 @@ import (
 	"goose/pkg/tunnel"
 	"github.com/songgao/water"
 	"github.com/songgao/water/waterutil"
+	"github.com/pkg/errors"
 )
 
 
@@ -65,20 +66,20 @@ func (w *TunWire) Write(msg tunnel.Message) (error) {
 		logger.Printf("invalid payload format %+v", payload)
 		return nil
 	}
-	n, err := w.ifTun.Write(payload)
-	if err != nil {
-		return err
-	}
+
 	if !waterutil.IsIPv4(payload) {
-		logger.Printf("send: not ipv4 packet len %d", n)
+		logger.Printf("send: not ipv4 packet len %d", len(payload))
 		return nil
 	}
 
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
 	proto := waterutil.IPv4Protocol(payload)
-
-	logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
+	logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
+	_, err := w.ifTun.Write(payload)
+	if err != nil {
+		return errors.Wrap(err, "write tun error")
+	}
 	return nil
 }
 

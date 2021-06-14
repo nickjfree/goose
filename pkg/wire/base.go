@@ -2,10 +2,9 @@ package wire
 
 
 import (
-	"errors"
-	"fmt"
 	"log"
 	"os"
+	"github.com/pkg/errors"
 	"goose/pkg/tunnel"
 )
 
@@ -79,14 +78,14 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 		for {
 			msg, err := w.Read()
 			if err != nil {
-				logger.Printf("read wire %+v error %s", w, err)
+				logger.Printf("read wire %+v error %+v", w, err)
 				w.Detach()
 				inDone <- err
 				return 
 			}
 			// send msg to port
-			if err = port.WriteInput(msg); err != nil {
-				logger.Printf("send to port %+v error %s", port, err)
+			if err := port.WriteInput(msg); err != nil {
+				logger.Printf("send to port %+v error %+v", port, err)
 				w.Detach()
 				inDone <- err
 				return
@@ -105,7 +104,7 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 				return
 			}
 			// send msg to port
-			if err = w.Write(msg); err != nil {
+			if err := w.Write(msg); err != nil {
 				logger.Printf("send to wire %+v error %s", w, err)
 				w.Detach()
 				outDone <- err
@@ -114,7 +113,7 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 		}
 	} ()
 	// wait for routines to quit
-	logger.Printf("In quit: %s, Out quit: %s", <- inDone, <- outDone)
+	logger.Printf("In quit: %+v, Out quit: %+v", <- inDone, <- outDone)
 
-	return errors.New(fmt.Sprintf("wire %+v quit", w))
+	return errors.Errorf("wire %+v quit", w)
 }

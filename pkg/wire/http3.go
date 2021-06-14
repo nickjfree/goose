@@ -8,7 +8,6 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"encoding/pem"
-	"fmt"
 	"io"
 	"io/ioutil"
 	"math/big"
@@ -19,6 +18,7 @@ import (
 	"github.com/lucas-clemente/quic-go/http3"
 	"github.com/lucas-clemente/quic-go/quicvarint"
 	"github.com/songgao/water/waterutil"
+	"github.com/pkg/errors"
 	"goose/pkg/tunnel"
 )
 
@@ -65,23 +65,23 @@ func (w *HTTP3Wire) Read() (tunnel.Message, error) {
 	br := &byteReaderImpl{w.stream}
 	t, err := quicvarint.Read(br)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "read http3 stream error")
 	}
 	len, err := quicvarint.Read(br)
 	if err != nil {
-		return nil, err
+		return nil, errors.Wrap(err, "read http3 stream error")
 	}
 	// Receive only HTTP3 data frames
 	if t != 0x0 {
-		return nil, fmt.Errorf("Incorrect HTTP3 frame type! Expected: Data frame (0x0). Got: %x", t)
+		return nil, errors.Errorf("Incorrect HTTP3 frame type! Expected: Data frame (0x0). Got: %x", t)
 	}
 	if len > HTTP3_BUFFERSIZE {
-		return nil, fmt.Errorf("client buffer size(%d) to big", len)
+		return nil, errors.Errorf("client buffer size(%d) to big", len)
 	}
 	payload := make ([]byte, len)
 	n, err := io.ReadFull(w.stream, payload)
 	if err != nil {
-		return nil, fmt.Errorf("read http3 stream error: %s", err)
+		return nil, errors.Wrap(err, "read http3 stream")
 	}
 
 	srcIP := waterutil.IPv4Source(payload)
@@ -104,10 +104,10 @@ func (w *HTTP3Wire) Write(msg tunnel.Message) (error) {
 	quicvarint.Write(buf, 0x0)
 	quicvarint.Write(buf, uint64(len(payload)))
 	if _, err := w.stream.Write(buf.Bytes()); err != nil {
-		return err
+		return errors.Wrapf(err, "write http3 stream")
 	}
 	if _, err := w.stream.Write(payload); err != nil {
-		return err
+		return errors.Wrapf(err, "write http3 stream")
 	}
 	return nil
 }
@@ -133,13 +133,13 @@ func (s *HTTP3Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// create a HTTP3 wire
 	wire, err := NewHTTP3Wire(stream)
 	if err != nil {
-		logger.Printf("create http3 wire error %s", err)
+		logger.Printf("create http3 wire error %+v", err)
 		return
 	}
 	// add test port
 	port, err := s.tunnel.AddPort("192.168.1.1", false)
 	if err != nil {
-		logger.Printf("add port error %s", err)
+		logger.Printf("add port error %+v", err)
 		return
 	}
 	logger.Printf("wire quit: %s", Communicate(wire, port))
@@ -213,16 +213,17 @@ func (w *HTTP3ClientWire)  Write(msg tunnel.Message) (error) {
 	payload, ok := msg.Payload().([]byte)
 	if !ok {
 		logger.Printf("msg it not valid %+v", msg)
+		return nil
 	}
 	// the writer guarantees one dataframe will be send
 	if _, err := w.writer.Write(payload); err != nil {
-		return err
+		return errors.Wrap(err, "error write http3 stream")
 	}
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
 	proto := waterutil.IPv4Protocol(payload)
 	// log the packet
-	logger.Printf("send: src %s, dst %s, protocol %+v, len %d, data %+v", srcIP, dstIP, proto, len(payload), payload)
+	logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
 	return nil
 }
 
@@ -239,7 +240,7 @@ func (w *HTTP3ClientWire) Read() (tunnel.Message, error) {
 	dstIP := waterutil.IPv4Destination(payload)
 	proto := waterutil.IPv4Protocol(payload)
 	// log the packet
-	logger.Printf("recv: src %s, dst %s, protocol %+v, len %d, data %+v", srcIP, dstIP, proto, n, payload)
+	logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
 	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload[:n]), nil
 }
 
@@ -249,7 +250,7 @@ func connectLoop(endpoint string, tunnel *tunnel.Tunnel) error {
 	defer pr.Close()
 	req, err := http.NewRequest(http3.MethodGet0RTT, endpoint, ioutil.NopCloser(pr))
 	if err != nil {
-		logger.Printf("create request error", err)
+		logger.Printf("create request error %+v", err)
 	}
 
 	// http3 client
@@ -262,7 +263,7 @@ func connectLoop(endpoint string, tunnel *tunnel.Tunnel) error {
 	}
 	resp, err := client.Do(req)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "request http3 error")
 	}
 	logger.Printf("server return code: %d", resp.StatusCode)
 	stream := resp.Body
@@ -271,11 +272,11 @@ func connectLoop(endpoint string, tunnel *tunnel.Tunnel) error {
 	// create wire
 	wire, err := NewHTTP3ClientWire(stream, pw)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "create http3 wire error")
 	}
 	port, err := tunnel.AddPort("0.0.0.0", true)
 	if err != nil {
-		return err
+		return errors.Wrap(err, "add port error")
 	}
 	// handle stream
 	return Communicate(wire, port)
@@ -286,7 +287,7 @@ func connectLoop(endpoint string, tunnel *tunnel.Tunnel) error {
 func ConnectHTTP3(endpoint string, tunnel *tunnel.Tunnel) error {
 
 	for {
-		logger.Printf("connection to server error: %s", connectLoop(endpoint, tunnel))
+		logger.Printf("connection to server error: %+v", connectLoop(endpoint, tunnel))
 		time.Sleep(10)
 	}
 }

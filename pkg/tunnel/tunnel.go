@@ -2,11 +2,11 @@ package tunnel
 
 
 import (
-	"errors"
 	"log"
 	"os"
 	"sync"
 	"time"
+	"github.com/pkg/errors"
 )
 
 var (
@@ -72,13 +72,15 @@ func (t *Tunnel) AddPort(addr string, fallback bool) (*Port, error) {
 	defer t.lock.Unlock()
 	p, _ := t.ports[addr]
 	if p != nil {
-		return nil, errors.New("port exists")
+		logger.Printf("port(%s) exists, remove the old one", addr)
+		p.Close()
 	}
 	p = &Port{
 		Addr: addr,
 		IsFallback: fallback,
 		input: t.input,
 		output: make(chan Message),
+		t: t,
 	}
 	t.ports[addr] = p
 	// register fallbck port
@@ -134,7 +136,7 @@ func (t *Tunnel) run() (error) {
 					h := t.handlers[i]
 					done, err := h(t, msg)
 					if err != nil {
-						return err
+						return errors.Wrap(err, "")
 					}
 					if done {
 						break
@@ -150,8 +152,8 @@ func (t *Tunnel) run() (error) {
 				logger.Printf("tunnel closed")
 				return errors.New("quit")
 			case <- time.Tick(time.Second * 30):
+				// nothing
 				logger.Println("tick")
-
 		}
 	}
 	return nil
