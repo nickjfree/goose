@@ -15,8 +15,6 @@ type TunWire struct {
 	BaseWire
 	// tun interface
 	ifTun *water.Interface
-	// buffer
-	buffer []byte
 }
 
 
@@ -34,19 +32,18 @@ func NewTunWire(name string) (Wire, error) {
 	return &TunWire{
 		BaseWire: BaseWire{},
 		ifTun: ifTun,
-		buffer: make([]byte, TUN_BUFFERSIZE),
 	}, nil
 }
 
 // read message from tun 
 func (w *TunWire) Read() (tunnel.Message, error) {
-	n, err := w.ifTun.Read(w.buffer)
+
+	payload := make ([]byte, TUN_BUFFERSIZE)
+	n, err := w.ifTun.Read(payload)
 	if err != nil {
 		return nil, err
 	}
-	payload := make ([]byte, n)
-	copy(payload, w.buffer)
-	if !waterutil.IsIPv4(w.buffer) {
+	if !waterutil.IsIPv4(payload) {
 		logger.Printf("recv: not ipv4 packet len %d", n)
 		return tunnel.NewTunMessage("", "", payload), nil
 	}
@@ -56,7 +53,7 @@ func (w *TunWire) Read() (tunnel.Message, error) {
 	proto := waterutil.IPv4Protocol(payload)
 	// log the packet
 	logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
-	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload), nil
+	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload[:n]), nil
 }
 
 
@@ -72,7 +69,7 @@ func (w *TunWire) Write(msg tunnel.Message) (error) {
 	if err != nil {
 		return err
 	}
-	if !waterutil.IsIPv4(w.buffer) {
+	if !waterutil.IsIPv4(payload) {
 		logger.Printf("send: not ipv4 packet len %d", n)
 		return nil
 	}

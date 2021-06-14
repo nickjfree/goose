@@ -32,15 +32,12 @@ type HTTP3Wire struct {
 	BaseWire
 	// quic stream
 	stream quic.Stream
-	// buffer
-	buffer []byte
 }
 
 
 func NewHTTP3Wire(s quic.Stream) (Wire, error) {
 	return &HTTP3Wire{
 		BaseWire: BaseWire{},
-		buffer: make([]byte, HTTP3_BUFFERSIZE),
 		stream: s,
 	}, nil
 }
@@ -217,6 +214,7 @@ func (w *HTTP3ClientWire)  Write(msg tunnel.Message) (error) {
 	if !ok {
 		logger.Printf("msg it not valid %+v", msg)
 	}
+	// the writer guarantees one dataframe will be send
 	if _, err := w.writer.Write(payload); err != nil {
 		return err
 	}
@@ -232,6 +230,7 @@ func (w *HTTP3ClientWire) Read() (tunnel.Message, error) {
 
 	payload := make ([]byte, HTTP3_BUFFERSIZE)
 
+	// the reader guarantees one dataframe will be read
 	n, err := w.reader.Read(payload)
 	if err != nil {
 		return nil, err
@@ -253,7 +252,7 @@ func connectLoop(endpoint string, tunnel *tunnel.Tunnel) error {
 		logger.Printf("create request error", err)
 	}
 
-	// Send the request
+	// http3 client
 	client := http.Client{
 		Transport: &http3.RoundTripper{
 			TLSClientConfig: &tls.Config{
