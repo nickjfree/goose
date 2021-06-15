@@ -59,7 +59,7 @@ func (br *byteReaderImpl) ReadByte() (byte, error) {
 	return b[0], nil
 }
 
-// read message from tun 
+// read message from tun
 func (w *HTTP3Wire) Read() (tunnel.Message, error) {
 
 	br := &byteReaderImpl{w.stream}
@@ -165,7 +165,7 @@ func generateTLSConfig() *tls.Config {
 	}
 	return &tls.Config{
 		Certificates: []tls.Certificate{tlsCert},
-		NextProtos:   []string{"quic-echo-example"},
+		NextProtos:   []string{"quic-goose"},
 	}
 }
 
@@ -200,7 +200,7 @@ type HTTP3ClientWire struct {
 }
 
 
-// 
+//
 func NewHTTP3ClientWire (r io.ReadCloser, w io.Writer)  (Wire, error) {
 	return &HTTP3ClientWire{
 		reader: r,
@@ -288,6 +288,6 @@ func ConnectHTTP3(endpoint string, tunnel *tunnel.Tunnel) error {
 
 	for {
 		logger.Printf("connection to server error: %+v", connectLoop(endpoint, tunnel))
-		time.Sleep(10)
+		time.Sleep(10 * time.Second)
 	}
 }
