@@ -24,7 +24,7 @@ type Wire interface {
 	// get port
 	GetPort() (*tunnel.Port)
 	// detach port
-	Detach() 
+	Detach()
 }
 
 
@@ -53,7 +53,7 @@ func (w *BaseWire) Detach() {
 	}
 }
 
-// read message from tun 
+// read message from tun
 func (w *BaseWire) Read() (tunnel.Message, error) {
 	log.Fatal(errors.New("basewire read on implemented"))
 	return nil, nil
@@ -82,7 +82,7 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 				logger.Printf("read wire %+v error %+v", w, err)
 				w.Detach()
 				inDone <- err
-				return 
+				return
 			}
 			// send msg to port
 			if err := port.WriteInput(msg); err != nil {
@@ -113,7 +113,12 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 			}
 		}
 	} ()
-	// wait for routines to quit
-	logger.Printf("In quit: %+v, Out quit: %+v", <- inDone, <- outDone)
+	// wait either routine to quit
+	select {
+	case err := <- inDone:
+		logger.Printf("In quit: %+v", err)
+	case err := <- outDone:
+		logger.Printf("Out quit: %+v", err)
+	}
 	return errors.Errorf("wire %+v quit", w)
 }
