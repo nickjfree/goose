@@ -1,13 +1,15 @@
 package tunnel
 
-import (
-)
 
 // tun mode handler
 func Tun(t *Tunnel, msg Message) (bool, error) {
 
 	// src := msg.GetSrc()
 	dst := msg.GetDst()
+	// ignore empty address
+	if dst == "" {
+		return true, nil
+	}
 	dstPort := t.GetPort(dst)
 	if dstPort == nil {
 		// fallback to fallback port

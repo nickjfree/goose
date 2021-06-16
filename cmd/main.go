@@ -20,6 +20,8 @@ var (
 	http3Endpoint = ""
 	// protocl
 	protocol = ""
+	// local addr
+	localAddr = ""
 )
 
 
@@ -28,6 +30,7 @@ func main() {
 	flag.StringVar(&http3Endpoint, "http3", "https://poa.nick12.com:8081", "remote http3 endpoint")
 	flag.BoolVar(&isClient, "c", false, "run as client")
 	flag.StringVar(&protocol, "p", "http3", " protocol")
+	flag.StringVar(&localAddr, "local", "192.168.100.1/24", "local ipv4 address to set on the tunnel interface")
 	flag.Parse()
 
 	// set up tun device
@@ -36,7 +39,8 @@ func main() {
 
 	// server
 	if !isClient {
-		go func() { wire.ServeTun(t, "0.0.0.0", true) } ()
+		go func() { wire.ServeTun(t, localAddr, true) } ()
+		// choose wire protocol
 		switch protocol {
 		case "http3":
 			go func() { wire.ServeHTTP3(t) } ()
@@ -49,16 +53,17 @@ func main() {
 		}	
 	} else {
 		// client mode
-		go func() { wire.ServeTun(t, "192.168.1.1", false) } ()
+		go func() { wire.ServeTun(t, localAddr, false) } ()
+		// choose wire protocol
 		switch protocol {
 		case "http3":
-			go func() { wire.ConnectHTTP3(http3Endpoint, t) } ()
+			go func() { wire.ConnectHTTP3(http3Endpoint, localAddr, t) } ()
 		case "tcp":
 			return
 		case "udp":			
 			return
 		default:
-			go func() { wire.ConnectHTTP3(http3Endpoint, t) } ()
+			go func() { wire.ConnectHTTP3(http3Endpoint, localAddr, t) } ()
 		}	
 	}
 

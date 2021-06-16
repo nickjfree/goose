@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"net"
 	"goose/pkg/tunnel"
 	"github.com/songgao/water"
 	"github.com/songgao/water/waterutil"
@@ -28,9 +29,8 @@ func (w *TunWire) Read() (tunnel.Message, error) {
 	}
 	if !waterutil.IsIPv4(payload) {
 		logger.Printf("recv: not ipv4 packet len %d", n)
-		return tunnel.NewTunMessage("", "", payload), nil
+		return tunnel.NewTunMessage("", "", payload[:n]), nil
 	}
-
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
 	proto := waterutil.IPv4Protocol(payload)
@@ -68,7 +68,12 @@ func (w *TunWire) Write(msg tunnel.Message) (error) {
 
 // attach tun deivce to wire
 func ServeTun(t *tunnel.Tunnel, localAddr string, fallback bool) {
-	local, err := t.AddPort(localAddr, fallback)
+	// parse addr
+	localIP, _, err := net.ParseCIDR(localAddr)
+	if err != nil {
+		logger.Fatal(err)
+	}		
+	local, err := t.AddPort(localIP.String(), fallback)
 	if err != nil {
 		logger.Fatal(err)
 	}

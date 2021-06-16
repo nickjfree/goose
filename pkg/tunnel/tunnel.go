@@ -4,13 +4,14 @@ package tunnel
 import (
 	"log"
 	"os"
+	"runtime"
 	"sync"
 	"time"
 	"github.com/pkg/errors"
 )
 
 var (
-	logger = log.New(os.Stdout, "tunnel: ", log.Lshortfile)
+	logger = log.New(os.Stdout, "tunnel: ", log.LstdFlags | log.Lshortfile)
 )
 
 // message handler
@@ -153,7 +154,7 @@ func (t *Tunnel) run() (error) {
 				return errors.New("quit")
 			case <- time.Tick(time.Second * 30):
 				// nothing
-				logger.Println("tick")
+				logger.Println("goroutines:", runtime.NumGoroutine())
 		}
 	}
 	return nil

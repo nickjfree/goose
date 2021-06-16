@@ -10,7 +10,7 @@ import (
 
 
 var (
-	logger = log.New(os.Stdout, "wire: ", log.Lshortfile)
+	logger = log.New(os.Stdout, "wire: ", log.LstdFlags | log.Lshortfile)
 )
 
 // wire interface
@@ -70,8 +70,8 @@ func (w *BaseWire) Write(tunnel.Message) (error) {
 // handle port <-> wire communication
 func Communicate(w Wire, port *tunnel.Port) (error) {
 
-	inDone := make(chan error)
-	outDone := make(chan error)
+	inDone := make(chan bool)
+	outDone := make(chan bool)
 
 	w.Attach(port)
 	// read wire data and relay it to port
@@ -79,16 +79,16 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 		for {
 			msg, err := w.Read()
 			if err != nil {
-				logger.Printf("read wire %+v error %+v", w, err)
+				logger.Printf("read wire error %+v", err)
 				w.Detach()
-				inDone <- err
+				close(inDone)
 				return
 			}
 			// send msg to port
 			if err := port.WriteInput(msg); err != nil {
-				logger.Printf("send to port %+v error %+v", port, err)
+				logger.Printf("send to port %+s error %+v", port.GetAddr(), err)
 				w.Detach()
-				inDone <- err
+				close(inDone)
 				return
 			}
 		}
@@ -99,26 +99,24 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 		for {
 			msg, err := port.ReadOutput()
 			if err != nil {
-				logger.Printf("read port %+v error %s", port, err)
+				logger.Printf("read port %s error %+v", port.GetAddr(), err)
 				w.Detach()
-				outDone <- err
+				close(outDone)
 				return
 			}
 			// send msg to wire
 			if err := w.Write(msg); err != nil {
-				logger.Printf("send to wire %+v error %s", w, err)
+				logger.Printf("send to wire error %+v", err)
 				w.Detach()
-				outDone <- err
+				close(outDone)
 				return
 			}
 		}
 	} ()
 	// wait either routine to quit
 	select {
-	case err := <- inDone:
-		logger.Printf("In quit: %+v", err)
-	case err := <- outDone:
-		logger.Printf("Out quit: %+v", err)
+	case <- inDone:
+	case <- outDone:
 	}
-	return errors.Errorf("wire %+v quit", w)
+	return errors.Errorf("a wire <-> port(%s) communication was lost", port.GetAddr())
 }

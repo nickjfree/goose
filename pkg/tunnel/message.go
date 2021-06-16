@@ -31,7 +31,6 @@ func NewTunMessage(dst string, src string, payload []byte) *TunMessage {
 	}
 }
 
-
 func (m *TunMessage) GetSrc() string {
 	return m.src
 }
