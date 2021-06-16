@@ -274,6 +274,9 @@ func connectLoop(endpoint string, tunnel *tunnel.Tunnel) error {
 	if err != nil {
 		return errors.Wrap(err, "create http3 wire error")
 	}
+
+
+
 	port, err := tunnel.AddPort("0.0.0.0", true)
 	if err != nil {
 		return errors.Wrap(err, "add port error")

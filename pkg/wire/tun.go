@@ -18,24 +18,6 @@ type TunWire struct {
 	ifTun *water.Interface
 }
 
-
-func NewTunWire(name string) (Wire, error) {
-	// tun config
-	config := water.Config{
-		DeviceType: water.TUN,
-	}
-	config.Name = name
-	ifTun, err := water.New(config)
-	if err != nil {
-		logger.Fatal(err)
-	}
-
-	return &TunWire{
-		BaseWire: BaseWire{},
-		ifTun: ifTun,
-	}, nil
-}
-
 // read message from tun 
 func (w *TunWire) Read() (tunnel.Message, error) {
 
@@ -90,7 +72,7 @@ func ServeTun(t *tunnel.Tunnel, localAddr string, fallback bool) {
 	if err != nil {
 		logger.Fatal(err)
 	}
-	tun, err := NewTunWire("goose")
+	tun, err := NewTunWire("goose", localAddr)
 	if err != nil {
 		logger.Fatal(err)
 	}

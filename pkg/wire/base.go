@@ -67,13 +67,14 @@ func (w *BaseWire) Write(tunnel.Message) (error) {
 }
 
 
+// handle port <-> wire communication
 func Communicate(w Wire, port *tunnel.Port) (error) {
 
 	inDone := make(chan error)
 	outDone := make(chan error)
 
 	w.Attach(port)
-	// read wire data
+	// read wire data and relay it to port
 	go func () {
 		for {
 			msg, err := w.Read()
@@ -93,7 +94,7 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 		}
 	} ()
 
-	// read port data
+	// read port data and relay it to wire
 	go func () {
 		for {
 			msg, err := port.ReadOutput()
@@ -103,7 +104,7 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 				outDone <- err
 				return
 			}
-			// send msg to port
+			// send msg to wire
 			if err := w.Write(msg); err != nil {
 				logger.Printf("send to wire %+v error %s", w, err)
 				w.Detach()
@@ -114,6 +115,5 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 	} ()
 	// wait for routines to quit
 	logger.Printf("In quit: %+v, Out quit: %+v", <- inDone, <- outDone)
-
 	return errors.Errorf("wire %+v quit", w)
 }
