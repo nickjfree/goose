@@ -29,7 +29,7 @@ func (w *TunWire) Read() (tunnel.Message, error) {
 	}
 	if !waterutil.IsIPv4(payload) {
 		logger.Printf("recv: not ipv4 packet len %d", n)
-		return tunnel.NewTunMessage("", "", payload[:n]), nil
+		return nil, nil
 	}
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
@@ -53,7 +53,6 @@ func (w *TunWire) Write(msg tunnel.Message) (error) {
 		logger.Printf("send: not ipv4 packet len %d", len(payload))
 		return nil
 	}
-
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
 	proto := waterutil.IPv4Protocol(payload)

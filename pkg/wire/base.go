@@ -84,6 +84,10 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 				close(inDone)
 				return
 			}
+			// ignore nil msg
+			if msg == nil {
+				continue
+			}
 			// send msg to port
 			if err := port.WriteInput(msg); err != nil {
 				logger.Printf("send to port %+s error %+v", port.GetAddr(), err)

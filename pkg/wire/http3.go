@@ -37,24 +37,6 @@ var (
 	}
 )
 
-
-// http3 quic wire
-type HTTP3Wire struct {
-	// base
-	BaseWire
-	// quic stream
-	stream quic.Stream
-}
-
-
-func NewHTTP3Wire(s quic.Stream) (Wire, error) {
-	return &HTTP3Wire{
-		BaseWire: BaseWire{},
-		stream: s,
-	}, nil
-}
-
-
 type byteReader interface {
 	io.ByteReader
 	io.Reader
@@ -71,15 +53,35 @@ func (br *byteReaderImpl) ReadByte() (byte, error) {
 	return b[0], nil
 }
 
+// http3 quic wire
+type HTTP3Wire struct {
+	// base
+	BaseWire
+	// quic stream
+	stream quic.Stream
+}
+
+func NewHTTP3Wire(s quic.Stream) (Wire, error) {
+	return &HTTP3Wire{
+		BaseWire: BaseWire{},
+		stream: s,
+	}, nil
+}
+
+
 // read message from tun
 func (w *HTTP3Wire) Read() (tunnel.Message, error) {
 
+	// as the quic only expose the dataStream interface 
+	// we have to read the stream in an ugly way
+	// <frame type><frame size><payload size><payload data>
+	// read dataFrame
 	br := &byteReaderImpl{w.stream}
 	t, err := quicvarint.Read(br)
 	if err != nil {
 		return nil, errors.Wrap(err, "read http3 stream error")
 	}
-	len, err := quicvarint.Read(br)
+	frameLen, err := quicvarint.Read(br)
 	if err != nil {
 		return nil, errors.Wrap(err, "read http3 stream error")
 	}
@@ -87,15 +89,20 @@ func (w *HTTP3Wire) Read() (tunnel.Message, error) {
 	if t != 0x0 {
 		return nil, errors.Errorf("Incorrect HTTP3 frame type! Expected: Data frame (0x0). Got: %x", t)
 	}
-	if len > HTTP3_BUFFERSIZE {
-		return nil, errors.Errorf("client buffer size(%d) to big", len)
+	if frameLen > HTTP3_BUFFERSIZE {
+		return nil, errors.Errorf("client buffer size(%d) to big", frameLen)
 	}
+	// read payload size
+	len, err := quicvarint.Read(br)
+	if err != nil {
+		return nil, errors.Wrap(err, "read http3 stream error, payload size")
+	}
+	// read payload
 	payload := make ([]byte, len)
 	n, err := io.ReadFull(w.stream, payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "read http3 stream")
 	}
-
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
 	proto := waterutil.IPv4Protocol(payload)
@@ -113,12 +120,19 @@ func (w *HTTP3Wire) Write(msg tunnel.Message) (error) {
 		return nil
 	}
 	buf := &bytes.Buffer{}
-	quicvarint.Write(buf, 0x0)
+	// write payload size and content
 	quicvarint.Write(buf, uint64(len(payload)))
-	if _, err := w.stream.Write(buf.Bytes()); err != nil {
+	buf.Write(payload)
+	sizeAndPayload := buf.Bytes()
+	// send http3 dataFrame 
+	// <frame type><frame size><payload size><payload data>
+	header := &bytes.Buffer{}
+	quicvarint.Write(header, 0x0)
+	quicvarint.Write(header, uint64(len(sizeAndPayload)))
+	if _, err := w.stream.Write(header.Bytes()); err != nil {
 		return errors.Wrapf(err, "write http3 stream")
 	}
-	if _, err := w.stream.Write(payload); err != nil {
+	if _, err := w.stream.Write(sizeAndPayload); err != nil {
 		return errors.Wrapf(err, "write http3 stream")
 	}
 	srcIP := waterutil.IPv4Source(payload)
@@ -237,8 +251,11 @@ func (w *HTTP3ClientWire) Write(msg tunnel.Message) (error) {
 		logger.Printf("msg it not valid %+v", msg)
 		return nil
 	}
+	buf := &bytes.Buffer{}
+	quicvarint.Write(buf, uint64(len(payload)))
+	buf.Write(payload)
 	// the writer guarantees one dataframe will be send
-	if _, err := w.writer.Write(payload); err != nil {
+	if _, err := w.writer.Write(buf.Bytes()); err != nil {
 		return errors.Wrap(err, "error write http3 stream")
 	}
 	srcIP := waterutil.IPv4Source(payload)
@@ -253,8 +270,13 @@ func (w *HTTP3ClientWire) Read() (tunnel.Message, error) {
 
 	payload := make ([]byte, HTTP3_BUFFERSIZE)
 
-	// the reader guarantees one dataframe will be read
-	n, err := w.reader.Read(payload)
+	br := &byteReaderImpl{w.reader}
+	len, err := quicvarint.Read(br)
+	if err != nil {
+		return nil, errors.Wrap(err, "read http3 stream error")
+	}
+	// read the payload
+	n, err := io.ReadFull(w.reader, payload[:len])
 	if err != nil {
 		return nil, err
 	}
