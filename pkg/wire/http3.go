@@ -126,13 +126,11 @@ func (w *HTTP3Wire) Write(msg tunnel.Message) (error) {
 	sizeAndPayload := buf.Bytes()
 	// send http3 dataFrame 
 	// <frame type><frame size><payload size><payload data>
-	header := &bytes.Buffer{}
-	quicvarint.Write(header, 0x0)
-	quicvarint.Write(header, uint64(len(sizeAndPayload)))
-	if _, err := w.stream.Write(header.Bytes()); err != nil {
-		return errors.Wrapf(err, "write http3 stream")
-	}
-	if _, err := w.stream.Write(sizeAndPayload); err != nil {
+	frame := &bytes.Buffer{}
+	quicvarint.Write(frame, 0x0)
+	quicvarint.Write(frame, uint64(len(sizeAndPayload)))
+	frame.Write(sizeAndPayload)
+	if _, err := w.stream.Write(frame.Bytes()); err != nil {
 		return errors.Wrapf(err, "write http3 stream")
 	}
 	srcIP := waterutil.IPv4Source(payload)
