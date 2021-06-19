@@ -130,6 +130,9 @@ func (t *Tunnel) Start() (chan error) {
 // tunnel main loop
 func (t *Tunnel) run() (error) {
 
+	ticker := time.NewTicker(time.Second * 30)
+	defer ticker.Stop()
+
 	for {
 		select {
 			case msg := <- t.input:
@@ -153,7 +156,7 @@ func (t *Tunnel) run() (error) {
 				// quit
 				logger.Printf("tunnel closed")
 				return errors.New("quit")
-			case <- time.Tick(time.Second * 30):
+			case <- ticker.C:
 				// nothing
 				logger.Println("goroutines:", runtime.NumGoroutine())
 		}
