@@ -2,31 +2,71 @@
 ## About The Project
 
 Wow!  
-Such QUIC  
-Much proxy  
+Such proxy    
+Much QUIC
+
+An ipv4 tunnel proxy using QUIC as tranport protocol.
+
+## How it works
+
+- Details:  
+![How it works][howitworks]
 
 <!-- GETTING STARTED -->
 ## Getting Started
 
-### server
-```sh
-$ goose --local 192.168.100.1/24
 
 ```
-setup server as nat gateway
+$ goose -h
+Usage of goose:
+  -c    run as client
+  -http3 string
+        remote http3 endpoint (default "https://poa.nick12.com:8081")
+  -local string
+        local ipv4 address to set on the tunnel interface (default "192.168.100.1/24")
+  -p string
+         protocol (default "http3")
+```
+
+### server
+
 ```sh
-$ ip link set tun1 up
+$ goose --local 192.168.100.1/24
+```
+setup server ip address and nat
+```sh
+$ ip link set goose up
 $ ip addr add 192.168.100.1/24 dev goose
 $ iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 ```
+### client
 
-### client:
 ```sh
-$ goose -c -http3 https://serverip -local 192.168.100.2/24
+$ goose -c -http3 https://realserverip:55556 -local 192.168.100.2/24
 ```
-set ip address
+setup ip address and routing
 ```sh
 $ ip link set goose up
 $ ip addr add 192.168.100.2/24 dev goose
+$ route add -host <realserverip> gw <oldgateway>
+$ route add -net 0.0.0.0/0 gw 192.168.100.1
 ```
 
+enable up forwarding
+```sh
+sysctl -w net.ipv4.ip_forward=1
+sysctl -p
+```
+
+- Result:  
+![logically][logically]
+
+
+<!-- ROADMAP -->
+## Roadmap
+
+* Automatically config ip address and routing table
+* Supporting other protocols
+
+[howitworks]: images/howitworks.jpg
+[logically]: images/virtual.jpg
