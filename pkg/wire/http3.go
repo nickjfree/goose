@@ -99,15 +99,15 @@ func (w *HTTP3Wire) Read() (tunnel.Message, error) {
 	}
 	// read payload
 	payload := make ([]byte, len)
-	n, err := io.ReadFull(w.stream, payload)
+	_, err = io.ReadFull(w.stream, payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "read http3 stream")
 	}
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
-	proto := waterutil.IPv4Protocol(payload)
+	// proto := waterutil.IPv4Protocol(payload)
 	// log the packet
-	logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
+	// logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
 	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload), nil
 }
 
@@ -133,11 +133,11 @@ func (w *HTTP3Wire) Write(msg tunnel.Message) (error) {
 	if _, err := w.stream.Write(frame.Bytes()); err != nil {
 		return errors.Wrapf(err, "write http3 stream")
 	}
-	srcIP := waterutil.IPv4Source(payload)
-	dstIP := waterutil.IPv4Destination(payload)
-	proto := waterutil.IPv4Protocol(payload)
-	// log the packet
-	logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
+	// srcIP := waterutil.IPv4Source(payload)
+	// dstIP := waterutil.IPv4Destination(payload)
+	// proto := waterutil.IPv4Protocol(payload)
+	// // log the packet
+	// logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
 	return nil
 }
 
@@ -208,7 +208,7 @@ func generateTLSConfig() *tls.Config {
 func ServeHTTP3(tunnel *tunnel.Tunnel) {
 	server := http3.Server{
 		Server: &http.Server{
-			Addr:      "0.0.0.0:8081",
+			Addr:      "0.0.0.0:55556",
 			Handler:   &HTTP3Server{
 				tunnel: tunnel,
 			},
@@ -256,11 +256,11 @@ func (w *HTTP3ClientWire) Write(msg tunnel.Message) (error) {
 	if _, err := w.writer.Write(buf.Bytes()); err != nil {
 		return errors.Wrap(err, "error write http3 stream")
 	}
-	srcIP := waterutil.IPv4Source(payload)
-	dstIP := waterutil.IPv4Destination(payload)
-	proto := waterutil.IPv4Protocol(payload)
-	// log the packet
-	logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
+	// srcIP := waterutil.IPv4Source(payload)
+	// dstIP := waterutil.IPv4Destination(payload)
+	// proto := waterutil.IPv4Protocol(payload)
+	// // log the packet
+	// logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
 	return nil
 }
 
@@ -280,9 +280,9 @@ func (w *HTTP3ClientWire) Read() (tunnel.Message, error) {
 	}
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
-	proto := waterutil.IPv4Protocol(payload)
+	// proto := waterutil.IPv4Protocol(payload)
 	// log the packet
-	logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
+	// logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
 	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload[:n]), nil
 }
 

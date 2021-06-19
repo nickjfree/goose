@@ -60,7 +60,7 @@ func main() {
 			go func() { wire.ConnectHTTP3(http3Endpoint, localAddr, t) } ()
 		case "tcp":
 			return
-		case "udp":			
+		case "udp":
 			return
 		default:
 			go func() { wire.ConnectHTTP3(http3Endpoint, localAddr, t) } ()

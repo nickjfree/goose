@@ -12,6 +12,7 @@ import (
 
 var (
 	logger = log.New(os.Stdout, "tunnel: ", log.LstdFlags | log.Lshortfile)
+	PORT_BUFFER_SIZE = 1024
 )
 
 // message handler
@@ -46,7 +47,7 @@ type Tunnel struct {
 
 func NewTunnel() (*Tunnel) {
 	return &Tunnel{
-		input: make (chan Message),
+		input: make (chan Message, 64),
 		ports: make (map[string]*Port),
 		q: make (chan bool),
 		e: make (chan error),
@@ -80,7 +81,7 @@ func (t *Tunnel) AddPort(addr string, fallback bool) (*Port, error) {
 		Addr: addr,
 		IsFallback: fallback,
 		input: t.input,
-		output: make(chan Message),
+		output: make(chan Message, PORT_BUFFER_SIZE),
 		t: t,
 	}
 	t.ports[addr] = p

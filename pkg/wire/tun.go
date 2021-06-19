@@ -33,9 +33,9 @@ func (w *TunWire) Read() (tunnel.Message, error) {
 	}
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
-	proto := waterutil.IPv4Protocol(payload)
+	// proto := waterutil.IPv4Protocol(payload)
 	// log the packet
-	logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
+	// logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
 	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload[:n]), nil
 }
 
@@ -53,10 +53,10 @@ func (w *TunWire) Write(msg tunnel.Message) (error) {
 		logger.Printf("send: not ipv4 packet len %d", len(payload))
 		return nil
 	}
-	srcIP := waterutil.IPv4Source(payload)
-	dstIP := waterutil.IPv4Destination(payload)
-	proto := waterutil.IPv4Protocol(payload)
-	logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
+	// srcIP := waterutil.IPv4Source(payload)
+	// dstIP := waterutil.IPv4Destination(payload)
+	// proto := waterutil.IPv4Protocol(payload)
+	// logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
 	_, err := w.ifTun.Write(payload)
 	if err != nil {
 		return errors.Wrap(err, "write tun error")
