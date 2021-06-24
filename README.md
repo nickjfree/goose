@@ -18,10 +18,10 @@ An ipv4 tunnel proxy using QUIC as tranport protocol.
 
 ```
 $ goose -h
-Usage of goose:
+Usage of bin/goose:
   -c    run as client
-  -http3 string
-        remote http3 endpoint (default "https://poa.nick12.com:8081")
+  -e string
+        remote http endpoint (default "https://us.nick12.com")
   -local string
         local ipv4 address to set on the tunnel interface (default "192.168.100.1/24")
   -p string
@@ -31,7 +31,7 @@ Usage of goose:
 ### server
 
 ```sh
-$ goose --local 192.168.100.1/24
+$ goose -local 192.168.100.1/24
 ```
 setup server ip address and nat
 ```sh
@@ -42,7 +42,7 @@ $ iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 ### client
 
 ```sh
-$ goose -c -http3 https://realserverip:55556 -local 192.168.100.2/24
+$ goose -c -e https://realserverip:55556 -local 192.168.100.2/24
 ```
 setup ip address and routing
 ```sh

@@ -113,6 +113,8 @@ func HandleRegisterAddr(w Wire, t *tunnel.Tunnel) (string, error) {
 			resp.Result = "ok"
 			resp.MsgType = TYPE_OK
 		}
+	} else {
+		return "", errors.New("invalid request")
 	}
 	// return server addr to client
 	var serverAddr string

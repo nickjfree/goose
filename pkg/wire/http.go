@@ -22,12 +22,23 @@ import (
 )
 
 
-const HTTP3_BUFFERSIZE = 2048
+const HTTP_BUFFERSIZE = 2048
 
 
 var (
-	// http3 client
+	// http1 client
 	client = http.Client{
+		Transport: &http.Transport{
+			MaxIdleConns:       10,
+			IdleConnTimeout:    30 * time.Second,
+			TLSClientConfig: &tls.Config{
+				InsecureSkipVerify: true,
+			},
+		},
+	}
+
+	// http3 client
+	client3 = http.Client{
 		Transport: &http3.RoundTripper{
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true,
@@ -52,8 +63,9 @@ func (br *byteReaderImpl) ReadByte() (byte, error) {
 	return b[0], nil
 }
 
-// http3 quic wire
-type HTTP3Wire struct {
+
+// http wire
+type HTTPWire struct {
 	// base
 	BaseWire
 	// reader
@@ -63,8 +75,8 @@ type HTTP3Wire struct {
 }
 
 
-func NewHTTP3Wire(r io.Reader, w io.Writer) (Wire, error) {
-	return &HTTP3Wire{
+func NewHTTPWire(r io.Reader, w io.Writer) (Wire, error) {
+	return &HTTPWire{
 		BaseWire: BaseWire{},
 		reader: r,
 		writer: w,
@@ -73,23 +85,23 @@ func NewHTTP3Wire(r io.Reader, w io.Writer) (Wire, error) {
 
 
 // read message from tun
-func (w *HTTP3Wire) Read() (tunnel.Message, error) {
+func (w *HTTPWire) Read() (tunnel.Message, error) {
 
 	// read dataFrame <payload size><payload data>
 	br := &byteReaderImpl{w.reader}	
 	// read payload size
 	len, err := quicvarint.Read(br)
 	if err != nil {
-		return nil, errors.Wrap(err, "read http3 stream error, payload size")
+		return nil, errors.Wrap(err, "read http stream error, payload size")
 	}
-	if len > HTTP3_BUFFERSIZE {
+	if len > HTTP_BUFFERSIZE {
 		return nil, errors.Errorf("client buffer size(%d) to big", len)
 	}
 	// read payload
 	payload := make ([]byte, len)
 	_, err = io.ReadFull(w.reader, payload)
 	if err != nil {
-		return nil, errors.Wrap(err, "read http3 stream")
+		return nil, errors.Wrap(err, "read http stream")
 	}
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
@@ -100,7 +112,7 @@ func (w *HTTP3Wire) Read() (tunnel.Message, error) {
 }
 
 // send message to tun
-func (w *HTTP3Wire) Write(msg tunnel.Message) (error) {
+func (w *HTTPWire) Write(msg tunnel.Message) (error) {
 
 	payload, ok := msg.Payload().([]byte)
 	if !ok {
@@ -111,9 +123,9 @@ func (w *HTTP3Wire) Write(msg tunnel.Message) (error) {
 	// write payload size and content
 	quicvarint.Write(buf, uint64(len(payload)))
 	buf.Write(payload)
-	// send http3 data <payload size><payload data>
+	// send http data <payload size><payload data>
 	if _, err := w.writer.Write(buf.Bytes()); err != nil {
-		return errors.Wrapf(err, "write http3 stream")
+		return errors.Wrapf(err, "write http stream")
 	}
 	flusher, ok := w.writer.(http.Flusher)
 	if !ok {
@@ -129,22 +141,24 @@ func (w *HTTP3Wire) Write(msg tunnel.Message) (error) {
 }
 
 
-// http3 server
-type HTTP3Server struct{
+
+// http server
+type HTTPServer struct{
 	// the tunnel
 	tunnel *tunnel.Tunnel
 }
 
 
-func (s *HTTP3Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// switch protocols
 	// w.WriteHeader(http.StatusSwitchingProtocols)
+	logger.Printf("new connection %s", r.RemoteAddr)
 	w.WriteHeader(http.StatusOK)
 	w.(http.Flusher).Flush()
 	// create a HTTP3 wire
-	wire, err := NewHTTP3Wire(r.Body, w)
+	wire, err := NewHTTPWire(r.Body, w)
 	if err != nil {
-		logger.Printf("create http3 wire error %+v", err)
+		logger.Printf("create http wire error %+v", err)
 		return
 	}
 	// handle client register
@@ -188,12 +202,29 @@ func generateTLSConfig() *tls.Config {
 }
 
 
+// serve http1
+func ServeHTTP(tunnel *tunnel.Tunnel) {
+	server := &http.Server{
+		Addr:      "0.0.0.0:443",
+		Handler:   &HTTPServer{
+			tunnel: tunnel,
+		},
+		TLSConfig: generateTLSConfig(),
+	}
+
+	err := server.ListenAndServeTLS("", "")
+	if err != nil {
+		logger.Fatalf("Error: %v", err)
+	}
+}
+
+
 // serve http3
 func ServeHTTP3(tunnel *tunnel.Tunnel) {
 	server := http3.Server{
 		Server: &http.Server{
 			Addr:      "0.0.0.0:55556",
-			Handler:   &HTTP3Server{
+			Handler:   &HTTPServer{
 				tunnel: tunnel,
 			},
 			TLSConfig: generateTLSConfig(),
@@ -207,9 +238,8 @@ func ServeHTTP3(tunnel *tunnel.Tunnel) {
 }
 
 
-
-// http3 client
-type HTTP3ClientWire struct {
+// http client wire
+type HTTPClientWire struct {
 	BaseWire
 	// http response
 	reader io.ReadCloser
@@ -218,16 +248,16 @@ type HTTP3ClientWire struct {
 }
 
 
-//
-func NewHTTP3ClientWire (r io.ReadCloser, w io.Writer)  (Wire, error) {
-	return &HTTP3ClientWire{
+// http client wire
+func NewHTTPClientWire (r io.ReadCloser, w io.Writer)  (Wire, error) {
+	return &HTTPClientWire{
 		reader: r,
 		writer: w,
 	}, nil
 }
 
-
-func (w *HTTP3ClientWire) Write(msg tunnel.Message) (error) {
+// write data to wire
+func (w *HTTPClientWire) Write(msg tunnel.Message) (error) {
 	payload, ok := msg.Payload().([]byte)
 	if !ok {
 		logger.Printf("msg it not valid %+v", msg)
@@ -238,7 +268,7 @@ func (w *HTTP3ClientWire) Write(msg tunnel.Message) (error) {
 	buf.Write(payload)
 	// the writer guarantees one dataframe will be send
 	if _, err := w.writer.Write(buf.Bytes()); err != nil {
-		return errors.Wrap(err, "error write http3 stream")
+		return errors.Wrap(err, "error write http stream")
 	}
 	// srcIP := waterutil.IPv4Source(payload)
 	// dstIP := waterutil.IPv4Destination(payload)
@@ -248,14 +278,15 @@ func (w *HTTP3ClientWire) Write(msg tunnel.Message) (error) {
 	return nil
 }
 
-func (w *HTTP3ClientWire) Read() (tunnel.Message, error) {
+// read data from wire
+func (w *HTTPClientWire) Read() (tunnel.Message, error) {
 
-	payload := make ([]byte, HTTP3_BUFFERSIZE)
+	payload := make ([]byte, HTTP_BUFFERSIZE)
 
 	br := &byteReaderImpl{w.reader}
 	len, err := quicvarint.Read(br)
 	if err != nil {
-		return nil, errors.Wrap(err, "read http3 stream error")
+		return nil, errors.Wrap(err, "read http stream error")
 	}
 	// read the payload
 	n, err := io.ReadFull(w.reader, payload[:len])
@@ -271,26 +302,26 @@ func (w *HTTP3ClientWire) Read() (tunnel.Message, error) {
 }
 
 
-func connectLoop(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
+func connectLoop(client *http.Client, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	req, err := http.NewRequest(http.MethodGet, endpoint, ioutil.NopCloser(pr))
 	if err != nil {
 		logger.Printf("create request error %+v", err)
 	}
-	// http3 client request
+	// http client request
 	resp, err := client.Do(req)
 	if err != nil {
-		return errors.Wrap(err, "request http3 error")
+		return errors.Wrap(err, "request http error")
 	}
 	logger.Printf("switching protocol successful, server return code: %d", resp.StatusCode)
 	stream := resp.Body
 	defer stream.Close()
 
 	// create wire
-	wire, err := NewHTTP3ClientWire(stream, pw)
+	wire, err := NewHTTPClientWire(stream, pw)
 	if err != nil {
-		return errors.Wrap(err, "create http3 wire error")
+		return errors.Wrap(err, "create http wire error")
 	}
 	// register to server
 	serverAddr, err := RegisterAddr(wire, localAddr)
@@ -307,12 +338,23 @@ func connectLoop(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error
 	return Communicate(wire, port)
 }
 
-// connect to remote server
+
+// connect to remote http1 server
+func ConnectHTTP(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
+
+	for {
+		logger.Printf("connecting to server %s", endpoint)
+		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(&client, endpoint, localAddr,tunnel))
+		time.Sleep(10 * time.Second)
+	}
+}
+
+// connect to remote http3 server
 func ConnectHTTP3(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
 
 	for {
 		logger.Printf("connecting to server %s", endpoint)
-		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(endpoint, localAddr,tunnel))
+		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(&client3, endpoint, localAddr,tunnel))
 		time.Sleep(10 * time.Second)
 	}
 }
