@@ -14,7 +14,6 @@ import (
 	"net/http"
 	"time"
 
-	quic "github.com/lucas-clemente/quic-go"
 	"github.com/lucas-clemente/quic-go/http3"
 	"github.com/lucas-clemente/quic-go/quicvarint"
 	"github.com/songgao/water/waterutil"
@@ -57,14 +56,18 @@ func (br *byteReaderImpl) ReadByte() (byte, error) {
 type HTTP3Wire struct {
 	// base
 	BaseWire
-	// quic stream
-	stream quic.Stream
+	// reader
+	reader io.Reader
+	// writer
+	writer io.Writer		
 }
 
-func NewHTTP3Wire(s quic.Stream) (Wire, error) {
+
+func NewHTTP3Wire(r io.Reader, w io.Writer) (Wire, error) {
 	return &HTTP3Wire{
 		BaseWire: BaseWire{},
-		stream: s,
+		reader: r,
+		writer: w,
 	}, nil
 }
 
@@ -72,34 +75,19 @@ func NewHTTP3Wire(s quic.Stream) (Wire, error) {
 // read message from tun
 func (w *HTTP3Wire) Read() (tunnel.Message, error) {
 
-	// as the quic only expose the dataStream interface 
-	// we have to read the stream in an ugly way
-	// <frame type><frame size><payload size><payload data>
-	// read dataFrame
-	br := &byteReaderImpl{w.stream}
-	t, err := quicvarint.Read(br)
-	if err != nil {
-		return nil, errors.Wrap(err, "read http3 stream error")
-	}
-	frameLen, err := quicvarint.Read(br)
-	if err != nil {
-		return nil, errors.Wrap(err, "read http3 stream error")
-	}
-	// Receive only HTTP3 data frames
-	if t != 0x0 {
-		return nil, errors.Errorf("Incorrect HTTP3 frame type! Expected: Data frame (0x0). Got: %x", t)
-	}
-	if frameLen > HTTP3_BUFFERSIZE {
-		return nil, errors.Errorf("client buffer size(%d) to big", frameLen)
-	}
+	// read dataFrame <payload size><payload data>
+	br := &byteReaderImpl{w.reader}	
 	// read payload size
 	len, err := quicvarint.Read(br)
 	if err != nil {
 		return nil, errors.Wrap(err, "read http3 stream error, payload size")
 	}
+	if len > HTTP3_BUFFERSIZE {
+		return nil, errors.Errorf("client buffer size(%d) to big", len)
+	}
 	// read payload
 	payload := make ([]byte, len)
-	_, err = io.ReadFull(w.stream, payload)
+	_, err = io.ReadFull(w.reader, payload)
 	if err != nil {
 		return nil, errors.Wrap(err, "read http3 stream")
 	}
@@ -123,16 +111,15 @@ func (w *HTTP3Wire) Write(msg tunnel.Message) (error) {
 	// write payload size and content
 	quicvarint.Write(buf, uint64(len(payload)))
 	buf.Write(payload)
-	sizeAndPayload := buf.Bytes()
-	// send http3 dataFrame 
-	// <frame type><frame size><payload size><payload data>
-	frame := &bytes.Buffer{}
-	quicvarint.Write(frame, 0x0)
-	quicvarint.Write(frame, uint64(len(sizeAndPayload)))
-	frame.Write(sizeAndPayload)
-	if _, err := w.stream.Write(frame.Bytes()); err != nil {
+	// send http3 data <payload size><payload data>
+	if _, err := w.writer.Write(buf.Bytes()); err != nil {
 		return errors.Wrapf(err, "write http3 stream")
 	}
+	flusher, ok := w.writer.(http.Flusher)
+	if !ok {
+		return errors.Errorf("not a flusher %+v", w.writer)
+	}
+	flusher.Flush()
 	// srcIP := waterutil.IPv4Source(payload)
 	// dstIP := waterutil.IPv4Destination(payload)
 	// proto := waterutil.IPv4Protocol(payload)
@@ -151,14 +138,11 @@ type HTTP3Server struct{
 
 func (s *HTTP3Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// switch protocols
-	w.WriteHeader(http.StatusSwitchingProtocols)
-
-	// From this moment on, the management of the QUIC streamer is entirely on the server's shoulders
-	// get the quic stream
-	stream := w.(http3.DataStreamer).DataStream()
-	defer stream.Close()
+	// w.WriteHeader(http.StatusSwitchingProtocols)
+	w.WriteHeader(http.StatusOK)
+	w.(http.Flusher).Flush()
 	// create a HTTP3 wire
-	wire, err := NewHTTP3Wire(stream)
+	wire, err := NewHTTP3Wire(r.Body, w)
 	if err != nil {
 		logger.Printf("create http3 wire error %+v", err)
 		return
@@ -290,7 +274,7 @@ func (w *HTTP3ClientWire) Read() (tunnel.Message, error) {
 func connectLoop(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
 	pr, pw := io.Pipe()
 	defer pr.Close()
-	req, err := http.NewRequest(http3.MethodGet0RTT, endpoint, ioutil.NopCloser(pr))
+	req, err := http.NewRequest(http.MethodGet, endpoint, ioutil.NopCloser(pr))
 	if err != nil {
 		logger.Printf("create request error %+v", err)
 	}
