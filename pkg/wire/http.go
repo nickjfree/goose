@@ -71,7 +71,7 @@ type HTTPWire struct {
 	// reader
 	reader io.Reader
 	// writer
-	writer io.Writer		
+	writer io.Writer
 }
 
 
@@ -88,7 +88,7 @@ func NewHTTPWire(r io.Reader, w io.Writer) (Wire, error) {
 func (w *HTTPWire) Read() (tunnel.Message, error) {
 
 	// read dataFrame <payload size><payload data>
-	br := &byteReaderImpl{w.reader}	
+	br := &byteReaderImpl{w.reader}
 	// read payload size
 	len, err := quicvarint.Read(br)
 	if err != nil {
@@ -305,7 +305,9 @@ func (w *HTTPClientWire) Read() (tunnel.Message, error) {
 func connectLoop(client *http.Client, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
 	pr, pw := io.Pipe()
 	defer pr.Close()
-	req, err := http.NewRequest(http.MethodGet, endpoint, ioutil.NopCloser(pr))
+	req, err := http.NewRequest(http.MethodPost, endpoint, ioutil.NopCloser(pr))
+	req.TransferEncoding = []string{"chunked"}
+	req.Header.Set("Connection", "Close")
 	if err != nil {
 		logger.Printf("create request error %+v", err)
 	}
