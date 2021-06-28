@@ -160,7 +160,7 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var reader io.Reader
 	var writer io.Writer
 	if s.isHttp11 {
-		// trick cloudflare. make it looks like a websocket connection
+		// switching protocol
 		w.Header().Set("Upgrade", "goose")
 		w.Header().Set("Connection", "Upgrade")
 		w.WriteHeader(http.StatusSwitchingProtocols)
@@ -286,14 +286,13 @@ func connectLoop(client *http.Client, endpoint string, localAddr string, tunnel 
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	req, err := http.NewRequest(http.MethodGet, endpoint, ioutil.NopCloser(pr))
-	// req, err := http.NewRequest(http.MethodPost, endpoint, nil)
+	// set TE to identify, so client won't use chunked, causing cloudflare blocking for request body
 	req.TransferEncoding = []string{"identity"}
 	req.Header.Set("Connection", "Upgrade")
 	req.Header.Set("Upgrade", "goose")
 	if err != nil {
 		logger.Printf("create request error %+v", err)
 	}
-
 	// http client request
 	resp, err := client.Do(req)
 	if err != nil {
