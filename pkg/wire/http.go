@@ -3,6 +3,7 @@ package wire
 
 import (
 	"bytes"
+	"bufio"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -127,11 +128,15 @@ func (w *HTTPWire) Write(msg tunnel.Message) (error) {
 	if _, err := w.writer.Write(buf.Bytes()); err != nil {
 		return errors.Wrapf(err, "write http stream")
 	}
-	flusher, ok := w.writer.(http.Flusher)
-	if !ok {
-		return errors.Errorf("not a flusher %+v", w.writer)
+	switch flusher := w.writer.(type) {
+	case http.Flusher:
+		flusher.Flush()
+	case *bufio.Writer:
+		if err := flusher.Flush(); err != nil {
+			return errors.Wrapf(err, "write http stream(flush)")
+		}
+	default:
 	}
-	flusher.Flush()
 	// srcIP := waterutil.IPv4Source(payload)
 	// dstIP := waterutil.IPv4Destination(payload)
 	// proto := waterutil.IPv4Protocol(payload)
@@ -139,8 +144,6 @@ func (w *HTTPWire) Write(msg tunnel.Message) (error) {
 	// logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
 	return nil
 }
-
-
 
 // http server
 type HTTPServer struct{
@@ -150,26 +153,45 @@ type HTTPServer struct{
 	isHttp11 bool
 }
 
-
 func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// switch protocols
 	// w.WriteHeader(http.StatusSwitchingProtocols)
 	logger.Printf("new connection %s", r.RemoteAddr)
+	var reader io.Reader
+	var writer io.Writer
 	if s.isHttp11 {
 		// trick cloudflare. make it looks like a websocket connection
 		w.Header().Set("Upgrade", "goose")
 		w.Header().Set("Connection", "Upgrade")
 		w.WriteHeader(http.StatusSwitchingProtocols)
+		w.(http.Flusher).Flush()
+		// for http1 server, the r.body is now NoBody. we can't read from it. use a hijacker
+		hj, ok := w.(http.Hijacker)
+		if !ok {
+			logger.Printf("response is not a hijacker %+v", w)
+			return 
+		}
+		conn, bufrw, err := hj.Hijack()
+		if err != nil {
+			logger.Printf("hijack failed %+v", err)
+			return
+		}
+		defer conn.Close()
+		// set rw
+		reader = bufrw.Reader
+		writer = bufrw.Writer
 	} else {
-		// http3(quic)
-		// must use 200 ok or we will not be able to send a body. quic-go(responseWriter)
+		// http3(quic), in order to use the same HTTPWire interface for both http3 and http11
+		// we must use 200 ok here, or we will not be able to send a body, unless using datastream() which is ugly
+		// quic-go(responseWriter)
 		w.WriteHeader(http.StatusOK)
+	 	w.(http.Flusher).Flush()
+	 	// set rw
+	 	reader = r.Body
+	 	writer = w
 	}
-	// send the header
-	w.(http.Flusher).Flush()
-	// create a HTTP3 wire
-	wire, err := NewHTTPWire(r.Body, w)
-	if err != nil {
+ 	wire, err := NewHTTPWire(reader, writer)
+ 	if err != nil {
 		logger.Printf("create http wire error %+v", err)
 		return
 	}
@@ -224,12 +246,6 @@ func ServeHTTP(tunnel *tunnel.Tunnel) {
 		},
 		TLSConfig: generateTLSConfig(),
 	}
-
-	// server will consume the request body before
-	// replying, blocking the header sending.
-	// but we want to disable that by disabling keepalive
-	server.SetKeepAlivesEnabled(false)
-
 	err := server.ListenAndServeTLS("", "")
 	if err != nil {
 		logger.Fatalf("Error: %v", err)
@@ -266,68 +282,14 @@ type HTTPClientWire struct {
 	writer io.Writer
 }
 
-
-// http client wire
-func NewHTTPClientWire (r io.ReadCloser, w io.Writer)  (Wire, error) {
-	return &HTTPClientWire{
-		reader: r,
-		writer: w,
-	}, nil
-}
-
-// write data to wire
-func (w *HTTPClientWire) Write(msg tunnel.Message) (error) {
-	payload, ok := msg.Payload().([]byte)
-	if !ok {
-		logger.Printf("msg it not valid %+v", msg)
-		return nil
-	}
-	buf := &bytes.Buffer{}
-	quicvarint.Write(buf, uint64(len(payload)))
-	buf.Write(payload)
-	// the writer guarantees one dataframe will be send
-	if _, err := w.writer.Write(buf.Bytes()); err != nil {
-		return errors.Wrap(err, "error write http stream")
-	}
-	// srcIP := waterutil.IPv4Source(payload)
-	// dstIP := waterutil.IPv4Destination(payload)
-	// proto := waterutil.IPv4Protocol(payload)
-	// // log the packet
-	// logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
-	return nil
-}
-
-// read data from wire
-func (w *HTTPClientWire) Read() (tunnel.Message, error) {
-
-	payload := make ([]byte, HTTP_BUFFERSIZE)
-
-	br := &byteReaderImpl{w.reader}
-	len, err := quicvarint.Read(br)
-	if err != nil {
-		return nil, errors.Wrap(err, "read http stream error")
-	}
-	// read the payload
-	n, err := io.ReadFull(w.reader, payload[:len])
-	if err != nil {
-		return nil, err
-	}
-	srcIP := waterutil.IPv4Source(payload)
-	dstIP := waterutil.IPv4Destination(payload)
-	// proto := waterutil.IPv4Protocol(payload)
-	// log the packet
-	// logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
-	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload[:n]), nil
-}
-
 func connectLoop(client *http.Client, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
 	pr, pw := io.Pipe()
 	defer pr.Close()
-	req, err := http.NewRequest(http.MethodPost, endpoint, ioutil.NopCloser(pr))
+	req, err := http.NewRequest(http.MethodGet, endpoint, ioutil.NopCloser(pr))
 	// req, err := http.NewRequest(http.MethodPost, endpoint, nil)
-	// req.TransferEncoding = []string{"chunked"}
+	req.TransferEncoding = []string{"identity"}
 	req.Header.Set("Connection", "Upgrade")
-	req.Header.Set("Upgrade", "websocket")
+	req.Header.Set("Upgrade", "goose")
 	if err != nil {
 		logger.Printf("create request error %+v", err)
 	}
@@ -342,7 +304,7 @@ func connectLoop(client *http.Client, endpoint string, localAddr string, tunnel 
 	defer stream.Close()
 
 	// create wire
-	wire, err := NewHTTPClientWire(stream, pw)
+	wire, err := NewHTTPWire(stream, pw)
 	if err != nil {
 		return errors.Wrap(err, "create http wire error")
 	}
