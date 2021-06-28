@@ -146,6 +146,8 @@ func (w *HTTPWire) Write(msg tunnel.Message) (error) {
 type HTTPServer struct{
 	// the tunnel
 	tunnel *tunnel.Tunnel
+	// is http1
+	isHttp11 bool
 }
 
 
@@ -153,7 +155,17 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// switch protocols
 	// w.WriteHeader(http.StatusSwitchingProtocols)
 	logger.Printf("new connection %s", r.RemoteAddr)
-	w.WriteHeader(http.StatusOK)
+	if s.isHttp11 {
+		// trick cloudflare. make it looks like a websocket connection
+		w.Header().Set("Upgrade", "goose")
+		w.Header().Set("Connection", "Upgrade")
+		w.WriteHeader(http.StatusSwitchingProtocols)
+	} else {
+		// http3(quic)
+		// must use 200 ok or we will not be able to send a body. quic-go(responseWriter)
+		w.WriteHeader(http.StatusOK)
+	}
+	// send the header
 	w.(http.Flusher).Flush()
 	// create a HTTP3 wire
 	wire, err := NewHTTPWire(r.Body, w)
@@ -208,9 +220,15 @@ func ServeHTTP(tunnel *tunnel.Tunnel) {
 		Addr:      "0.0.0.0:443",
 		Handler:   &HTTPServer{
 			tunnel: tunnel,
+			isHttp11: true,
 		},
 		TLSConfig: generateTLSConfig(),
 	}
+
+	// server will consume the request body before
+	// replying, blocking the header sending.
+	// but we want to disable that by disabling keepalive
+	server.SetKeepAlivesEnabled(false)
 
 	err := server.ListenAndServeTLS("", "")
 	if err != nil {
@@ -226,6 +244,7 @@ func ServeHTTP3(tunnel *tunnel.Tunnel) {
 			Addr:      "0.0.0.0:55556",
 			Handler:   &HTTPServer{
 				tunnel: tunnel,
+				isHttp11: false,
 			},
 			TLSConfig: generateTLSConfig(),
 		},
@@ -301,16 +320,18 @@ func (w *HTTPClientWire) Read() (tunnel.Message, error) {
 	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload[:n]), nil
 }
 
-
 func connectLoop(client *http.Client, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	req, err := http.NewRequest(http.MethodPost, endpoint, ioutil.NopCloser(pr))
-	req.TransferEncoding = []string{"chunked"}
-	req.Header.Set("Connection", "Close")
+	// req, err := http.NewRequest(http.MethodPost, endpoint, nil)
+	// req.TransferEncoding = []string{"chunked"}
+	req.Header.Set("Connection", "Upgrade")
+	req.Header.Set("Upgrade", "websocket")
 	if err != nil {
 		logger.Printf("create request error %+v", err)
 	}
+
 	// http client request
 	resp, err := client.Do(req)
 	if err != nil {
