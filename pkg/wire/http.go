@@ -4,6 +4,7 @@ package wire
 import (
 	"bytes"
 	"bufio"
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/tls"
@@ -12,6 +13,7 @@ import (
 	"io"
 	"io/ioutil"
 	"math/big"
+	"net"
 	"net/http"
 	"time"
 
@@ -34,6 +36,14 @@ var (
 			IdleConnTimeout:    30 * time.Second,
 			TLSClientConfig: &tls.Config{
 				InsecureSkipVerify: true,
+			},
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				conn, err := net.Dial(network, addr)
+				if err != nil {
+					return nil, err
+				}
+				logger.Printf("Remote IP: %s\n", conn.RemoteAddr())
+				return conn, err
 			},
 		},
 	}
@@ -185,13 +195,13 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		// we must use 200 ok here, or we will not be able to send a body, unless using datastream() which is ugly
 		// quic-go(responseWriter)
 		w.WriteHeader(http.StatusOK)
-	 	w.(http.Flusher).Flush()
-	 	// set rw
-	 	reader = r.Body
-	 	writer = w
+		w.(http.Flusher).Flush()
+		// set rw
+		reader = r.Body
+		writer = w
 	}
- 	wire, err := NewHTTPWire(reader, writer)
- 	if err != nil {
+	wire, err := NewHTTPWire(reader, writer)
+	if err != nil {
 		logger.Printf("create http wire error %+v", err)
 		return
 	}
@@ -298,7 +308,7 @@ func connectLoop(client *http.Client, endpoint string, localAddr string, tunnel 
 	if err != nil {
 		return errors.Wrap(err, "request http error")
 	}
-	logger.Printf("switching protocol successful, server return code: %d", resp.StatusCode)
+	logger.Printf("switching protocol successful, server(%s) return code: %d", req.RemoteAddr, resp.StatusCode)
 	stream := resp.Body
 	defer stream.Close()
 
