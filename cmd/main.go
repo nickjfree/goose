@@ -9,6 +9,7 @@ import (
 	// "time"
 	"goose/pkg/tunnel"
 	"goose/pkg/wire"
+	"goose/pkg/route"
 )
 
 
@@ -48,11 +49,11 @@ func main() {
 			go func() { wire.ServeHTTP(t) } ()
 		case "tcp":
 			return
-		case "udp":			
+		case "udp":
 			return
 		default:
 			go func() { wire.ServeHTTP3(t) } ()
-		}	
+		}
 	} else {
 		// client mode
 		go func() { wire.ServeTun(t, localAddr, false) } ()
@@ -68,8 +69,11 @@ func main() {
 			return
 		default:
 			go func() { wire.ConnectHTTP3(httpEndpoint, localAddr, t) } ()
-		}	
+		}
 	}
+
+	out, _ := route.RunCmd("ping", "www.baidu.com", "-c", "4")
+	logger.Printf("%s", string(out))
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
