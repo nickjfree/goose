@@ -179,7 +179,7 @@ func (s *HTTPServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		hj, ok := w.(http.Hijacker)
 		if !ok {
 			logger.Printf("response is not a hijacker %+v", w)
-			return 
+			return
 		}
 		conn, bufrw, err := hj.Hijack()
 		if err != nil {
@@ -292,10 +292,10 @@ type HTTPClientWire struct {
 	writer io.Writer
 }
 
-func connectLoop(client *http.Client, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
+func connectLoop(client *http.Client, method string, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
 	pr, pw := io.Pipe()
 	defer pr.Close()
-	req, err := http.NewRequest(http.MethodGet, endpoint, ioutil.NopCloser(pr))
+	req, err := http.NewRequest(method, endpoint, ioutil.NopCloser(pr))
 	// set TE to identify, so client won't use chunked, causing cloudflare blocking for request body
 	req.TransferEncoding = []string{"identity"}
 	req.Header.Set("Connection", "Upgrade")
@@ -338,7 +338,7 @@ func ConnectHTTP(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error
 
 	for {
 		logger.Printf("connecting to server %s", endpoint)
-		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(&client, endpoint, localAddr,tunnel))
+		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(&client, "GET", endpoint, localAddr,tunnel))
 		time.Sleep(10 * time.Second)
 	}
 }
@@ -348,7 +348,7 @@ func ConnectHTTP3(endpoint string, localAddr string, tunnel *tunnel.Tunnel) erro
 
 	for {
 		logger.Printf("connecting to server %s", endpoint)
-		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(&client3, endpoint, localAddr,tunnel))
+		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(&client3, "GET_0RTT", endpoint, localAddr,tunnel))
 		time.Sleep(10 * time.Second)
 	}
 }
