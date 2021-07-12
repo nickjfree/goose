@@ -11,7 +11,6 @@ import (
 	"crypto/hmac"
 	"crypto/rsa"
 	"errors"
-	"fmt"
 	"hash"
 	"io"
 	"sync/atomic"
@@ -25,9 +24,10 @@ const maxClientPSKIdentities = 5
 
 type serverHandshakeStateTLS13 struct {
 	c                   *Conn
-	ctx             context.Context
+	ctx                 context.Context
 	clientHello         *clientHelloMsg
 	hello               *serverHelloMsg
+	alpnNegotiationErr  error
 	encryptedExtensions *encryptedExtensionsMsg
 	sentDummyCCS        bool
 	usingPSK            bool
@@ -141,31 +141,21 @@ func (hs *serverHandshakeStateTLS13) processClientHello() error {
 	hs.hello.sessionId = hs.clientHello.sessionId
 	hs.hello.compressionMethod = compressionNone
 
-	// var preferenceList []uint16
-	// for _, suiteID := range c.config.cipherSuites() {
-	// 	for _, suite := range cipherSuitesTLS13 {
-	// 		if suite.id == suiteID {
-	// 			preferenceList = append(preferenceList, suiteID)
-	// 		}
-	// 	}
-	// }
-	// if len(preferenceList) == 0 {
-	// 	preferenceList = defaultCipherSuitesTLS13
-	// 	if !hasAESGCMHardwareSupport || !aesgcmPreferred(hs.clientHello.cipherSuites) {
-	// 		preferenceList = defaultCipherSuitesTLS13NoAES
-	// 	}
-	// }
-	// cipherSuites := c.config.CipherSuites
-	// for _, suiteID := range hs.clientHello.cipherSuites {
-	// 	hs.suite = mutualCipherSuiteTLS13(cipherSuites, suiteID)
-	// 	if hs.suite != nil {
-	// 		break
-	// 	}
-	// }
 	if hs.suite == nil {
-		preferenceList := defaultCipherSuitesTLS13
-		if !hasAESGCMHardwareSupport || !aesgcmPreferred(hs.clientHello.cipherSuites) {
-			preferenceList = defaultCipherSuitesTLS13NoAES
+		var preferenceList []uint16
+		for _, suiteID := range c.config.CipherSuites {
+			for _, suite := range cipherSuitesTLS13 {
+				if suite.id == suiteID {
+					preferenceList = append(preferenceList, suiteID)
+					break
+				}
+			}
+		}
+		if len(preferenceList) == 0 {
+			preferenceList = defaultCipherSuitesTLS13
+			if !hasAESGCMHardwareSupport || !aesgcmPreferred(hs.clientHello.cipherSuites) {
+				preferenceList = defaultCipherSuitesTLS13NoAES
+			}
 		}
 		for _, suiteID := range preferenceList {
 			hs.suite = mutualCipherSuiteTLS13(hs.clientHello.cipherSuites, suiteID)
@@ -238,12 +228,12 @@ GroupSelection:
 		c.extraConfig.ReceivedExtensions(typeClientHello, hs.clientHello.additionalExtensions)
 	}
 
-	if len(hs.clientHello.alpnProtocols) > 0 {
-		if selectedProto := mutualProtocol(hs.clientHello.alpnProtocols, c.config.NextProtos); selectedProto != "" {
-			hs.encryptedExtensions.alpnProtocol = selectedProto
-			c.clientProtocol = selectedProto
-		}
+	selectedProto, err := negotiateALPN(c.config.NextProtos, hs.clientHello.alpnProtocols)
+	if err != nil {
+		hs.alpnNegotiationErr = err
 	}
+	hs.encryptedExtensions.alpnProtocol = selectedProto
+	c.clientProtocol = selectedProto
 
 	return nil
 }
@@ -294,7 +284,7 @@ func (hs *serverHandshakeStateTLS13) checkForResumption() error {
 				return errors.New("tls: client sent unexpected early data")
 			}
 
-			if sessionState.alpn == c.clientProtocol &&
+			if hs.alpnNegotiationErr == nil && sessionState.alpn == c.clientProtocol &&
 				c.extraConfig != nil && c.extraConfig.MaxEarlyData > 0 &&
 				c.extraConfig.Accept0RTT != nil && c.extraConfig.Accept0RTT(sessionState.appData) {
 				hs.encryptedExtensions.earlyData = true
@@ -570,11 +560,6 @@ func illegalClientHelloChange(ch, ch1 *clientHelloMsg) bool {
 func (hs *serverHandshakeStateTLS13) sendServerParameters() error {
 	c := hs.c
 
-	if c.extraConfig != nil && c.extraConfig.EnforceNextProtoSelection && len(c.clientProtocol) == 0 {
-		c.sendAlert(alertNoApplicationProtocol)
-		return fmt.Errorf("ALPN negotiation failed. Client offered: %q", hs.clientHello.alpnProtocols)
-	}
-
 	hs.transcript.Write(hs.clientHello.marshal())
 	hs.transcript.Write(hs.hello.marshal())
 	if _, err := c.writeRecord(recordTypeHandshake, hs.hello.marshal()); err != nil {
@@ -612,14 +597,9 @@ func (hs *serverHandshakeStateTLS13) sendServerParameters() error {
 		return err
 	}
 
-	if len(c.config.NextProtos) > 0 && len(hs.clientHello.alpnProtocols) > 0 {
-		selectedProto := mutualProtocol(hs.clientHello.alpnProtocols, c.config.NextProtos)
-		if selectedProto == "" {
-			c.sendAlert(alertNoApplicationProtocol)
-			return fmt.Errorf("tls: client requested unsupported application protocols (%s)", hs.clientHello.alpnProtocols)
-		}
-		hs.encryptedExtensions.alpnProtocol = selectedProto
-		c.clientProtocol = selectedProto
+	if hs.alpnNegotiationErr != nil {
+		c.sendAlert(alertNoApplicationProtocol)
+		return hs.alpnNegotiationErr
 	}
 	if hs.c.extraConfig != nil && hs.c.extraConfig.GetExtensions != nil {
 		hs.encryptedExtensions.additionalExtensions = hs.c.extraConfig.GetExtensions(typeEncryptedExtensions)

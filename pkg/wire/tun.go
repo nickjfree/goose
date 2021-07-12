@@ -28,7 +28,7 @@ func (w *TunWire) Read() (tunnel.Message, error) {
 		return nil, err
 	}
 	if !waterutil.IsIPv4(payload) {
-		logger.Printf("recv: not ipv4 packet len %d", n)
+		// logger.Printf("recv: not ipv4 packet len %d", n)
 		return nil, nil
 	}
 	srcIP := waterutil.IPv4Source(payload)

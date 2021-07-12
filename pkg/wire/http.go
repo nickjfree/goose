@@ -38,7 +38,8 @@ var (
 				InsecureSkipVerify: true,
 			},
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				conn, err := net.Dial(network, addr)
+				var d net.Dialer
+				conn, err := d.DialContext(ctx, network, addr)
 				if err != nil {
 					return nil, err
 				}
@@ -296,6 +297,9 @@ func connectLoop(client *http.Client, method string, endpoint string, localAddr 
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	req, err := http.NewRequest(method, endpoint, ioutil.NopCloser(pr))
+	ctx, cancel := context.WithTimeout(req.Context(), 10 * time.Second)
+	defer cancel()
+	req = req.WithContext(ctx)
 	// set TE to identify, so client won't use chunked, causing cloudflare blocking for request body
 	req.TransferEncoding = []string{"identity"}
 	req.Header.Set("Connection", "Upgrade")

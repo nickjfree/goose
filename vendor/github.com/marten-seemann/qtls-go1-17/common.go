@@ -345,7 +345,7 @@ type clientSessionState struct {
 // goroutines. Up to TLS 1.2, only ticket-based resumption is supported, not
 // SessionID-based resumption. In TLS 1.3 they were merged into PSK modes, which
 // are supported via this interface.
-//go:generate sh -c "mockgen -package qtls -destination mock_client_session_cache_test.go github.com/marten-seemann/qtls-go1-15 ClientSessionCache"
+//go:generate sh -c "mockgen -package qtls -destination mock_client_session_cache_test.go github.com/marten-seemann/qtls-go1-17 ClientSessionCache"
 type ClientSessionCache = tls.ClientSessionCache
 
 // SignatureScheme is a tls.SignatureScheme
@@ -608,7 +608,7 @@ type config struct {
 	// protocol will be one from this list, and the connection will fail
 	// if there is no mutually supported protocol. If NextProtos is empty
 	// or the peer doesn't support ALPN, the connection will succeed and
-	// ConnectionState.NegotiatedProtocol will be empty."
+	// ConnectionState.NegotiatedProtocol will be empty.
 	NextProtos []string
 
 	// ServerName is used to verify the hostname on the returned

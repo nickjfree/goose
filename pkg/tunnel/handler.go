@@ -19,11 +19,9 @@ func Tun(t *Tunnel, msg Message) (bool, error) {
 		// relay msg to dstPort
 		if err := dstPort.WriteOutput(msg); err != nil {
 			// dstPort error. close it
-			logger.Printf("warning dstPort(%s) dead err %+v, force closed", dstPort.GetAddr(), err)
+			// logger.Printf("warning dstPort(%s) dead err %+v, force closed", dstPort.GetAddr(), err)
 			dstPort.Close()
 		}
-	} else {
-		logger.Printf("no dst port found for addr %s", dst)
 	}
 	return true, nil
 }
