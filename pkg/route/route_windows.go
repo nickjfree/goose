@@ -5,14 +5,19 @@ import (
 	"fmt"
 	"net"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"github.com/pkg/errors"
 )
 
 var (
+	// win32 api GetBestRoute
 	nGetBestRoute uintptr
+	// default gateway
 	defaultGateway string
+	// default interface index
+	defaultIfIndex IF_INDEX
 )
 
 type (
@@ -36,7 +41,7 @@ func init() {
 	if defaultGateway, err = getDefaultGateway(); err != nil {
 		logger.Fatalf("get default gateway error: %+v", err)
 	}
-	logger.Printf("system gateway is %s", defaultGateway)
+	logger.Printf("system gateway is %s, at interface %d", defaultGateway, defaultIfIndex)
 }
 
 func getProcAddr(lib syscall.Handle, name string) uintptr {
@@ -92,7 +97,30 @@ func getDefaultGateway() (string, error) {
 	if err != syscall.Errno(0) {
 		return "", err
 	}
+	// record default interface index
+	defaultIfIndex = row.DwForwardIfIndex
 	return dwordIP(row.DwForwardNextHop).String(), nil
+}
+
+
+// wait tunnel status up
+func waitTunnelUp(tunnelGateway string) error {
+	for {	
+		var row MIB_IPFORWARDROW
+		_, _, err := syscall.Syscall(nGetBestRoute, 3,
+			uintptr(ipDword(net.ParseIP(tunnelGateway))),
+			uintptr(ipDword(net.ParseIP("0.0.0.0"))),
+			uintptr(unsafe.Pointer(&row)))
+		if err != syscall.Errno(0) {
+			return err
+		}
+		if row.DwForwardIfIndex != defaultIfIndex {
+			// tunnelGateway is at tap interface now
+			return nil
+		} 
+		// continue wait
+		time.Sleep(5 * time.Second)
+	}
 }
 
 // set route for server
@@ -105,7 +133,8 @@ func setServerRoute(serverIp string) error {
 
 // set traffic route
 func setTrafficRoute(tunnelGateway string) error {
-	// set 0.0.0.0 to use virtual gateway
+	// set 0.0.0.0 to use tunnelGateway
+	waitTunnelUp(tunnelGateway)
 	if out, err := RunCmd("route", "add", "0.0.0.0/0", tunnelGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}

@@ -171,20 +171,20 @@ func (t *Tunnel) run() (error) {
 
 // setup route
 func (t *Tunnel) SetupRoute(tunnelGateway, serverIp string) {
-	logger.Printf("seting up route %s(%s)", tunnelGateway, serverIp)
 	if err := route.SetupRoute(tunnelGateway, serverIp); err != nil {
 		logger.Fatalf("setup route failed %+v", errors.Wrap(err, ""))
 	}
+	logger.Printf("setting up route to %s(%s) successful", tunnelGateway, serverIp)
 	t.tunnelGateway = tunnelGateway
 	t.serverIp = serverIp
 }
 
 // resotre route
 func (t *Tunnel) RestoreRoute() {
-	logger.Printf("restoring route")
 	if err := route.RestoreRoute(t.tunnelGateway, t.serverIp); err != nil {
 		logger.Fatalf("restore route failed %+v", errors.Wrap(err, ""))
 	}
+	logger.Printf("restoring route success")
 	t.serverIp = ""
 	t.tunnelGateway = ""
 }

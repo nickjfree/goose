@@ -6,7 +6,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	// "time"
 	"goose/pkg/tunnel"
 	"goose/pkg/wire"
 )
@@ -36,6 +35,7 @@ func main() {
 	// set up tun device
 	t := tunnel.NewTunSwitch()
 	go func() { logger.Printf("tunnel quit: %s", <- t.Start()) } ()
+
 
 	// server
 	if !isClient {
