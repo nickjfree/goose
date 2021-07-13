@@ -15,6 +15,7 @@ import (
 	"math/big"
 	"net"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/lucas-clemente/quic-go/http3"
@@ -22,6 +23,7 @@ import (
 	"github.com/songgao/water/waterutil"
 	"github.com/pkg/errors"
 	"goose/pkg/tunnel"
+	"goose/pkg/route"
 )
 
 
@@ -29,6 +31,7 @@ const HTTP_BUFFERSIZE = 2048
 
 
 var (
+	serverIp = ""
 	// http1 client
 	client = http.Client{
 		Transport: &http.Transport{
@@ -43,7 +46,8 @@ var (
 				if err != nil {
 					return nil, err
 				}
-				logger.Printf("Remote IP: %s\n", conn.RemoteAddr())
+				serverIp = strings.Split(conn.RemoteAddr().String(), ":")[0]
+				logger.Printf("Remote IP: %s\n", serverIp)
 				return conn, err
 			},
 		},
@@ -319,16 +323,27 @@ func connectLoop(client *http.Client, method string, endpoint string, localAddr 
 		return errors.Wrap(err, "create http wire error")
 	}
 	// register to server
-	serverAddr, err := RegisterAddr(wire, localAddr)
+	tunnelGateway, err := RegisterAddr(wire, localAddr)
 	if err != nil {
 		logger.Printf("register to server error: %+v", err)
 		return errors.Wrap(err, "")
 	}
-	port, err := tunnel.AddPort(serverAddr, true)
+	port, err := tunnel.AddPort(tunnelGateway, true)
 	if err != nil {
 		return errors.Wrap(err, "add port error")
 	}
-	logger.Printf("add port %s", serverAddr)
+	logger.Printf("add port %s", tunnelGateway)
+	// setup route
+	defer func() {
+		logger.Printf("restore route")
+		if err := route.RestoreRoute(tunnelGateway, serverIp); err != nil {
+			logger.Fatalf("restore route failed %+v", errors.Wrap(err, ""))
+		}
+	} ()
+	if err := route.SetupRoute(tunnelGateway, serverIp); err != nil {
+		logger.Fatalf("setup route failed %+v", errors.Wrap(err, ""))
+		return errors.Wrap(err, "")
+	}
 	// handle stream
 	return Communicate(wire, port)
 }
