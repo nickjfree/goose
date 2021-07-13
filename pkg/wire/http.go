@@ -23,7 +23,6 @@ import (
 	"github.com/songgao/water/waterutil"
 	"github.com/pkg/errors"
 	"goose/pkg/tunnel"
-	"goose/pkg/route"
 )
 
 
@@ -334,16 +333,8 @@ func connectLoop(client *http.Client, method string, endpoint string, localAddr 
 	}
 	logger.Printf("add port %s", tunnelGateway)
 	// setup route
-	defer func() {
-		logger.Printf("restore route")
-		if err := route.RestoreRoute(tunnelGateway, serverIp); err != nil {
-			logger.Fatalf("restore route failed %+v", errors.Wrap(err, ""))
-		}
-	} ()
-	if err := route.SetupRoute(tunnelGateway, serverIp); err != nil {
-		logger.Fatalf("setup route failed %+v", errors.Wrap(err, ""))
-		return errors.Wrap(err, "")
-	}
+	defer tunnel.RestoreRoute()
+	tunnel.SetupRoute(tunnelGateway, serverIp)
 	// handle stream
 	return Communicate(wire, port)
 }

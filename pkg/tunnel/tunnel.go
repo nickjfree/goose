@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 	"github.com/pkg/errors"
+	"goose/pkg/route"
 )
 
 var (
@@ -16,7 +17,7 @@ var (
 )
 
 // message handler
-type MessageHandler func(t *Tunnel, msg Message) (bool, error) 
+type MessageHandler func(t *Tunnel, msg Message) (bool, error)
 
 // port event
 type PortEvent struct {
@@ -42,6 +43,10 @@ type Tunnel struct {
 	e chan error
 	// handlers
 	handlers []MessageHandler
+	// server ip
+	serverIp string
+	// tunnel gateway
+	tunnelGateway string
 }
 
 
@@ -96,7 +101,7 @@ func (t *Tunnel) AddPort(addr string, fallback bool) (*Port, error) {
 func (t *Tunnel) RemovePort(addr string) (error) {
 	t.lock.Lock()
 	defer t.lock.Unlock()
-	delete(t.ports, addr)	
+	delete(t.ports, addr)
 	return nil
 }
 
@@ -162,4 +167,24 @@ func (t *Tunnel) run() (error) {
 		}
 	}
 	return nil
+}
+
+// setup route
+func (t *Tunnel) SetupRoute(tunnelGateway, serverIp string) {
+	logger.Printf("seting up route %s(%s)", tunnelGateway, serverIp)
+	if err := route.SetupRoute(tunnelGateway, serverIp); err != nil {
+		logger.Fatalf("setup route failed %+v", errors.Wrap(err, ""))
+	}
+	t.tunnelGateway = tunnelGateway
+	t.serverIp = serverIp
+}
+
+// resotre route
+func (t *Tunnel) RestoreRoute() {
+	logger.Printf("restoring route")
+	if err := route.RestoreRoute(t.tunnelGateway, t.serverIp); err != nil {
+		logger.Fatalf("restore route failed %+v", errors.Wrap(err, ""))
+	}
+	t.serverIp = ""
+	t.tunnelGateway = ""
 }
