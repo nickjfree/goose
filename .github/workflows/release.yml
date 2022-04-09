@@ -19,10 +19,10 @@ jobs:
       matrix:
         # List of GOOS and GOARCH pairs from `go tool dist list`
         goosarch:
-          - 'linux/x64'
-          - 'windows/x64'
-          - 'linux/arm32'
-          - 'linux/aarch64'
+          - 'linux/amd64'
+          - 'windows/amd64'
+          - 'linux/arm'
+          - 'linux/arm64'
     steps:
       - name: Checkout code
         uses: actions/checkout@v2
