@@ -26,8 +26,9 @@ jobs:
           echo "BINARY_NAME=$BINARY_NAME" >> $GITHUB_ENV
           echo "GOOS=$GOOS" >> $GITHUB_ENV
           echo "GOARCH=$GOARCH" >> $GITHUB_ENV
-    - name: Install dependencies
-      run: make
+    - name: build bin
+      run: |
+          go build -o "$BINARY_NAME" -v
       
     - name: Release Notes
       run:
