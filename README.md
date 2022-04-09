@@ -2,7 +2,7 @@
 
 
 ## About The Project
-[![Makefile CI](https://github.com/fengjian/goose/actions/workflows/release.yml/badge.svg)](https://github.com/fengjian/goose/actions/workflows/release.yml)
+[![Latest Release](https://github.com/fengjian/goose/actions/workflows/release.yml/badge.svg?branch=v1.3)](https://github.com/fengjian/goose/actions/workflows/release.yml)
 
 Wow!  
 Such proxy    
