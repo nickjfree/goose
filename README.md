@@ -1,5 +1,8 @@
 <!-- ABOUT THE PROJECT -->
+
+
 ## About The Project
+[![Makefile CI](https://github.com/fengjian/goose/actions/workflows/makefile.yml/badge.svg)](https://github.com/fengjian/goose/actions/workflows/makefile.yml)
 
 Wow!  
 Such proxy    
