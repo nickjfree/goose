@@ -46,10 +46,8 @@ func main() {
 			go func() { wire.ServeHTTP3(t) } ()
 		case "http":
 			go func() { wire.ServeHTTP(t) } ()
-		case "tcp":
-			return
-		case "udp":
-			return
+		case "ipfs":
+			go func() { wire.ServeIPFS(t) } ()
 		default:
 			go func() { wire.ServeHTTP3(t) } ()
 		}
@@ -62,9 +60,7 @@ func main() {
 			go func() { wire.ConnectHTTP3(httpEndpoint, localAddr, t) } ()
 		case "http":
 			go func() { wire.ConnectHTTP(httpEndpoint, localAddr, t) } ()
-		case "tcp":
-			return
-		case "udp":
+		case "ipfs":
 			return
 		default:
 			go func() { wire.ConnectHTTP3(httpEndpoint, localAddr, t) } ()
