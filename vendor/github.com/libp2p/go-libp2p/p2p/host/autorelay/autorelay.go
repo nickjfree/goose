@@ -3,7 +3,6 @@ package autorelay
 import (
 	"context"
 	"sync"
-	"fmt"
 
 	basic "github.com/libp2p/go-libp2p/p2p/host/basic"
 
@@ -73,7 +72,6 @@ func (r *AutoRelay) background() {
 	var peerChan <-chan peer.AddrInfo
 	if len(r.conf.staticRelays) == 0 {
 		peerChan = r.conf.peerChan
-		log.Infof("BBBBBBBBBB r.conf.staticRelays  %+v", r.conf.staticRelays)
 	} else {
 		pc := make(chan peer.AddrInfo)
 		peerChan = pc
@@ -100,10 +98,8 @@ func (r *AutoRelay) background() {
 			}
 			// TODO: push changed addresses
 			evt := ev.(event.EvtLocalReachabilityChanged)
-			fmt.Printf("network Reachability %+v ", evt.Reachability)
 			switch evt.Reachability {
 			case network.ReachabilityPrivate, network.ReachabilityUnknown:
-				log.Info("BBBBBBBBBBB finder start")
 				if err := r.relayFinder.Start(); err != nil {
 					log.Error("failed to start relay finder")
 				}
@@ -114,7 +110,6 @@ func (r *AutoRelay) background() {
 			r.status = evt.Reachability
 			r.mx.Unlock()
 		case pi := <-peerChan:
-			log.Info("BBBBBBBBBBB peerChan in %+v", pi)
 			select {
 			case r.peerChanOut <- pi: // if there's space in the channel, great
 			default:

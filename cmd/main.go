@@ -15,8 +15,8 @@ var (
 	logger = log.New(os.Stdout, "logger: ", log.Lshortfile)
 	// run as client
 	isClient = false
-	// remote http3 endpint
-	httpEndpoint = ""
+	// remote http1.1/http3 endpoint or libp2p peerid
+	endpoint = ""
 	// protocl
 	protocol = ""
 	// local addr
@@ -26,9 +26,9 @@ var (
 
 func main() {
 
-	flag.StringVar(&httpEndpoint, "e", "https://us.nick12.com", "remote http endpoint")
+	flag.StringVar(&endpoint, "e", "https://us.nick12.com", "remote endpoint, http url or peerid")
 	flag.BoolVar(&isClient, "c", false, "run as client")
-	flag.StringVar(&protocol, "p", "http3", "protocol: http/http3")
+	flag.StringVar(&protocol, "p", "http3", "protocol: http/http3/ipfs")
 	flag.StringVar(&localAddr, "local", "192.168.100.1/24", "local ipv4 address to set on the tunnel interface")
 	flag.Parse()
 
@@ -57,13 +57,13 @@ func main() {
 		// choose wire protocol
 		switch protocol {
 		case "http3":
-			go func() { wire.ConnectHTTP3(httpEndpoint, localAddr, t) } ()
+			go func() { wire.ConnectHTTP3(endpoint, localAddr, t) } ()
 		case "http":
-			go func() { wire.ConnectHTTP(httpEndpoint, localAddr, t) } ()
+			go func() { wire.ConnectHTTP(endpoint, localAddr, t) } ()
 		case "ipfs":
-			return
+			go func() { wire.ConnectIPFS(endpoint, localAddr, t) } ()
 		default:
-			go func() { wire.ConnectHTTP3(httpEndpoint, localAddr, t) } ()
+			go func() { wire.ConnectHTTP3(endpoint, localAddr, t) } ()
 		}
 	}
 

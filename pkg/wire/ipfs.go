@@ -3,11 +3,11 @@ package wire
 
 import (
 	"bytes"
-	"bufio"
 	"context"
 	"io"
 	"fmt"
-	_ "strings"
+	"encoding/json"
+	// "strings"
 	"time"
 	"crypto/rand"
 	"sync"
@@ -16,7 +16,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/host"
-	_ "github.com/libp2p/go-libp2p-core/network"
+	"github.com/libp2p/go-libp2p-core/network"
 	"github.com/libp2p/go-libp2p-core/peer"
 	"github.com/libp2p/go-libp2p-core/peerstore"
 	"github.com/libp2p/go-libp2p-core/routing"
@@ -53,7 +53,7 @@ type IPFSWire struct {
 
 
 func NewIPFSWire(r io.Reader, w io.Writer) (Wire, error) {
-	return &HTTPWire{
+	return &IPFSWire{
 		BaseWire: BaseWire{},
 		reader: r,
 		writer: w,
@@ -68,7 +68,7 @@ func (w *IPFSWire) Read() (tunnel.Message, error) {
 	// read payload size
 	len, err := quicvarint.Read(br)
 	if err != nil {
-		return nil, errors.Wrap(err, "read http stream error, payload size")
+		return nil, errors.Wrap(err, "read ipfs stream error, payload size")
 	}
 	if len > HTTP_BUFFERSIZE {
 		return nil, errors.Errorf("client buffer size(%d) to big", len)
@@ -77,7 +77,7 @@ func (w *IPFSWire) Read() (tunnel.Message, error) {
 	payload := make ([]byte, len)
 	_, err = io.ReadFull(w.reader, payload)
 	if err != nil {
-		return nil, errors.Wrap(err, "read http stream")
+		return nil, errors.Wrap(err, "read ipfs stream")
 	}
 	srcIP := waterutil.IPv4Source(payload)
 	dstIP := waterutil.IPv4Destination(payload)
@@ -99,16 +99,9 @@ func (w *IPFSWire) Write(msg tunnel.Message) (error) {
 	// write payload size and content
 	quicvarint.Write(buf, uint64(len(payload)))
 	buf.Write(payload)
-	// send http data <payload size><payload data>
+	// send ipfs data <payload size><payload data>
 	if _, err := w.writer.Write(buf.Bytes()); err != nil {
-		return errors.Wrapf(err, "write http stream")
-	}
-	switch flusher := w.writer.(type) {
-	case *bufio.Writer:
-		if err := flusher.Flush(); err != nil {
-			return errors.Wrapf(err, "write http stream(flush)")
-		}
-	default:
+		return errors.Wrapf(err, "write ipfs stream")
 	}
 	// srcIP := waterutil.IPv4Source(payload)
 	// dstIP := waterutil.IPv4Destination(payload)
@@ -117,35 +110,6 @@ func (w *IPFSWire) Write(msg tunnel.Message) (error) {
 	// logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
 	return nil
 }
-
-func connectLoopIPFS(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
-	// pr, pw := io.Pipe()
-	// defer pr.Close()
-
-	// // create wire
-	// wire, err := NewHTTPWire(stream, pw)
-	// if err != nil {
-	// 	return errors.Wrap(err, "create http wire error")
-	// }
-	// // register to server
-	// tunnelGateway, err := RegisterAddr(wire, localAddr)
-	// if err != nil {
-	// 	logger.Printf("register to server error: %+v", err)
-	// 	return errors.Wrap(err, "")
-	// }
-	// port, err := tunnel.AddPort(tunnelGateway, true)
-	// if err != nil {
-	// 	return errors.Wrap(err, "add port error")
-	// }
-	// logger.Printf("add port %s", tunnelGateway)
-	// // setup route
-	// defer tunnel.RestoreRoute()
-	// tunnel.SetupRoute(tunnelGateway, serverIp)
-	// // handle stream
-	// return Communicate(wire, port)
-	return nil
-}
-
 
 // p2p host
 type P2PHost struct {
@@ -157,9 +121,11 @@ type P2PHost struct {
 	ctx context.Context
 	// cancel
 	cancel context.CancelFunc 
+	// the tunnel
+	tunnel *tunnel.Tunnel
 }
 
-func NewP2PHost() (*P2PHost, error) {
+func NewP2PHost(tunnel *tunnel.Tunnel) (*P2PHost, error) {
 	// crreate peer chan
 	peerChan := make(chan peer.AddrInfo, 100)
 	// create p2p host
@@ -173,6 +139,7 @@ func NewP2PHost() (*P2PHost, error) {
 		ctx: ctx,
 		peerChan: peerChan,
 		cancel : cancel,
+		tunnel: tunnel,
 	}
 	if h.Bootstrap(bootstraps); err != nil {
 		return nil, err
@@ -240,13 +207,11 @@ func (h *P2PHost) Background() error {
 			return nil
 		case <- ticker.C:
 			// show network state
-			logger.Printf("current p2p node: %+v peer id %s", h.Addrs(), h.ID())
 			peers := h.Network().Peers()
 			peerList := []peer.AddrInfo{}
 			for _, peer := range peers {
 				peerList = append(peerList, h.Peerstore().PeerInfo(peer))
 			}
-			logger.Printf("peers: %d", len(peers))
 			// find relays
 			for _, peer := range peerList {
 				select {
@@ -256,10 +221,66 @@ func (h *P2PHost) Background() error {
 				}
 			}
 			logger.Printf("feeding %d peers to RelayFinder", len(peerList))
+			addrText, err := json.MarshalIndent(h.Addrs(), "", "  ")
+			if err != nil {
+				logger.Printf("error %s", errors.WithStack(err))
+			}
+			logger.Printf("peerid: %s\nrelays: %s\n",  h.ID(), addrText)
 		}
 	}
 }
 
+// handle client stream
+func (h *P2PHost) HandleClientStream(s network.Stream, localAddr string) error {
+	defer s.Close()	
+	// create wire
+	wire, err := NewIPFSWire(s, s)
+	if err != nil {
+		return errors.Wrap(err, "create ipfs wire error")
+	}
+	// register to server
+	tunnelGateway, err := RegisterAddr(wire, localAddr)
+	if err != nil {
+		logger.Printf("register to server error: %+v", err)
+		return errors.Wrap(err, "")
+	}
+	port, err := h.tunnel.AddPort(tunnelGateway, true)
+	if err != nil {
+		return errors.Wrap(err, "add port error")
+	}
+	logger.Printf("add port %s", tunnelGateway)
+	// setup route
+	defer h.tunnel.RestoreRoute()
+	h.tunnel.SetupRoute(tunnelGateway, serverIp)
+	// handle stream
+	return Communicate(wire, port)
+}
+
+// handle server stream
+func (h *P2PHost) HandleServerStream(s network.Stream) error {
+	wire, err := NewIPFSWire(s, s)
+	if err != nil {
+		logger.Printf("create ipfs wire error %+v", err)
+		return err
+	}
+	// handle client register
+	logger.Printf("waiting for client %s to register addr", s.ID())
+	clientAddr, err := HandleRegisterAddr(wire, h.tunnel)
+	if err != nil {
+		logger.Printf("client register error: %+v", err)
+		return err 
+	}
+	// add client to port
+	port, err := h.tunnel.AddPort(clientAddr, false)
+	if err != nil {
+		logger.Printf("add port error %+v", err)
+		return err
+	}
+	// communicate
+	err = Communicate(wire, port)
+	logger.Printf("wire quit: %s", err)
+	return errors.WithStack(err)
+}
 
 // create libp2p node
 // circuit relay need to be enabled to hide the real server ip.
@@ -269,7 +290,6 @@ func createHost(peerChan <- chan peer.AddrInfo) (host.Host, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-
 	var idht *dht.IpfsDHT
 	opts := []libp2p.Option{
 		// libp2p.ListenAddrStrings(""),
@@ -300,24 +320,64 @@ func createHost(peerChan <- chan peer.AddrInfo) (host.Host, error) {
 // run as a goose server in ipfs network
 // well.. the server is not actually a ipfs host, instead it talks in goose/0.0.1 protocol
 func ServeIPFS(tunnel *tunnel.Tunnel) {
-	host, err := NewP2PHost()
+	host, err := NewP2PHost(tunnel)
 	if err != nil {
 		logger.Fatalf("Error: %v", err)
 	}
+	// set server stream hanlder
+	host.SetStreamHandler("/goose/0.0.1", func(s network.Stream) {
+		defer s.Close()
+		logger.Printf("received new stream %s", s.ID())
+		if err := host.HandleServerStream(s); err != nil {
+			logger.Printf("handle stream error %+v", errors.WithStack(err))
+		}
+	})
+	// go backgroud relay refresh jobs
 	if err := host.Background(); err != nil {
 		logger.Fatalf("Error: %v", err)
 	}
 }
 
+// connect to remote peer once
+func connectLoopIPFS(host *P2PHost, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
+
+	// decode peerid
+	peerID, err := peer.Decode(endpoint)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	p := peer.AddrInfo{
+		ID: peerID,
+	}
+	// connect to the peer
+	ctx, cancel := context.WithCancel(context.Background())
+	ctx = network.WithUseTransient(ctx, "")
+	defer cancel()
+	s, err := host.NewStream(ctx, p.ID, "/goose/0.0.1")
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if err := host.HandleClientStream(s, localAddr); err != nil {
+		return err
+	}
+	return nil
+}
 
 // connect to remote peer by PeerId
 func ConnectIPFS(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
 
-// 	for {
-// 		logger.Printf("connecting to server %s", endpoint)
-// 		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(&client3, "GET_0RTT", endpoint, localAddr,tunnel))
-// 		time.Sleep(time.Duration(5) * time.Second)
-// 	}
-// }
+	host, err := NewP2PHost(tunnel)
+	if err != nil {
+		logger.Fatalf("Error: %v", err)
+	}
+
+	// client do not server streams, 
+	// go host.Background()
+
+	for {
+		logger.Printf("connecting to server %s", endpoint)
+		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoopIPFS(host, endpoint, localAddr, tunnel))
+		time.Sleep(time.Duration(5) * time.Second)
+	}
 	return nil
 }

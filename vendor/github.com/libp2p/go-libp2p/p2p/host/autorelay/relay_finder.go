@@ -143,7 +143,6 @@ func (rf *relayFinder) background(ctx context.Context) {
 			}
 			rf.relayMx.Unlock()
 		case <-rf.candidateFound:
-			log.Info("BBBBBBBBBBBB candidateFound")
 			select {
 			case rf.handleNewCandidateTrigger <- struct{}{}:
 			default:
@@ -240,7 +239,6 @@ func (rf *relayFinder) handleNewNode(ctx context.Context, pi peer.AddrInfo) {
 // tryNode checks if a peer actually supports either circuit v1 or circuit v2.
 // It does not modify any internal state.
 func (rf *relayFinder) tryNode(ctx context.Context, pi peer.AddrInfo) (supportsRelayV2 bool, err error) {
-	log.Info("BBBBBBBBBBB tryNode %+v", pi)
 	if err := rf.host.Connect(ctx, pi); err != nil {
 		return false, fmt.Errorf("error connecting to relay %s: %w", pi.ID, err)
 	}
@@ -364,7 +362,6 @@ func (rf *relayFinder) handleNewCandidate(ctx context.Context) {
 
 	// We now iterate over the candidates, attempting (sequentially) to get reservations with them, until
 	// we reach the desired number of relays.
-	log.Info("BBBBBBBBBBB handle candidates")
 	for _, cand := range candidates {
 		id := cand.ai.ID
 		rf.relayMx.Lock()
@@ -567,7 +564,6 @@ func (rf *relayFinder) relayAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
 	}
 
 	// add relay specific addrs to the list
-	log.Infof("BBBBBBBBB relays %+v  candidates %+v", rf.relays, rf.candidates)
 	for p := range rf.relays {
 		addrs := cleanupAddressSet(rf.host.Peerstore().Addrs(p))
 
