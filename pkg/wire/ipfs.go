@@ -249,7 +249,13 @@ func (h *P2PHost) HandleClientStream(s network.Stream, localAddr string) error {
 		return errors.Wrap(err, "add port error")
 	}
 	logger.Printf("add port %s", tunnelGateway)
-	// setup route
+	// get the relay's addr
+	peerAddr := s.Conn().RemoteMultiaddr()
+	logger.Printf("remote peer addr is %s", peerAddr)
+	serverIp, err = peerAddr.ValueForProtocol(ma.P_IP4)
+	if err != nil {
+		return errors.Wrap(err, "failed to get relays ip")
+	}
 	defer h.tunnel.RestoreRoute()
 	h.tunnel.SetupRoute(tunnelGateway, serverIp)
 	// handle stream
@@ -290,16 +296,20 @@ func createHost(peerChan <- chan peer.AddrInfo) (host.Host, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
 	var idht *dht.IpfsDHT
 	opts := []libp2p.Option{
-		// libp2p.ListenAddrStrings(""),
+		libp2p.ListenAddrStrings("/ip4/0.0.0.0/udp/4001/quic"),
 		libp2p.Identity(priv),
 		// enable relay
 		libp2p.EnableRelay(),
 		// enable node to use relay for wire communication
 		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerChan)),
-		// force node belive it is behind a NAT firewall to hide the real ip
+		// force node belive it is behind a NAT firewall to force using relays
 		libp2p.ForceReachabilityPrivate(),
+		// hole punching
+		libp2p.EnableHolePunching(),
+
 		libp2p.DefaultTransports,
 		libp2p.DefaultMuxers,
 		libp2p.DefaultSecurity,
@@ -308,7 +318,6 @@ func createHost(peerChan <- chan peer.AddrInfo) (host.Host, error) {
 			idht, err = dht.New(context.Background(), h)
 			return idht, err
 		}),
-
 	}
 	host, err := libp2p.New(opts...)
 	if err != nil {
@@ -322,7 +331,7 @@ func createHost(peerChan <- chan peer.AddrInfo) (host.Host, error) {
 func ServeIPFS(tunnel *tunnel.Tunnel) {
 	host, err := NewP2PHost(tunnel)
 	if err != nil {
-		logger.Fatalf("Error: %v", err)
+		logger.Fatalf("Error: %+v", err)
 	}
 	// set server stream hanlder
 	host.SetStreamHandler("/goose/0.0.1", func(s network.Stream) {
@@ -351,7 +360,7 @@ func connectLoopIPFS(host *P2PHost, endpoint string, localAddr string, tunnel *t
 	}
 	// connect to the peer
 	ctx, cancel := context.WithCancel(context.Background())
-	ctx = network.WithUseTransient(ctx, "")
+	// ctx = network.WithUseTransient(ctx, "")
 	defer cancel()
 	s, err := host.NewStream(ctx, p.ID, "/goose/0.0.1")
 	if err != nil {
@@ -370,14 +379,10 @@ func ConnectIPFS(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error
 	if err != nil {
 		logger.Fatalf("Error: %v", err)
 	}
-
-	// client do not server streams, 
-	// go host.Background()
-
 	for {
 		logger.Printf("connecting to server %s", endpoint)
 		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoopIPFS(host, endpoint, localAddr, tunnel))
-		time.Sleep(time.Duration(5) * time.Second)
+		time.Sleep(time.Second * 5)
 	}
 	return nil
 }
