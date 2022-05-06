@@ -7,13 +7,14 @@ import (
 	"io"
 	"fmt"
 	"encoding/json"
-	// "strings"
+	"strings"
 	"time"
 	"crypto/rand"
 	"sync"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
+	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/network"
@@ -39,6 +40,11 @@ var(
 		"/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
 		"/ip4/104.131.131.82/udp/4001/quic/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
 	}
+)
+
+
+const (
+	GOOSESERVER = "/goose/0.0.1/server"
 )
 
 // ipfs wire
@@ -115,6 +121,8 @@ func (w *IPFSWire) Write(msg tunnel.Message) (error) {
 type P2PHost struct {
 	// libp2p host
 	host.Host
+	// discovery
+	*dis_routing.RoutingDiscovery
 	// peer info channel for auto relay
 	peerChan chan peer.AddrInfo
 	// host context
@@ -123,28 +131,37 @@ type P2PHost struct {
 	cancel context.CancelFunc 
 	// the tunnel
 	tunnel *tunnel.Tunnel
+	// advertise
+	advertise bool
 }
 
 func NewP2PHost(tunnel *tunnel.Tunnel) (*P2PHost, error) {
 	// crreate peer chan
 	peerChan := make(chan peer.AddrInfo, 100)
 	// create p2p host
-	host, err := createHost(peerChan)
+	host, dht, err := createHost(peerChan)
 	if err != nil {
 		return nil, err
 	}
+	routingDiscovery := dis_routing.NewRoutingDiscovery(dht)
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &P2PHost{
 		Host: host,
+		RoutingDiscovery: routingDiscovery,
 		ctx: ctx,
 		peerChan: peerChan,
 		cancel : cancel,
 		tunnel: tunnel,
+		advertise: false,
 	}
 	if h.Bootstrap(bootstraps); err != nil {
 		return nil, err
 	}
 	return h, nil
+}
+
+func (h *P2PHost) SetAdvertise(state bool) {
+	h.advertise = state
 }
 
 // bootstrap with public peers
@@ -199,8 +216,17 @@ func (h *P2PHost) Bootstrap(peers []string) error {
 
 // run some background jobs
 func (h *P2PHost) Background() error {
+
+	// state ticker
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()
+	// advertise ticker
+	advertiseTicker := time.NewTicker(time.Hour * 6)
+	defer advertiseTicker.Stop()
+
+	if h.advertise {
+		h.Advertise(h.ctx, GOOSESERVER)
+	}
 	for {
 		select {
 		case <- h.ctx.Done():
@@ -220,12 +246,16 @@ func (h *P2PHost) Background() error {
 					return nil
 				}
 			}
-			logger.Printf("feeding %d peers to RelayFinder", len(peerList))
+			logger.Printf("%d peers", len(peerList))
 			addrText, err := json.MarshalIndent(h.Addrs(), "", "  ")
 			if err != nil {
 				logger.Printf("error %s", errors.WithStack(err))
 			}
-			logger.Printf("peerid: %s\nrelays: %s\n",  h.ID(), addrText)
+			logger.Printf("peerid: %s\naddrs: %s\n", h.ID(), addrText)
+		case <- advertiseTicker.C:
+			if h.advertise {
+				h.Advertise(h.ctx, GOOSESERVER)
+			}
 		}
 	}
 }
@@ -290,11 +320,11 @@ func (h *P2PHost) HandleServerStream(s network.Stream) error {
 
 // create libp2p node
 // circuit relay need to be enabled to hide the real server ip.
-func createHost(peerChan <- chan peer.AddrInfo) (host.Host, error) {
+func createHost(peerChan <- chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error) {
 
 	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, nil, errors.WithStack(err)
 	}
 
 	var idht *dht.IpfsDHT
@@ -321,9 +351,9 @@ func createHost(peerChan <- chan peer.AddrInfo) (host.Host, error) {
 	}
 	host, err := libp2p.New(opts...)
 	if err != nil {
-		return nil, errors.WithStack(err)
+		return nil, nil, errors.WithStack(err)
 	}
-	return host, nil
+	return host, idht, nil
 }
 
 // run as a goose server in ipfs network
@@ -341,26 +371,18 @@ func ServeIPFS(tunnel *tunnel.Tunnel) {
 			logger.Printf("handle stream error %+v", errors.WithStack(err))
 		}
 	})
-	// go backgroud relay refresh jobs
+	host.SetAdvertise(true)
+	// do backgroud relay refresh jobs
 	if err := host.Background(); err != nil {
-		logger.Fatalf("Error: %v", err)
+		logger.Fatalf("Error: %+v", err)
 	}
 }
 
 // connect to remote peer once
-func connectLoopIPFS(host *P2PHost, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
+func connectLoopIPFS(host *P2PHost, p *peer.AddrInfo, localAddr string, tunnel *tunnel.Tunnel) error {
 
-	// decode peerid
-	peerID, err := peer.Decode(endpoint)
-	if err != nil {
-		return errors.WithStack(err)
-	}
-	p := peer.AddrInfo{
-		ID: peerID,
-	}
 	// connect to the peer
 	ctx, cancel := context.WithCancel(context.Background())
-	// ctx = network.WithUseTransient(ctx, "")
 	defer cancel()
 	s, err := host.NewStream(ctx, p.ID, "/goose/0.0.1")
 	if err != nil {
@@ -379,9 +401,52 @@ func ConnectIPFS(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error
 	if err != nil {
 		logger.Fatalf("Error: %v", err)
 	}
+	go host.Background()
 	for {
-		logger.Printf("connecting to server %s", endpoint)
-		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoopIPFS(host, endpoint, localAddr, tunnel))
+		// decode peerid
+		var p *peer.AddrInfo
+		// use certain server
+		if endpoint != "" {
+			peerID, err := peer.Decode(endpoint)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			p = &peer.AddrInfo{
+				ID: peerID,
+			}
+			logger.Printf("connecting to server %s", endpoint)
+			logger.Printf("connection to server %s failed: %+v", endpoint, connectLoopIPFS(host, p, localAddr, tunnel))
+		} else {
+			// try find a random server
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second * 300)
+			defer cancel()
+			logger.Printf("trying to find a server\n")
+			peers, err := host.FindPeers(ctx, GOOSESERVER)
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			// chose a random peer
+			for p := range peers {
+				logger.Printf("connecting to server %s", p.ID)
+
+				err := connectLoopIPFS(host, &p, localAddr, tunnel)
+				if err != nil {
+					msg := fmt.Sprintf("%+v", err)
+					if strings.Contains(msg, "transient connection") {
+						time.Sleep(time.Second * 15)
+						logger.Printf("transient connection, try again for %s", p.ID)
+						logger.Printf("connection to server %s failed: %+v", p.ID, connectLoopIPFS(host, &p, localAddr, tunnel))
+					} else {
+						logger.Printf("connection to server %s failed: %+v", p.ID, err)
+						continue
+					}
+				}
+				time.Sleep(time.Second)
+			}
+			if p == nil {
+				logger.Printf("no servers found\n")
+			}
+		}
 		time.Sleep(time.Second * 5)
 	}
 	return nil

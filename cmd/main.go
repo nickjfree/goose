@@ -26,9 +26,9 @@ var (
 
 func main() {
 
-	flag.StringVar(&endpoint, "e", "https://us.nick12.com", "remote endpoint, http url or peerid")
+	flag.StringVar(&endpoint, "e", "", "remote endpoint, http url or peerid")
 	flag.BoolVar(&isClient, "c", false, "run as client")
-	flag.StringVar(&protocol, "p", "http3", "protocol: http/http3/ipfs")
+	flag.StringVar(&protocol, "p", "ipfs", "protocol: http/http3/ipfs")
 	flag.StringVar(&localAddr, "local", "192.168.100.1/24", "local ipv4 address to set on the tunnel interface")
 	flag.Parse()
 
@@ -49,7 +49,7 @@ func main() {
 		case "ipfs":
 			go func() { wire.ServeIPFS(t) } ()
 		default:
-			go func() { wire.ServeHTTP3(t) } ()
+			go func() { wire.ServeIPFS(t) } ()
 		}
 	} else {
 		// client mode
@@ -63,7 +63,7 @@ func main() {
 		case "ipfs":
 			go func() { wire.ConnectIPFS(endpoint, localAddr, t) } ()
 		default:
-			go func() { wire.ConnectHTTP3(endpoint, localAddr, t) } ()
+			go func() { wire.ConnectIPFS(endpoint, localAddr, t) } ()
 		}
 	}
 
