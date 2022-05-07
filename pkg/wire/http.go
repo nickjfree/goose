@@ -296,7 +296,7 @@ type HTTPClientWire struct {
 	writer io.Writer
 }
 
-func connectLoop(client *http.Client, method string, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
+func connectLoopHTTP(client *http.Client, method string, endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
 	pr, pw := io.Pipe()
 	defer pr.Close()
 	req, err := http.NewRequest(method, endpoint, ioutil.NopCloser(pr))
@@ -345,7 +345,7 @@ func ConnectHTTP(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error
 
 	for {
 		logger.Printf("connecting to server %s", endpoint)
-		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(&client, "GET", endpoint, localAddr,tunnel))
+		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoopHTTP(&client, "GET", endpoint, localAddr,tunnel))
 		time.Sleep(time.Duration(5) * time.Second)
 	}
 }
@@ -355,7 +355,7 @@ func ConnectHTTP3(endpoint string, localAddr string, tunnel *tunnel.Tunnel) erro
 
 	for {
 		logger.Printf("connecting to server %s", endpoint)
-		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoop(&client3, "GET_0RTT", endpoint, localAddr,tunnel))
+		logger.Printf("connection to server %s failed: %+v", endpoint, connectLoopHTTP(&client3, "GET_0RTT", endpoint, localAddr,tunnel))
 		time.Sleep(time.Duration(5) * time.Second)
 	}
 }

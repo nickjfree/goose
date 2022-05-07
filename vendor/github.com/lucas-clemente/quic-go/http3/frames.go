@@ -10,60 +10,41 @@ import (
 	"github.com/lucas-clemente/quic-go/quicvarint"
 )
 
-type byteReader interface {
-	io.ByteReader
-	io.Reader
-}
-
-type byteReaderImpl struct{ io.Reader }
-
-func (br *byteReaderImpl) ReadByte() (byte, error) {
-	b := make([]byte, 1)
-	if _, err := br.Reader.Read(b); err != nil {
-		return 0, err
-	}
-	return b[0], nil
-}
-
 type frame interface{}
 
-func parseNextFrame(b io.Reader) (frame, error) {
-	br, ok := b.(byteReader)
-	if !ok {
-		br = &byteReaderImpl{b}
-	}
-	t, err := quicvarint.Read(br)
-	if err != nil {
-		return nil, err
-	}
-	l, err := quicvarint.Read(br)
-	if err != nil {
-		return nil, err
-	}
-
-	switch t {
-	case 0x0:
-		return &dataFrame{Length: l}, nil
-	case 0x1:
-		return &headersFrame{Length: l}, nil
-	case 0x4:
-		return parseSettingsFrame(br, l)
-	case 0x3: // CANCEL_PUSH
-		fallthrough
-	case 0x5: // PUSH_PROMISE
-		fallthrough
-	case 0x7: // GOAWAY
-		fallthrough
-	case 0xd: // MAX_PUSH_ID
-		fallthrough
-	case 0xe: // DUPLICATE_PUSH
-		fallthrough
-	default:
-		// skip over unknown frames
-		if _, err := io.CopyN(ioutil.Discard, br, int64(l)); err != nil {
+func parseNextFrame(r io.Reader) (frame, error) {
+	qr := quicvarint.NewReader(r)
+	for {
+		t, err := quicvarint.Read(qr)
+		if err != nil {
 			return nil, err
 		}
-		return parseNextFrame(b)
+		l, err := quicvarint.Read(qr)
+		if err != nil {
+			return nil, err
+		}
+
+		switch t {
+		case 0x0:
+			return &dataFrame{Length: l}, nil
+		case 0x1:
+			return &headersFrame{Length: l}, nil
+		case 0x4:
+			return parseSettingsFrame(r, l)
+		case 0x3: // CANCEL_PUSH
+			fallthrough
+		case 0x5: // PUSH_PROMISE
+			fallthrough
+		case 0x7: // GOAWAY
+			fallthrough
+		case 0xd: // MAX_PUSH_ID
+			fallthrough
+		default:
+			// skip over unknown frames
+			if _, err := io.CopyN(ioutil.Discard, qr, int64(l)); err != nil {
+				return nil, err
+			}
+		}
 	}
 }
 
@@ -85,7 +66,7 @@ func (f *headersFrame) Write(b *bytes.Buffer) {
 	quicvarint.Write(b, f.Length)
 }
 
-const settingDatagram = 0x276
+const settingDatagram = 0xffd277
 
 type settingsFrame struct {
 	Datagram bool
