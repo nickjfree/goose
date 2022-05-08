@@ -384,14 +384,23 @@ func connectLoopIPFS(host *P2PHost, p *peer.AddrInfo, localAddr string, tunnel *
 	// connect to the peer
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	s, err := host.NewStream(ctx, p.ID, "/goose/0.0.1")
-	if err != nil {
-		return errors.WithStack(err)
+	retries := 1
+	for {
+		s, err := host.NewStream(ctx, p.ID, "/goose/0.0.1")
+		msg := fmt.Sprintf("%+v", err)
+		if err != nil && retries > 0 && strings.Contains(msg, "transient connection") {
+			time.Sleep(time.Second * 15)
+			logger.Printf("transient connection, try again for %s", p.ID)
+			retries -= 1
+			continue
+		} else if err != nil {
+			return errors.WithStack(err)
+		}
+		if err := host.HandleClientStream(s, localAddr); err != nil {
+			return err
+		}
 	}
-	if err := host.HandleClientStream(s, localAddr); err != nil {
-		return err
-	}
-	return nil
+	return errors.Errorf("failed connect to server, max retries reached")
 }
 
 // connect to remote peer by PeerId
@@ -403,6 +412,7 @@ func ConnectIPFS(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error
 	}
 	go host.Background()
 	for {
+		time.Sleep(time.Second * 5)
 		// decode peerid
 		var p *peer.AddrInfo
 		// use certain server
@@ -414,40 +424,29 @@ func ConnectIPFS(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error
 			p = &peer.AddrInfo{
 				ID: peerID,
 			}
-			logger.Printf("connecting to server %s", endpoint)
-			logger.Printf("connection to server %s failed: %+v", endpoint, connectLoopIPFS(host, p, localAddr, tunnel))
+			logger.Printf("connecting to server %s", p.ID)
+			logger.Printf("connection to server %s failed: %+v", p.ID, connectLoopIPFS(host, p, localAddr, tunnel))
+			continue
 		} else {
 			// try find a random server
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second * 300)
-			defer cancel()
 			logger.Printf("trying to find a server\n")
 			peers, err := host.FindPeers(ctx, GOOSESERVER)
 			if err != nil {
+				cancel()
 				return errors.WithStack(err)
 			}
 			// chose a random peer
 			for p := range peers {
 				logger.Printf("connecting to server %s", p.ID)
-
-				err := connectLoopIPFS(host, &p, localAddr, tunnel)
-				if err != nil {
-					msg := fmt.Sprintf("%+v", err)
-					if strings.Contains(msg, "transient connection") {
-						time.Sleep(time.Second * 15)
-						logger.Printf("transient connection, try again for %s", p.ID)
-						logger.Printf("connection to server %s failed: %+v", p.ID, connectLoopIPFS(host, &p, localAddr, tunnel))
-					} else {
-						logger.Printf("connection to server %s failed: %+v", p.ID, err)
-						continue
-					}
-				}
+				logger.Printf("connection to server %s failed: %+v", p.ID, connectLoopIPFS(host, &p, localAddr, tunnel))
 				time.Sleep(time.Second)
 			}
+			cancel()
 			if p == nil {
 				logger.Printf("no servers found\n")
 			}
 		}
-		time.Sleep(time.Second * 5)
 	}
 	return nil
 }
