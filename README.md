@@ -64,6 +64,13 @@ $ ip link set goose up
 $ ip addr add 192.168.100.1/24 dev goose
 $ iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 ```
+
+enable ip forwarding
+```sh
+sysctl -w net.ipv4.ip_forward=1
+sysctl -p
+```
+
 ### client
 
 ```sh
@@ -77,11 +84,6 @@ $ route add -host <realserverip> gw <oldgateway>
 $ route add -net 0.0.0.0/0 gw 192.168.100.1
 ```
 
-enable ip forwarding
-```sh
-sysctl -w net.ipv4.ip_forward=1
-sysctl -p
-```
 
 - Result:  
 ![logically][logically]
