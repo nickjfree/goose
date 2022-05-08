@@ -18,13 +18,39 @@ An ipv4 tunnel proxy using  many transport protocols
 ```
 $ goose -h
 Usage of goose:
-  -c    run as client
+  -c    flag. run as client. if not set, it will run as a server
   -e string
-        remote endpoint, http url or peerid
+
+        remote server endpoint.
+
+        for http/http3 protocols. this should be a http url of the goose server.
+        for ipfs protocols, this should be a libp2p PeerID. If empty, the client will try to find a random goose server in the network
+
   -local string
-        local ipv4 address to set on the tunnel interface (default "192.168.100.1/24")
+
+        virtual ip address to use in CIDR format.
+
+        local ipv4 address to set on the tunnel interface.
+        if the error message shows someone else is using the same ip address, please change it to another one
+         (default "192.168.100.1/24")
   -p string
-        protocol: http/http3/ipfs (default "ipfs")
+
+        transport protocol.
+
+        options: http/http3/ipfs
+
+        http:
+                Client and server communicate through an upgraded http1.1 protocol. (HTTP 101 Switching Protocol)
+                Can be used with Cloudflare
+        http3:
+                Client and server communicate through HTTP3 stream
+                faster then http1.1 but doesn't support Cloudflare for now
+        ipfs:
+                Client and server communicate through a libp2p stream.
+                With some cool features:
+                Server discovery, client can search for random servers to connect through the public IPFS network
+                Hole puching service, client and server can both run behind their NAT firewalls. NO PUBLIC IP NEEDED
+         (default "ipfs")
 ```
 
 ### server
@@ -62,7 +88,7 @@ sysctl -p
 
 ## Decentralized
 
-The newly added p2p protocls. two peers can connect to each other though libp2p's holepuching service.
+With the newly added p2p protocls. two peers can connect to each other though libp2p's holepuching service.
 
 
 Peer A
