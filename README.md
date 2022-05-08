@@ -105,7 +105,7 @@ PeerB can connect to  peerA. using peer A's id
  			
 	
 
-## Server Dicovery
+## Server Discovery
 
 No need to setup servers anymore. 
 Client will try to search for a server 
