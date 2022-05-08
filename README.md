@@ -1,11 +1,10 @@
+
 <!-- ABOUT THE PROJECT -->
 ## About The Project
 
-Wow!  
-Such proxy    
-Much QUIC
+Very tunnel
 
-An ipv4 tunnel proxy using QUIC as tranport protocol.
+An ipv4 tunnel proxy using  many transport protocols
 
 ## How it works
 
@@ -18,20 +17,20 @@ An ipv4 tunnel proxy using QUIC as tranport protocol.
 
 ```
 $ goose -h
-Usage of bin/goose:
+Usage of goose:
   -c    run as client
   -e string
-        remote http endpoint (default "https://us.nick12.com")
+        remote endpoint, http url or peerid
   -local string
         local ipv4 address to set on the tunnel interface (default "192.168.100.1/24")
   -p string
-         protocol (default "http3")
+        protocol: http/http3/ipfs (default "ipfs")
 ```
 
 ### server
 
 ```sh
-$ goose -local 192.168.100.1/24
+$ goose -local 192.168.100.1/24 -p http3
 ```
 setup server ip address and nat
 ```sh
@@ -42,7 +41,7 @@ $ iptables -t nat -A POSTROUTING -o eth0 -j MASQUERADE
 ### client
 
 ```sh
-$ goose -c -e https://realserverip:55556 -local 192.168.100.2/24
+$ goose -c -e https://realserverip:55556 -local 192.168.100.2/24 -p http3
 ```
 setup ip address and routing
 ```sh
@@ -61,12 +60,32 @@ sysctl -p
 - Result:  
 ![logically][logically]
 
+## Decentralized
 
-<!-- ROADMAP -->
-## Roadmap
+The newly added p2p protocls. two peers can connect to each other though libp2p's holepuching service.
 
-* Automatically config ip address and routing table
-* Supporting other protocols
+
+Peer A
+```sh
+	goose -local 192.168.0.1/24
+```
+After obtain peerA 's  id in the  console ouput
+PeerB can connect to  peerA. using peer A's id
+```sh
+	goose -c -local 192.168.0.2/24 -e QmUiFDEvY49nbU86VVDV7q8UUFFRrbAZhrCEGDh32Vb5A1
+```
+
+ **No public servers needed**. 
+ 			
+	
+
+## Server Dicovery
+
+No need to setup servers anymore. 
+Client will try to search for a server 
+```sh
+	goose -c -local 192.168.0.2/24
+```
 
 [howitworks]: images/howitworks.jpg
 [logically]: images/virtual.jpg
