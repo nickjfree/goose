@@ -223,6 +223,9 @@ func (h *P2PHost) Background() error {
 	// advertise ticker
 	advertiseTicker := time.NewTicker(time.Hour * 6)
 	defer advertiseTicker.Stop()
+	// bootstrap ticker
+	bootstrapTicker := time.NewTicker(time.Second * 900)
+	defer bootstrapTicker.Stop()
 
 	if h.advertise {
 		h.Advertise(h.ctx, GOOSESERVER)
@@ -253,8 +256,14 @@ func (h *P2PHost) Background() error {
 			}
 			logger.Printf("peerid: %s\naddrs: %s\n", h.ID(), addrText)
 		case <- advertiseTicker.C:
+			// time to advertise
 			if h.advertise {
 				h.Advertise(h.ctx, GOOSESERVER)
+			}
+		case <- bootstrapTicker.C:
+			// bootstrap refesh
+			if err := h.Bootstrap(bootstraps); err != nil {
+				logger.Printf("bootstrap error %+v", err)
 			}
 		}
 	}
