@@ -3,7 +3,7 @@ module goose
 go 1.18
 
 require (
-	github.com/libp2p/go-libp2p v0.19.1
+	github.com/libp2p/go-libp2p v0.19.2
 	github.com/libp2p/go-libp2p-core v0.15.1
 	github.com/libp2p/go-libp2p-kad-dht v0.15.0
 	github.com/lucas-clemente/quic-go v0.27.0

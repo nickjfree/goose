@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 	"crypto/rand"
+	"path/filepath"
 	"sync"
 
 	"github.com/libp2p/go-libp2p"
@@ -133,6 +134,8 @@ type P2PHost struct {
 	tunnel *tunnel.Tunnel
 	// advertise
 	advertise bool
+	// advertise namespace
+	namespace string
 }
 
 func NewP2PHost(tunnel *tunnel.Tunnel) (*P2PHost, error) {
@@ -160,9 +163,12 @@ func NewP2PHost(tunnel *tunnel.Tunnel) (*P2PHost, error) {
 	return h, nil
 }
 
-func (h *P2PHost) SetAdvertise(state bool) {
+func (h *P2PHost) SetAdvertise(state bool, namespace string) {
 	h.advertise = state
+	h.namespace = namespace
 }
+
+
 
 // bootstrap with public peers
 func (h *P2PHost) Bootstrap(peers []string) error {
@@ -214,6 +220,11 @@ func (h *P2PHost) Bootstrap(peers []string) error {
 	return nil
 }
 
+
+func (h *P2PHost) GetAdvertiseName() string {
+	return filepath.ToSlash(filepath.Join(GOOSESERVER, h.namespace))
+}
+
 // run some background jobs
 func (h *P2PHost) Background() error {
 
@@ -227,8 +238,10 @@ func (h *P2PHost) Background() error {
 	bootstrapTicker := time.NewTicker(time.Second * 900)
 	defer bootstrapTicker.Stop()
 
+	
+
 	if h.advertise {
-		h.Advertise(h.ctx, GOOSESERVER)
+		h.Advertise(h.ctx, h.GetAdvertiseName())
 	}
 	for {
 		select {
@@ -258,7 +271,7 @@ func (h *P2PHost) Background() error {
 		case <- advertiseTicker.C:
 			// time to advertise
 			if h.advertise {
-				h.Advertise(h.ctx, GOOSESERVER)
+				h.Advertise(h.ctx, h.GetAdvertiseName())
 			}
 		case <- bootstrapTicker.C:
 			// bootstrap refesh
@@ -367,7 +380,7 @@ func createHost(peerChan <- chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error)
 
 // run as a goose server in ipfs network
 // well.. the server is not actually a ipfs host, instead it talks in goose/0.0.1 protocol
-func ServeIPFS(tunnel *tunnel.Tunnel) {
+func ServeIPFS(tunnel *tunnel.Tunnel, namespace string) {
 	host, err := NewP2PHost(tunnel)
 	if err != nil {
 		logger.Fatalf("Error: %+v", err)
@@ -380,7 +393,7 @@ func ServeIPFS(tunnel *tunnel.Tunnel) {
 			logger.Printf("handle stream error %+v", errors.WithStack(err))
 		}
 	})
-	host.SetAdvertise(true)
+	host.SetAdvertise(true, namespace)
 	// do backgroud relay refresh jobs
 	if err := host.Background(); err != nil {
 		logger.Fatalf("Error: %+v", err)
@@ -413,12 +426,14 @@ func connectLoopIPFS(host *P2PHost, p *peer.AddrInfo, localAddr string, tunnel *
 }
 
 // connect to remote peer by PeerId
-func ConnectIPFS(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error {
+func ConnectIPFS(endpoint, localAddr, namespace string, tunnel *tunnel.Tunnel) error {
 
 	host, err := NewP2PHost(tunnel)
 	if err != nil {
 		logger.Fatalf("Error: %v", err)
 	}
+	// no advertise for client
+	host.SetAdvertise(false, namespace)
 	go host.Background()
 	for {
 		time.Sleep(time.Second * 5)
@@ -439,8 +454,9 @@ func ConnectIPFS(endpoint string, localAddr string, tunnel *tunnel.Tunnel) error
 		} else {
 			// try find a random server
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second * 300)
-			logger.Printf("trying to find a server\n")
-			peers, err := host.FindPeers(ctx, GOOSESERVER)
+			search := host.GetAdvertiseName()
+			logger.Printf("trying to find a server in namespace: %s\n", search)
+			peers, err := host.FindPeers(ctx, search)
 			if err != nil {
 				cancel()
 				return errors.WithStack(err)

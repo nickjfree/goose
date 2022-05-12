@@ -228,7 +228,7 @@ func (hp *holePuncher) initiateHolePunchImpl(str network.Stream) ([]ma.Multiaddr
 		return nil, 0, errors.New("didn't receive any public addresses in CONNECT")
 	}
 
-	if err := w.WriteMsg(&pb.HolePunch{Type: pb.HolePunch_CONNECT.Enum()}); err != nil {
+	if err := w.WriteMsg(&pb.HolePunch{Type: pb.HolePunch_SYNC.Enum()}); err != nil {
 		return nil, 0, fmt.Errorf("failed to send SYNC message for hole punching: %w", err)
 	}
 	return addrs, rtt, nil

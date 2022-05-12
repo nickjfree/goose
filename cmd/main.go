@@ -21,6 +21,8 @@ var (
 	protocol = ""
 	// local addr
 	localAddr = ""
+	// namespace 
+	namespace = ""
 )
 
 
@@ -66,6 +68,7 @@ func main() {
 	flag.BoolVar(&isClient, "c", false, "flag. run as client. if not set, it will run as a server")
 	flag.StringVar(&protocol, "p", "ipfs", PROTOCOL_HELP)
 	flag.StringVar(&localAddr, "local", "192.168.100.1/24", LOCAL_HELP)
+	flag.StringVar(&namespace, "n", "", "namespace")
 	flag.Parse()
 
 	// set up tun device
@@ -83,9 +86,9 @@ func main() {
 		case "http":
 			go func() { wire.ServeHTTP(t) } ()
 		case "ipfs":
-			go func() { wire.ServeIPFS(t) } ()
+			go func() { wire.ServeIPFS(t, namespace) } ()
 		default:
-			go func() { wire.ServeIPFS(t) } ()
+			go func() { wire.ServeIPFS(t, namespace) } ()
 		}
 	} else {
 		// client mode
@@ -97,9 +100,9 @@ func main() {
 		case "http":
 			go func() { wire.ConnectHTTP(endpoint, localAddr, t) } ()
 		case "ipfs":
-			go func() { wire.ConnectIPFS(endpoint, localAddr, t) } ()
+			go func() { wire.ConnectIPFS(endpoint, localAddr, namespace, t) } ()
 		default:
-			go func() { wire.ConnectIPFS(endpoint, localAddr, t) } ()
+			go func() { wire.ConnectIPFS(endpoint, localAddr, namespace, t) } ()
 		}
 	}
 

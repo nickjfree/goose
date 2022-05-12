@@ -197,7 +197,6 @@ func (s *Service) incomingHolePunch(str network.Stream) (rtt time.Duration, addr
 	}
 	obsDial := removeRelayAddrs(addrsFromBytes(msg.ObsAddrs))
 	log.Debugw("received hole punch request", "peer", str.Conn().RemotePeer(), "addrs", obsDial)
-	fmt.Println("received hole punch request", "peer", str.Conn().RemotePeer(), "addrs", obsDial)
 	if len(obsDial) == 0 {
 		return 0, nil, errors.New("expected CONNECT message to contain at least one address")
 	}
@@ -216,9 +215,9 @@ func (s *Service) incomingHolePunch(str network.Stream) (rtt time.Duration, addr
 	if err := rd.ReadMsg(msg); err != nil {
 		return 0, nil, fmt.Errorf("failed to read message from initator: %w", err)
 	}
-	// if t := msg.GetType(); t != pb.HolePunch_SYNC {
-	// 	return 0, nil, fmt.Errorf("expected SYNC message from initiator but got %d", t)
-	// }
+	if t := msg.GetType(); t != pb.HolePunch_SYNC {
+		return 0, nil, fmt.Errorf("expected SYNC message from initiator but got %d", t)
+	}
 	return time.Since(tstart), obsDial, nil
 }
 
@@ -243,7 +242,6 @@ func (s *Service) handleNewStream(str network.Stream) {
 	rtt, addrs, err := s.incomingHolePunch(str)
 	if err != nil {
 		s.tracer.ProtocolError(rp, err)
-		fmt.Println("error handling holepunching stream from", rp, "error", err)
 		log.Debugw("error handling holepunching stream from", rp, "error", err)
 		str.Reset()
 		return
@@ -257,7 +255,6 @@ func (s *Service) handleNewStream(str network.Stream) {
 	}
 	s.tracer.StartHolePunch(rp, addrs, rtt)
 	log.Debugw("starting hole punch", "peer", rp)
-	fmt.Println("starting hole punch", "peer", rp)
 	start := time.Now()
 	s.tracer.HolePunchAttempt(pi.ID)
 	err = holePunchConnect(s.ctx, s.host, pi, false)
