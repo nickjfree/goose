@@ -358,7 +358,7 @@ func createHost(peerChan <- chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error)
 		// enable node to use relay for wire communication
 		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerChan), autorelay.WithNumRelays(4)),
 		// force node belive it is behind a NAT firewall to force using relays
-		libp2p.ForceReachabilityPrivate(),
+		// libp2p.ForceReachabilityPrivate(),
 		// hole punching
 		libp2p.EnableHolePunching(),
 

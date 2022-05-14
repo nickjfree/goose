@@ -1,4 +1,5 @@
 
+
 <!-- ABOUT THE PROJECT -->
 
 
@@ -36,6 +37,8 @@ Usage of goose:
         local ipv4 address to set on the tunnel interface.
         if the error message shows someone else is using the same ip address, please change it to another one
          (default "192.168.100.1/24")
+  -n string
+        namespace
   -p string
 
         transport protocol.
@@ -98,24 +101,35 @@ With the newly added p2p protocls. two peers can connect to each other though li
 
 Peer A
 ```sh
-	goose -local 192.168.0.1/24
+  goose -local 192.168.0.1/24
 ```
 After obtain peerA 's  id in the  console ouput
 PeerB can connect to  peerA. using peer A's id
 ```sh
-	goose -c -local 192.168.0.2/24 -e QmUiFDEvY49nbU86VVDV7q8UUFFRrbAZhrCEGDh32Vb5A1
+  goose -c -local 192.168.0.2/24 -e QmUiFDEvY49nbU86VVDV7q8UUFFRrbAZhrCEGDh32Vb5A1
 ```
 
  **No public servers needed**. 
- 			
-	
+      
+  
 
 ## Server Discovery
 
-No need to setup servers anymore. 
-Client will try to search for a server 
+You can setup server with in a namespace
+server1
 ```sh
-	goose -c -local 192.168.0.2/24
+  goose -n us
+```
+server2
+```sh
+  goose -n hk
+```
+
+Client will try to search for a server  in that namespac
+
+client
+```sh
+  goose -c -local 192.168.0.2/24 -n us
 ```
 
 [howitworks]: images/howitworks.jpg
