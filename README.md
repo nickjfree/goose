@@ -125,7 +125,7 @@ server2
   goose -n hk
 ```
 
-Client will try to search for a server  in that namespac
+Client will try to search for a server  in that namespace
 
 client
 ```sh
