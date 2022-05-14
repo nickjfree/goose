@@ -116,6 +116,7 @@ PeerB can connect to  peerA. using peer A's id
 ## Server Discovery
 
 You can setup server with in a namespace
+
 server1
 ```sh
   goose -n us
