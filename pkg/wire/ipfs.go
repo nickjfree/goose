@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"io/ioutil"
 	"fmt"
 	"encoding/json"
 	"strings"
@@ -12,6 +13,7 @@ import (
 	"crypto/rand"
 	"path/filepath"
 	"sync"
+	"os"
 
 	"github.com/libp2p/go-libp2p"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
@@ -45,7 +47,16 @@ var(
 
 
 const (
+	// advertise namespace prefix
 	GOOSESERVER = "/goose/0.0.1/server"
+	// connection protection tag
+	connectionTag = "goose"
+	// protocol name
+	protocolName = "/goose/0.0.1"
+	// transiend error string
+	transientErrorString = "transient connection"
+	// key size
+	keyBits = 8192
 )
 
 // ipfs wire
@@ -141,7 +152,7 @@ type P2PHost struct {
 func NewP2PHost(tunnel *tunnel.Tunnel) (*P2PHost, error) {
 	// crreate peer chan
 	peerChan := make(chan peer.AddrInfo, 100)
-	// create p2p host
+	// create p2p host	
 	host, dht, err := createHost(peerChan)
 	if err != nil {
 		return nil, err
@@ -284,7 +295,9 @@ func (h *P2PHost) Background() error {
 
 // handle client stream
 func (h *P2PHost) HandleClientStream(s network.Stream, localAddr string) error {
-	defer s.Close()	
+	// protecte the peer from connection manager trimming
+	h.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
+	defer h.ConnManager().Unprotect(s.Conn().RemotePeer(), connectionTag)
 	// create wire
 	wire, err := NewIPFSWire(s, s)
 	if err != nil {
@@ -316,6 +329,10 @@ func (h *P2PHost) HandleClientStream(s network.Stream, localAddr string) error {
 
 // handle server stream
 func (h *P2PHost) HandleServerStream(s network.Stream) error {
+	// protecte the peer from connection manager trimming
+	h.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
+	defer h.ConnManager().Unprotect(s.Conn().RemotePeer(), connectionTag)
+
 	wire, err := NewIPFSWire(s, s)
 	if err != nil {
 		logger.Printf("create ipfs wire error %+v", err)
@@ -340,13 +357,52 @@ func (h *P2PHost) HandleServerStream(s network.Stream) error {
 	return errors.WithStack(err)
 }
 
+// get privkey, save it to local path
+func getPrivKey(path string) (crypto.PrivKey, error) {
+	if _, err := os.Stat(path); err != nil {
+		// file not exists, create a new one
+		keyFile, err := os.Create(path)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		defer keyFile.Close()
+		priv, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, keyBits, rand.Reader)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		raw, err := crypto.MarshalPrivateKey(priv)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		if _, err := keyFile.Write(raw); err != nil {
+			return nil, errors.WithStack(err)
+		}
+	}
+	// open key file
+	keyFile, err := os.Open(path)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer keyFile.Close()
+	if data, err := ioutil.ReadAll(keyFile); err != nil {
+		return nil, errors.WithStack(err)
+	} else {
+		privKey, err := crypto.UnmarshalPrivateKey(data)
+		if err != nil {
+			return nil, errors.WithStack(err)
+		}
+		return privKey, nil
+	}
+}
+
+
 // create libp2p node
 // circuit relay need to be enabled to hide the real server ip.
 func createHost(peerChan <- chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error) {
 
-	priv, _, err := crypto.GenerateKeyPairWithReader(crypto.RSA, 2048, rand.Reader)
+	priv, err := getPrivKey("keyfile")
 	if err != nil {
-		return nil, nil, errors.WithStack(err)
+		return nil, nil, err
 	}
 
 	var idht *dht.IpfsDHT
@@ -386,7 +442,7 @@ func ServeIPFS(tunnel *tunnel.Tunnel, namespace string) {
 		logger.Fatalf("Error: %+v", err)
 	}
 	// set server stream hanlder
-	host.SetStreamHandler("/goose/0.0.1", func(s network.Stream) {
+	host.SetStreamHandler(protocolName, func(s network.Stream) {
 		defer s.Close()
 		logger.Printf("received new stream %s", s.ID())
 		if err := host.HandleServerStream(s); err != nil {
@@ -408,9 +464,9 @@ func connectLoopIPFS(host *P2PHost, p *peer.AddrInfo, localAddr string, tunnel *
 	defer cancel()
 	retries := 1
 	for {
-		s, err := host.NewStream(ctx, p.ID, "/goose/0.0.1")
+		s, err := host.NewStream(ctx, p.ID, protocolName)
 		msg := fmt.Sprintf("%+v", err)
-		if err != nil && retries > 0 && strings.Contains(msg, "transient connection") {
+		if err != nil && retries > 0 && strings.Contains(msg, transientErrorString) {
 			time.Sleep(time.Second * 15)
 			logger.Printf("transient connection, try again for %s", p.ID)
 			retries -= 1
@@ -418,6 +474,7 @@ func connectLoopIPFS(host *P2PHost, p *peer.AddrInfo, localAddr string, tunnel *
 		} else if err != nil {
 			return errors.WithStack(err)
 		}
+		defer s.Close()
 		if err := host.HandleClientStream(s, localAddr); err != nil {
 			return err
 		}
@@ -430,7 +487,7 @@ func ConnectIPFS(endpoint, localAddr, namespace string, tunnel *tunnel.Tunnel) e
 
 	host, err := NewP2PHost(tunnel)
 	if err != nil {
-		logger.Fatalf("Error: %v", err)
+		logger.Fatalf("Error: %+v", err)
 	}
 	// no advertise for client
 	host.SetAdvertise(false, namespace)
