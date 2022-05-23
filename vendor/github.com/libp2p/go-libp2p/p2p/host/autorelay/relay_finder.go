@@ -125,6 +125,7 @@ func (rf *relayFinder) background(ctx context.Context) {
 	for {
 		// when true, we need to identify push
 		var push bool
+		var disconnected bool
 
 		select {
 		case ev, ok := <-subConnectedness.Out():
@@ -140,6 +141,7 @@ func (rf *relayFinder) background(ctx context.Context) {
 				log.Debugw("disconnected from relay", "id", evt.Peer)
 				delete(rf.relays, evt.Peer)
 				push = true
+				disconnected = true
 			}
 			rf.relayMx.Unlock()
 		case <-rf.candidateFound:
@@ -156,6 +158,7 @@ func (rf *relayFinder) background(ctx context.Context) {
 			push = true
 		case now := <-refreshTicker.C:
 			push = rf.refreshReservations(ctx, now)
+			disconnected = push
 		case now := <-backoffTicker.C:
 			rf.checkForCandidatesOnBackoff(now)
 		case <-ctx.Done():
@@ -167,6 +170,9 @@ func (rf *relayFinder) background(ctx context.Context) {
 			rf.cachedAddrs = nil
 			rf.relayMx.Unlock()
 			rf.host.SignalAddressChange()
+		}
+		if disconnected {
+			rf.notifyNewCandidate()
 		}
 	}
 }

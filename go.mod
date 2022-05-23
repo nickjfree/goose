@@ -3,10 +3,10 @@ module goose
 go 1.18
 
 require (
-	github.com/libp2p/go-libp2p v0.19.2
+	github.com/libp2p/go-libp2p v0.19.3
 	github.com/libp2p/go-libp2p-core v0.15.1
 	github.com/libp2p/go-libp2p-kad-dht v0.15.0
-	github.com/lucas-clemente/quic-go v0.27.0
+	github.com/lucas-clemente/quic-go v0.27.1
 	github.com/multiformats/go-multiaddr v0.5.0
 	github.com/pkg/errors v0.9.1
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8

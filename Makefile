@@ -1,4 +1,6 @@
 
+VERSION ?= 0.0.1
+
 all: linux windows
 
 linux:
@@ -8,5 +10,6 @@ windows:
 	
 arm32:
 	GOOS=linux GOARCH=arm32 go build -o bin/goose cmd/main.go
-	
 
+docker-build:
+	docker build -t goose:$(VERSION) .
