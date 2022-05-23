@@ -400,7 +400,11 @@ func getPrivKey(path string) (crypto.PrivKey, error) {
 // circuit relay need to be enabled to hide the real server ip.
 func createHost(peerChan <- chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error) {
 
-	priv, err := getPrivKey("keyfile")
+	if err := os.MkdirAll("data", 0644); err != nil {
+		return nil, nil, errors.WithStack(err)
+	}
+
+	priv, err := getPrivKey("data/keyfile")
 	if err != nil {
 		return nil, nil, err
 	}
