@@ -23,5 +23,5 @@ jobs:
     - name: test-run
       if: ${{ startsWith(github.event.head_commit.message, 'test-run') }}
       run:
-        bin/goose -n gitlab-${{ github.event.head_commit.message }}
-     
+        sudo bin/goose -n gitlab-${{ github.event.head_commit.message }}
+    
