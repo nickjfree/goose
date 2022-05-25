@@ -115,7 +115,7 @@ PeerB can connect to  peerA. using peer A's id
 
 ## Server Discovery
 
-You can setup server with in a namespace
+You can setup server within a namespace
 
 server1
 ```sh
