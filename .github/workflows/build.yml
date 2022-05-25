@@ -23,7 +23,7 @@ jobs:
     - name: test
       if: ${{ startsWith(github.event.head_commit.message, 'test-run') }}
       run:
-        iptables -L -nv && iptables -L -nv -t nat
+        sudo iptables -L -nv && iptables -L -nv -t nat
     - name: test-run
       if: ${{ startsWith(github.event.head_commit.message, 'test-run') }}
       run:
