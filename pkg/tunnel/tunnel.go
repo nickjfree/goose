@@ -182,9 +182,15 @@ func (t *Tunnel) SetupRoute(tunnelGateway, serverIp string) {
 // resotre route
 func (t *Tunnel) RestoreRoute() {
 	if err := route.RestoreRoute(t.tunnelGateway, t.serverIp); err != nil {
-		logger.Fatalf("restore route failed %+v", errors.Wrap(err, ""))
+		logger.Fatalf("restore route failed: %+v", errors.Wrap(err, ""))
 	}
 	logger.Printf("restoring route success")
 	t.serverIp = ""
 	t.tunnelGateway = ""
+}
+
+func (t *Tunnel) SetupNAT() {
+	if err := route.SetupNAT(); err != nil {
+		logger.Fatalf("setup nat failed: %+v", errors.Wrap(err, ""))
+	}
 }

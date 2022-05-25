@@ -172,3 +172,8 @@ func SetupRoute(tunnelGateway string, serverIp string) error {
 	}
 	return nil
 }
+
+// nat rules
+func SetupNAT() error {
+	return nil
+}

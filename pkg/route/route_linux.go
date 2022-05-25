@@ -88,3 +88,19 @@ func SetupRoute(tunnelGateway string, serverIp string) error {
 	}
 	return nil
 }
+
+// nat rules
+func SetupNAT() error {
+	// enabled ip forward
+	if out, err := RunCmd("sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	if out, err := RunCmd("sysctl", "-p"); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	// running as a router
+	if out, err := RunCmd("iptables", "-t", "nat", "-A", "POSTROUTING", "-o", defaultInterface, "-j", "MASQUERADE"); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	return nil
+}

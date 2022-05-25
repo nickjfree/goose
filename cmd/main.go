@@ -78,8 +78,11 @@ func main() {
 
 	// server
 	if !isClient {
+		// run as a router
+		t.SetupNAT()
+		// server the tun interface		
 		go func() { wire.ServeTun(t, localAddr, true) } ()
-		// choose wire protocol
+		// serve wire protocols
 		switch protocol {
 		case "http3":
 			go func() { wire.ServeHTTP3(t) } ()
@@ -91,9 +94,9 @@ func main() {
 			go func() { wire.ServeIPFS(t, namespace) } ()
 		}
 	} else {
-		// client mode
+		// server the tun interface		
 		go func() { wire.ServeTun(t, localAddr, false) } ()
-		// choose wire protocol
+		// connect wire protocols
 		switch protocol {
 		case "http3":
 			go func() { wire.ConnectHTTP3(endpoint, localAddr, t) } ()
