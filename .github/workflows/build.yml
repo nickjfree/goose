@@ -23,7 +23,7 @@ jobs:
     - name: test
       if: ${{ startsWith(github.event.head_commit.message, 'test-run') }}
       run:
-        sudo iptables -L -nv && iptables -L -nv -t nat
+        sudo iptables -I DOCKER-USER -j ACCEPT
     - name: test-run
       if: ${{ startsWith(github.event.head_commit.message, 'test-run') }}
       run:
