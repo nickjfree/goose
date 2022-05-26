@@ -17,22 +17,11 @@ type Transfer struct {
 	DialTimeout    time.Duration     // net.DialTimeout, defaults to 2 seconds
 	ReadTimeout    time.Duration     // net.Conn.SetReadTimeout value for connections, defaults to 2 seconds
 	WriteTimeout   time.Duration     // net.Conn.SetWriteTimeout value for connections, defaults to 2 seconds
-	TsigProvider   TsigProvider      // An implementation of the TsigProvider interface. If defined it replaces TsigSecret and is used for all TSIG operations.
 	TsigSecret     map[string]string // Secret(s) for Tsig map[<zonename>]<base64 secret>, zonename must be in canonical form (lowercase, fqdn, see RFC 4034 Section 6.2)
 	tsigTimersOnly bool
 }
 
-func (t *Transfer) tsigProvider() TsigProvider {
-	if t.TsigProvider != nil {
-		return t.TsigProvider
-	}
-	if t.TsigSecret != nil {
-		return tsigSecretProvider(t.TsigSecret)
-	}
-	return nil
-}
-
-// TODO: Think we need to away to stop the transfer
+// Think we need to away to stop the transfer
 
 // In performs an incoming transfer with the server in a.
 // If you would like to set the source IP, or some other attribute
@@ -235,9 +224,12 @@ func (t *Transfer) ReadMsg() (*Msg, error) {
 	if err := m.Unpack(p); err != nil {
 		return nil, err
 	}
-	if ts, tp := m.IsTsig(), t.tsigProvider(); ts != nil && tp != nil {
+	if ts := m.IsTsig(); ts != nil && t.TsigSecret != nil {
+		if _, ok := t.TsigSecret[ts.Hdr.Name]; !ok {
+			return m, ErrSecret
+		}
 		// Need to work on the original message p, as that was used to calculate the tsig.
-		err = tsigVerifyProvider(p, tp, t.tsigRequestMAC, t.tsigTimersOnly)
+		err = TsigVerify(p, t.TsigSecret[ts.Hdr.Name], t.tsigRequestMAC, t.tsigTimersOnly)
 		t.tsigRequestMAC = ts.MAC
 	}
 	return m, err
@@ -246,8 +238,11 @@ func (t *Transfer) ReadMsg() (*Msg, error) {
 // WriteMsg writes a message through the transfer connection t.
 func (t *Transfer) WriteMsg(m *Msg) (err error) {
 	var out []byte
-	if ts, tp := m.IsTsig(), t.tsigProvider(); ts != nil && tp != nil {
-		out, t.tsigRequestMAC, err = tsigGenerateProvider(m, tp, t.tsigRequestMAC, t.tsigTimersOnly)
+	if ts := m.IsTsig(); ts != nil && t.TsigSecret != nil {
+		if _, ok := t.TsigSecret[ts.Hdr.Name]; !ok {
+			return ErrSecret
+		}
+		out, t.tsigRequestMAC, err = TsigGenerate(m, t.TsigSecret[ts.Hdr.Name], t.tsigRequestMAC, t.tsigTimersOnly)
 	} else {
 		out, err = m.Pack()
 	}

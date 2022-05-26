@@ -63,10 +63,9 @@ func setIPAddress(iface *water.Interface, addr string) error {
 	logger.Printf("set tunnel ip address to %s", addr)
 	// set tunnel dns server to 8.8.8.8
 	args = fmt.Sprintf("interface ip set dnsservers name=\"%s\" static 8.8.8.8 primary", 
-		iface.Name(), 
-		localIP.String(), 
-		maskString(ipNet.Mask),
+		iface.Name(),
 	)
+	fmt.Printf("%+v", args)
 	if out, err := route.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
 		return errors.Wrap(err, string(out))
 	}

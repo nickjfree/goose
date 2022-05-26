@@ -5,16 +5,18 @@ package libp2p
 import (
 	"crypto/rand"
 
-	"github.com/libp2p/go-libp2p-core/crypto"
-	noise "github.com/libp2p/go-libp2p-noise"
-	"github.com/libp2p/go-libp2p-peerstore/pstoremem"
-	quic "github.com/libp2p/go-libp2p-quic-transport"
-	rcmgr "github.com/libp2p/go-libp2p-resource-manager"
-	tls "github.com/libp2p/go-libp2p-tls"
-	yamux "github.com/libp2p/go-libp2p-yamux"
+	"github.com/libp2p/go-libp2p/p2p/muxer/yamux"
 	"github.com/libp2p/go-libp2p/p2p/net/connmgr"
-	"github.com/libp2p/go-tcp-transport"
-	ws "github.com/libp2p/go-ws-transport"
+	"github.com/libp2p/go-libp2p/p2p/security/noise"
+	tls "github.com/libp2p/go-libp2p/p2p/security/tls"
+	quic "github.com/libp2p/go-libp2p/p2p/transport/quic"
+	"github.com/libp2p/go-libp2p/p2p/transport/tcp"
+	ws "github.com/libp2p/go-libp2p/p2p/transport/websocket"
+
+	"github.com/libp2p/go-libp2p-core/crypto"
+
+	"github.com/libp2p/go-libp2p-peerstore/pstoremem"
+	rcmgr "github.com/libp2p/go-libp2p-resource-manager"
 	"github.com/multiformats/go-multiaddr"
 )
 

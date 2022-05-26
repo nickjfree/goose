@@ -113,7 +113,7 @@ func (t *unixTransport) ReadMessage() (*Message, error) {
 	if _, err := io.ReadFull(t.rdr, headerdata[4:]); err != nil {
 		return nil, err
 	}
-	dec := newDecoder(bytes.NewBuffer(headerdata), order, make([]int, 0))
+	dec := newDecoder(bytes.NewBuffer(headerdata), order)
 	dec.pos = 12
 	vs, err := dec.Decode(Signature{"a(yv)"})
 	if err != nil {
@@ -147,22 +147,24 @@ func (t *unixTransport) ReadMessage() (*Message, error) {
 		if err != nil {
 			return nil, err
 		}
-		msg, err := DecodeMessageWithFDs(bytes.NewBuffer(all), fds)
+		msg, err := DecodeMessage(bytes.NewBuffer(all))
 		if err != nil {
 			return nil, err
 		}
 		// substitute the values in the message body (which are indices for the
 		// array receiver via OOB) with the actual values
 		for i, v := range msg.Body {
-			switch index := v.(type) {
+			switch v.(type) {
 			case UnixFDIndex:
-				if uint32(index) >= unixfds {
+				j := v.(UnixFDIndex)
+				if uint32(j) >= unixfds {
 					return nil, InvalidMessageError("invalid index for unix fd")
 				}
-				msg.Body[i] = UnixFD(fds[index])
+				msg.Body[i] = UnixFD(fds[j])
 			case []UnixFDIndex:
-				fdArray := make([]UnixFD, len(index))
-				for k, j := range index {
+				idxArray := v.([]UnixFDIndex)
+				fdArray := make([]UnixFD, len(idxArray))
+				for k, j := range idxArray {
 					if uint32(j) >= unixfds {
 						return nil, InvalidMessageError("invalid index for unix fd")
 					}
@@ -177,21 +179,21 @@ func (t *unixTransport) ReadMessage() (*Message, error) {
 }
 
 func (t *unixTransport) SendMessage(msg *Message) error {
-	fdcnt, err := msg.CountFds()
-	if err != nil {
-		return err
+	fds := make([]int, 0)
+	for i, v := range msg.Body {
+		if fd, ok := v.(UnixFD); ok {
+			msg.Body[i] = UnixFDIndex(len(fds))
+			fds = append(fds, int(fd))
+		}
 	}
-	if fdcnt != 0 {
+	if len(fds) != 0 {
 		if !t.hasUnixFDs {
 			return errors.New("dbus: unix fd passing not enabled")
 		}
-		msg.Headers[FieldUnixFDs] = MakeVariant(uint32(fdcnt))
-		buf := new(bytes.Buffer)
-		fds, err := msg.EncodeToWithFDs(buf, nativeEndian)
-		if err != nil {
-			return err
-		}
+		msg.Headers[FieldUnixFDs] = MakeVariant(uint32(len(fds)))
 		oob := syscall.UnixRights(fds...)
+		buf := new(bytes.Buffer)
+		msg.EncodeTo(buf, nativeEndian)
 		n, oobn, err := t.UnixConn.WriteMsgUnix(buf.Bytes(), oob, nil)
 		if err != nil {
 			return err

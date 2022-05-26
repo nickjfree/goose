@@ -71,12 +71,12 @@ type response struct {
 	tsigTimersOnly bool
 	tsigStatus     error
 	tsigRequestMAC string
-	tsigProvider   TsigProvider
-	udp            net.PacketConn // i/o connection if UDP was used
-	tcp            net.Conn       // i/o connection if TCP was used
-	udpSession     *SessionUDP    // oob data to get egress interface right
-	pcSession      net.Addr       // address to use when writing to a generic net.PacketConn
-	writer         Writer         // writer to output the raw DNS bits
+	tsigSecret     map[string]string // the tsig secrets
+	udp            net.PacketConn    // i/o connection if UDP was used
+	tcp            net.Conn          // i/o connection if TCP was used
+	udpSession     *SessionUDP       // oob data to get egress interface right
+	pcSession      net.Addr          // address to use when writing to a generic net.PacketConn
+	writer         Writer            // writer to output the raw DNS bits
 }
 
 // handleRefused returns a HandlerFunc that returns REFUSED for every request it gets.
@@ -211,8 +211,6 @@ type Server struct {
 	WriteTimeout time.Duration
 	// TCP idle timeout for multiple queries, if nil, defaults to 8 * time.Second (RFC 5966).
 	IdleTimeout func() time.Duration
-	// An implementation of the TsigProvider interface. If defined it replaces TsigSecret and is used for all TSIG operations.
-	TsigProvider TsigProvider
 	// Secret(s) for Tsig map[<zonename>]<base64 secret>. The zonename must be in canonical form (lowercase, fqdn, see RFC 4034 Section 6.2).
 	TsigSecret map[string]string
 	// If NotifyStartedFunc is set it is called once the server has started listening.
@@ -238,16 +236,6 @@ type Server struct {
 
 	// A pool for UDP message buffers.
 	udpPool sync.Pool
-}
-
-func (srv *Server) tsigProvider() TsigProvider {
-	if srv.TsigProvider != nil {
-		return srv.TsigProvider
-	}
-	if srv.TsigSecret != nil {
-		return tsigSecretProvider(srv.TsigSecret)
-	}
-	return nil
 }
 
 func (srv *Server) isStarted() bool {
@@ -538,7 +526,7 @@ func (srv *Server) serveUDP(l net.PacketConn) error {
 
 // Serve a new TCP connection.
 func (srv *Server) serveTCPConn(wg *sync.WaitGroup, rw net.Conn) {
-	w := &response{tsigProvider: srv.tsigProvider(), tcp: rw}
+	w := &response{tsigSecret: srv.TsigSecret, tcp: rw}
 	if srv.DecorateWriter != nil {
 		w.writer = srv.DecorateWriter(w)
 	} else {
@@ -593,7 +581,7 @@ func (srv *Server) serveTCPConn(wg *sync.WaitGroup, rw net.Conn) {
 
 // Serve a new UDP request.
 func (srv *Server) serveUDPPacket(wg *sync.WaitGroup, m []byte, u net.PacketConn, udpSession *SessionUDP, pcSession net.Addr) {
-	w := &response{tsigProvider: srv.tsigProvider(), udp: u, udpSession: udpSession, pcSession: pcSession}
+	w := &response{tsigSecret: srv.TsigSecret, udp: u, udpSession: udpSession, pcSession: pcSession}
 	if srv.DecorateWriter != nil {
 		w.writer = srv.DecorateWriter(w)
 	} else {
@@ -644,11 +632,15 @@ func (srv *Server) serveDNS(m []byte, w *response) {
 	}
 
 	w.tsigStatus = nil
-	if w.tsigProvider != nil {
+	if w.tsigSecret != nil {
 		if t := req.IsTsig(); t != nil {
-			w.tsigStatus = tsigVerifyProvider(m, w.tsigProvider, "", false)
+			if secret, ok := w.tsigSecret[t.Hdr.Name]; ok {
+				w.tsigStatus = TsigVerify(m, secret, "", false)
+			} else {
+				w.tsigStatus = ErrSecret
+			}
 			w.tsigTimersOnly = false
-			w.tsigRequestMAC = t.MAC
+			w.tsigRequestMAC = req.Extra[len(req.Extra)-1].(*TSIG).MAC
 		}
 	}
 
@@ -726,9 +718,9 @@ func (w *response) WriteMsg(m *Msg) (err error) {
 	}
 
 	var data []byte
-	if w.tsigProvider != nil { // if no provider, dont check for the tsig (which is a longer check)
+	if w.tsigSecret != nil { // if no secrets, dont check for the tsig (which is a longer check)
 		if t := m.IsTsig(); t != nil {
-			data, w.tsigRequestMAC, err = tsigGenerateProvider(m, w.tsigProvider, w.tsigRequestMAC, w.tsigTimersOnly)
+			data, w.tsigRequestMAC, err = TsigGenerate(m, w.tsigSecret[t.Hdr.Name], w.tsigRequestMAC, w.tsigTimersOnly)
 			if err != nil {
 				return err
 			}

@@ -8,7 +8,7 @@
 <p align="center">
   <a href="http://protocol.ai"><img src="https://img.shields.io/badge/made%20by-Protocol%20Labs-blue.svg?style=flat-square" /></a>
   <a href="http://libp2p.io/"><img src="https://img.shields.io/badge/project-libp2p-yellow.svg?style=flat-square" /></a>
-  <a href="https://pkg.go.dev/github.com/libp2p/go-libp2p"><img src="https://pkg.go.dev/github.com/libp2p/go-libp2p?status.svg" /></a>
+  <a href="https://pkg.go.dev/github.com/libp2p/go-libp2p"><img src="https://pkg.go.dev/badge/github.com/libp2p/go-libp2p.svg" alt="Go Reference"></a>
   <a href="https://discuss.libp2p.io"><img src="https://img.shields.io/discourse/https/discuss.libp2p.io/posts.svg"/></a>
 </p>
 
@@ -22,6 +22,7 @@
   - [Tests](#tests)
   - [Packages](#packages)
 - [Contribute](#contribute)
+- [Supported Go Versions](#supported-go-versions)
 
 ## Background
 
@@ -151,3 +152,8 @@ There's a few things you can do right now to help out:
  - Go through the modules below and **check out existing issues**. This would be especially useful for modules in active development. Some knowledge of IPFS/libp2p may be required, as well as the infrasture behind it - for instance, you may need to read up on p2p and more complex operations like muxing to be able to help technically.
  - **Perform code reviews**.
  - **Add tests**. There can never be enough tests.
+
+## Supported Go Versions
+
+We test against and support the two most recent major releases of Go. This is
+informed by Go's own [security policy](https://go.dev/security).

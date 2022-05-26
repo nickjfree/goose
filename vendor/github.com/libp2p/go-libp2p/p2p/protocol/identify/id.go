@@ -814,7 +814,5 @@ func (nn *netNotifiee) Disconnected(n network.Network, v network.Conn) {
 	}
 }
 
-func (nn *netNotifiee) OpenedStream(n network.Network, v network.Stream) {}
-func (nn *netNotifiee) ClosedStream(n network.Network, v network.Stream) {}
-func (nn *netNotifiee) Listen(n network.Network, a ma.Multiaddr)         {}
-func (nn *netNotifiee) ListenClose(n network.Network, a ma.Multiaddr)    {}
+func (nn *netNotifiee) Listen(n network.Network, a ma.Multiaddr)      {}
+func (nn *netNotifiee) ListenClose(n network.Network, a ma.Multiaddr) {}

@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
-	"strings"
 
 	"github.com/huin/goupnp/scpd"
 	"github.com/huin/goupnp/soap"
@@ -179,12 +178,7 @@ type URLField struct {
 }
 
 func (uf *URLField) SetURLBase(urlBase *url.URL) {
-	str := uf.Str
-	if !strings.Contains(str, "://") && !strings.HasPrefix(str, "/") {
-		str = "/" + str
-	}
-
-	refUrl, err := url.Parse(str)
+	refUrl, err := url.Parse(uf.Str)
 	if err != nil {
 		uf.URL = url.URL{}
 		uf.Ok = false

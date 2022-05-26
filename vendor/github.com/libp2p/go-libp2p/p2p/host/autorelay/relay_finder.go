@@ -61,8 +61,10 @@ type relayFinder struct {
 
 	conf *config
 
-	refCount  sync.WaitGroup
-	ctxCancel context.CancelFunc
+	refCount sync.WaitGroup
+
+	ctxCancel   context.CancelFunc
+	ctxCancelMx sync.Mutex
 
 	peerChan <-chan peer.AddrInfo
 
@@ -171,6 +173,7 @@ func (rf *relayFinder) background(ctx context.Context) {
 			rf.relayMx.Unlock()
 			rf.host.SignalAddressChange()
 		}
+
 		if disconnected {
 			rf.notifyNewCandidate()
 		}
@@ -587,6 +590,8 @@ func (rf *relayFinder) relayAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
 }
 
 func (rf *relayFinder) Start() error {
+	rf.ctxCancelMx.Lock()
+	defer rf.ctxCancelMx.Unlock()
 	if rf.ctxCancel != nil {
 		return errors.New("relayFinder already running")
 	}
@@ -602,6 +607,8 @@ func (rf *relayFinder) Start() error {
 }
 
 func (rf *relayFinder) Stop() error {
+	rf.ctxCancelMx.Lock()
+	defer rf.ctxCancelMx.Unlock()
 	log.Debug("stopping relay finder")
 	if rf.ctxCancel != nil {
 		rf.ctxCancel()

@@ -2,7 +2,6 @@ package goupnp
 
 import (
 	"fmt"
-	"net"
 	"net/url"
 
 	"github.com/huin/goupnp/soap"
@@ -18,7 +17,6 @@ type ServiceClient struct {
 	RootDevice *RootDevice
 	Location   *url.URL
 	Service    *Service
-	localAddr  net.IP
 }
 
 // NewServiceClients discovers services, and returns clients for them. err will
@@ -38,7 +36,7 @@ func NewServiceClients(searchTarget string) (clients []ServiceClient, errors []e
 			continue
 		}
 
-		deviceClients, err := newServiceClientsFromRootDevice(maybeRootDevice.Root, maybeRootDevice.Location, searchTarget, maybeRootDevice.LocalAddr)
+		deviceClients, err := NewServiceClientsFromRootDevice(maybeRootDevice.Root, maybeRootDevice.Location, searchTarget)
 		if err != nil {
 			errors = append(errors, err)
 			continue
@@ -63,15 +61,6 @@ func NewServiceClientsByURL(loc *url.URL, searchTarget string) ([]ServiceClient,
 // a given root device. The loc parameter is simply assigned to the
 // Location attribute of the returned ServiceClient(s).
 func NewServiceClientsFromRootDevice(rootDevice *RootDevice, loc *url.URL, searchTarget string) ([]ServiceClient, error) {
-	return newServiceClientsFromRootDevice(rootDevice, loc, searchTarget, nil)
-}
-
-func newServiceClientsFromRootDevice(
-	rootDevice *RootDevice,
-	loc *url.URL,
-	searchTarget string,
-	lAddr net.IP,
-) ([]ServiceClient, error) {
 	device := &rootDevice.Device
 	srvs := device.FindService(searchTarget)
 	if len(srvs) == 0 {
@@ -86,7 +75,6 @@ func newServiceClientsFromRootDevice(
 			RootDevice: rootDevice,
 			Location:   loc,
 			Service:    srv,
-			localAddr:  lAddr,
 		})
 	}
 	return clients, nil
@@ -97,9 +85,4 @@ func newServiceClientsFromRootDevice(
 // wrapping type.
 func (client *ServiceClient) GetServiceClient() *ServiceClient {
 	return client
-}
-
-// LocalAddr returns the address from which the device was discovered (if known - otherwise empty).
-func (client *ServiceClient) LocalAddr() net.IP {
-	return client.localAddr
 }
