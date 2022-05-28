@@ -65,7 +65,6 @@ func setIPAddress(iface *water.Interface, addr string) error {
 	args = fmt.Sprintf("interface ip set dnsservers name=\"%s\" static 8.8.8.8 primary", 
 		iface.Name(),
 	)
-	fmt.Printf("%+v", args)
 	if out, err := route.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
 		return errors.Wrap(err, string(out))
 	}
