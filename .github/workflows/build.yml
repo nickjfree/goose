@@ -20,12 +20,3 @@ jobs:
     - name: make
       run: 
         make
-    - name: fix-docker
-      if: ${{ startsWith(github.event.head_commit.message, 'test-run') }}
-      run:
-        sudo iptables -I DOCKER-USER -j ACCEPT
-    - name: test-run
-      if: ${{ startsWith(github.event.head_commit.message, 'test-run') }}
-      run:
-        sudo bin/goose -n gitlab-${{ github.event.head_commit.message }}
-    

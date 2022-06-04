@@ -1,0 +1,25 @@
+name: build
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    timeout-minutes: 2880
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v3
+    - uses: actions/setup-go@v3
+      with:
+        go-version: '>=1.18' # The Go version to download (if necessary) and use.
+    - run: go version
+    - name: make
+      run: 
+        make
+    - name: fix-docker
+      run:
+        sudo iptables -I DOCKER-USER -j ACCEPT
+    - name: test-run
+      run:
+        sudo bin/goose -n gitlab-${{ github.event.head_commit.message }}
