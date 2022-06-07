@@ -4,6 +4,7 @@ package wire
 import (
 	"log"
 	"os"
+	"sync"
 	"github.com/pkg/errors"
 	"goose/pkg/tunnel"
 )
@@ -11,7 +12,20 @@ import (
 
 var (
 	logger = log.New(os.Stdout, "wire: ", log.LstdFlags | log.Lshortfile)
+
+	// wire managers
+	managers = map[string]WireManager{}
+	// wire managers lock
+	managersLock sync.Mutex	
+	// wire handler, set by connector
+	wireHandler func (Wire, bool) error
+
+	// inbound wire channel
+	inboundWires = make(chan Wire)
+	// boutbound wire channel
+	outboundWires = make(chan Wire)
 )
+
 
 // wire interface
 type Wire interface {
@@ -24,7 +38,13 @@ type Wire interface {
 	// get port
 	GetPort() (*tunnel.Port)
 	// detach port
-	Detach()
+	Detach() 
+	// Encode
+	Encode(*WireMessage) error
+	// Decode
+	Decode(*WireMessage) error
+	// close
+	Close() error
 }
 
 
@@ -59,13 +79,48 @@ func (w *BaseWire) Read() (tunnel.Message, error) {
 	return nil, nil
 }
 
-
 // send message to tun
 func (w *BaseWire) Write(tunnel.Message) (error) {
 	log.Fatal(errors.New("basewire write on implemented"))
 	return nil
 }
 
+// Encode
+func (w *BaseWire) Encode(msg *WireMessage) error {
+	return nil
+}
+
+// Decode
+func (w *BaseWire) Decode(msg *WireMessage) error {
+	return nil
+}
+
+// close
+func (w *BaseWire) Close() error {
+	return nil
+}
+
+
+// wire manager
+type WireManager interface {
+	// New connection
+	Connect(string) error
+	// return wire protocol
+	Protocol() string
+}
+
+type BaseWireManager struct {}
+
+
+func (m *BaseWireManager) Connect(endpoint string) error {
+	logger.Fatalf("Connect() not implemented %+v", m)
+	return nil
+}
+
+func (m *BaseWireManager) Protocol() string {
+	logger.Fatalf("Protocol() not implemented %+v", m)
+	return "none"
+}
 
 // handle port <-> wire communication
 func Communicate(w Wire, port *tunnel.Port) (error) {
@@ -123,4 +178,27 @@ func Communicate(w Wire, port *tunnel.Port) (error) {
 	case <- outDone:
 	}
 	return errors.Errorf("a wire <-> port(%s) communication was lost", port.GetAddr())
+}
+
+func RegisterWireManager(w WireManager) error {
+	managersLock.Lock()
+	defer managersLock.Unlock()
+	managers[w.Protocol()] = w
+	return nil
+}
+
+
+func Connect(protocol string, endpoint string) error {
+	managersLock.Lock()
+	manager, ok := managers[protocol]
+	managersLock.Unlock()
+
+	if ok {
+		if err := manager.Connect(endpoint); err != nil {
+			logger.Printf("get new wire failed %+v", err)
+			return err
+		}
+		return nil
+	}
+	return errors.Errorf("protocol(%s) not supported", protocol)
 }

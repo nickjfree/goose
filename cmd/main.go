@@ -74,44 +74,12 @@ func main() {
 	// set up tun device
 	t := tunnel.NewTunSwitch()
 	go func() { logger.Printf("tunnel quit: %s", <- t.Start()) } ()
+	// server the tun interface		
+	go func() { wire.ServeTun(t, localAddr, true) } ()
 
-
-	// server
-	if !isClient {
-		// run as a router
-		t.SetupNAT()
-		// server the tun interface		
-		go func() { wire.ServeTun(t, localAddr, true) } ()
-		// serve wire protocols
-		switch protocol {
-		case "http3":
-			go func() { wire.ServeHTTP3(t) } ()
-		case "http":
-			go func() { wire.ServeHTTP(t) } ()
-		case "ipfs":
-			go func() { wire.ServeIPFS(t, namespace) } ()
-		default:
-			go func() { wire.ServeIPFS(t, namespace) } ()
-		}
-	} else {
-		// server the tun interface		
-		go func() { wire.ServeTun(t, localAddr, false) } ()
-		// connect wire protocols
-		switch protocol {
-		case "http3":
-			go func() { wire.ConnectHTTP3(endpoint, localAddr, t) } ()
-		case "http":
-			go func() { wire.ConnectHTTP(endpoint, localAddr, t) } ()
-		case "ipfs":
-			go func() { wire.ConnectIPFS(endpoint, localAddr, namespace, t) } ()
-		default:
-			go func() { wire.ConnectIPFS(endpoint, localAddr, namespace, t) } ()
-		}
-	}
+	wire.Connect("ipfs", endpoint)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 	<- c
-	// try restore system route
-	t.RestoreRoute()
 }
