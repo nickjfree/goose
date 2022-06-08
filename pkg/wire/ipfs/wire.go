@@ -1,17 +1,19 @@
 // connect to server through ipfs network
-package wire
+package ipfs
 
 import (
-	"bytes"
+	// "bytes"
 	"context"
-	"io"
+	"encoding/gob"
+	// "io"
 	"io/ioutil"
+	"log"
 	"fmt"
 	"encoding/json"
 	"strings"
 	"time"
 	"crypto/rand"
-	"path/filepath"
+	// "path/filepath"
 	"sync"
 	"os"
 
@@ -27,10 +29,8 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	ma "github.com/multiformats/go-multiaddr"
 
-	"github.com/lucas-clemente/quic-go/quicvarint"
-	"github.com/songgao/water/waterutil"
 	"github.com/pkg/errors"
-	"goose/pkg/tunnel"
+	"goose/pkg/wire"
 )
 
 // ipfs bootstrap node
@@ -64,6 +64,8 @@ const (
 
 
 var (
+	logger = log.New(os.Stdout, "ipfswire: ", log.LstdFlags | log.Lshortfile)
+
 	// manager
 	ipfsWireManager *IPFSWireManager
 )
@@ -71,69 +73,37 @@ var (
 
 // register ipfs wire manager
 func init() {
-	ipfsWireManager = NewIPFSWireManager()
-	RegisterWireManager(ipfsWireManager)
+	ipfsWireManager = newIPFSWireManager()
+	wire.RegisterWireManager(ipfsWireManager)
 }
 
 // ipfs wire
 type IPFSWire struct {
 	// base
-	BaseWire
+	wire.BaseWire
 	// stream
 	s network.Stream
+	// encoder and decoer
+	encoder *gob.Encoder 
+	decoder *gob.Decoder
+
 	// close func
 	closeFunc func () error
 }
 
-
-// read message from ipfs wire
-func (w *IPFSWire) Read() (tunnel.Message, error) {
-
-	// read dataFrame <payload size><payload data>
-	br := &byteReaderImpl{w.s}
-	// read payload size
-	len, err := quicvarint.Read(br)
-	if err != nil {
-		return nil, errors.Wrap(err, "read ipfs stream error, payload size")
+// Encode
+func (w *IPFSWire) Encode(msg *wire.Message) error {
+	if err := w.encoder.Encode(msg); err != nil {
+		return errors.WithStack(err)
 	}
-	if len > HTTP_BUFFERSIZE {
-		return nil, errors.Errorf("client buffer size(%d) to big", len)
-	}
-	// read payload
-	payload := make ([]byte, len)
-	_, err = io.ReadFull(w.s, payload)
-	if err != nil {
-		return nil, errors.Wrap(err, "read ipfs stream")
-	}
-	srcIP := waterutil.IPv4Source(payload)
-	dstIP := waterutil.IPv4Destination(payload)
-	// proto := waterutil.IPv4Protocol(payload)
-	// log the packet
-	// logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
-	return tunnel.NewTunMessage(dstIP.String(), srcIP.String(), payload), nil
+	return nil
 }
 
-// send message to ipfs wire
-func (w *IPFSWire) Write(msg tunnel.Message) (error) {
-
-	payload, ok := msg.Payload().([]byte)
-	if !ok {
-		logger.Printf("invalid payload format %+v", payload)
-		return nil
+// Decode
+func (w *IPFSWire) Decode(msg *wire.Message) error {
+	if err := w.decoder.Decode(msg); err != nil {
+		return errors.WithStack(err)
 	}
-	buf := &bytes.Buffer{}
-	// write payload size and content
-	quicvarint.Write(buf, uint64(len(payload)))
-	buf.Write(payload)
-	// send ipfs data <payload size><payload data>
-	if _, err := w.s.Write(buf.Bytes()); err != nil {
-		return errors.Wrapf(err, "write ipfs stream")
-	}
-	// srcIP := waterutil.IPv4Source(payload)
-	// dstIP := waterutil.IPv4Destination(payload)
-	// proto := waterutil.IPv4Protocol(payload)
-	// // log the packet
-	// logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
 	return nil
 }
 
@@ -145,20 +115,25 @@ func (w *IPFSWire) Close() (error) {
 
 // IPFS wire manager
 type IPFSWireManager struct {
-	BaseWireManager
+	wire.BaseWireManager
 	*P2PHost
 }
 
-func NewIPFSWireManager() *IPFSWireManager {
+func newIPFSWireManager() *IPFSWireManager {
 	host, err := NewP2PHost()
 	if err != nil {
 		logger.Fatalf("Error: %+v", err)
 	}
+	// do backgroud relay refresh jobs
+	go host.Background()
+	m := &IPFSWireManager{
+		P2PHost: host,
+		BaseWireManager: wire.NewBaseWireManager(),
+	}
 	// set server stream hanlder
-	host.SetStreamHandler(protocolName, func(s network.Stream) {
-		defer s.Close()
+	m.SetStreamHandler(protocolName, func(s network.Stream) {
 		host.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
-		logger.Printf("received new stream %s", s.ID())
+		logger.Printf("received new stream(%s) peerId (%s)", s.ID(), s.Conn().RemotePeer())
 		// close func
 		close := func () error {
 			// unprotect connecttion
@@ -168,21 +143,17 @@ func NewIPFSWireManager() *IPFSWireManager {
 			return nil
 		}
 		// got an inbound wire
-		inboundWires <- &IPFSWire{
+		m.In <- &IPFSWire{
 			s: s,
 			closeFunc: close,
+			encoder: gob.NewEncoder(s),
+			decoder: gob.NewDecoder(s),
 		}
 	})
-	// disable advertise for debug
-	// host.SetAdvertise(false, namespace)
-	// do backgroud relay refresh jobs
-	go host.Background()
-	return &IPFSWireManager{
-		P2PHost: host,
-	}
+	return m
 }
 
-func (m *IPFSWireManager) Connect(endpoint string) error {
+func (m *IPFSWireManager) Dial(endpoint string) error {
 
 	peerID, err := peer.Decode(endpoint)
 	if err != nil {
@@ -216,10 +187,13 @@ func (m *IPFSWireManager) Connect(endpoint string) error {
 			cancel()
 			return nil
 		}
+		logger.Printf("outbound new stream %+v", s)
 		// got an outbound wire
-		inboundWires <- &IPFSWire{
+		m.Out <- &IPFSWire{
 			s: s,
 			closeFunc: close,
+			encoder: gob.NewEncoder(s),
+			decoder: gob.NewDecoder(s),
 		}
 		return nil
 	}
@@ -236,16 +210,14 @@ type P2PHost struct {
 	host.Host
 	// discovery
 	*dis_routing.RoutingDiscovery
+	// dht
+	dht *dht.IpfsDHT
 	// peer info channel for auto relay
 	peerChan chan peer.AddrInfo
 	// host context
 	ctx context.Context
 	// cancel
 	cancel context.CancelFunc 
-	// the tunnel
-	tunnel *tunnel.Tunnel
-	// advertise
-	advertise bool
 	// advertise namespace
 	namespace string
 }
@@ -263,20 +235,15 @@ func NewP2PHost() (*P2PHost, error) {
 	h := &P2PHost{
 		Host: host,
 		RoutingDiscovery: routingDiscovery,
+		dht: dht,
 		ctx: ctx,
 		peerChan: peerChan,
 		cancel : cancel,
-		advertise: false,
 	}
 	if h.Bootstrap(bootstraps); err != nil {
 		return nil, err
 	}
 	return h, nil
-}
-
-func (h *P2PHost) SetAdvertise(state bool, namespace string) {
-	h.advertise = state
-	h.namespace = namespace
 }
 
 // bootstrap with public peers
@@ -330,10 +297,6 @@ func (h *P2PHost) Bootstrap(peers []string) error {
 }
 
 
-func (h *P2PHost) GetAdvertiseName() string {
-	return filepath.ToSlash(filepath.Join(PrefixGooseServer, h.namespace))
-}
-
 // run some background jobs
 func (h *P2PHost) Background() error {
 
@@ -347,11 +310,6 @@ func (h *P2PHost) Background() error {
 	bootstrapTicker := time.NewTicker(time.Second * 900)
 	defer bootstrapTicker.Stop()
 
-	
-
-	if h.advertise {
-		h.Advertise(h.ctx, h.GetAdvertiseName())
-	}
 	for {
 		select {
 		case <- h.ctx.Done():
@@ -379,9 +337,6 @@ func (h *P2PHost) Background() error {
 			logger.Printf("peerid: %s\naddrs: %s\n", h.ID(), addrText)
 		case <- advertiseTicker.C:
 			// time to advertise
-			if h.advertise {
-				h.Advertise(h.ctx, h.GetAdvertiseName())
-			}
 		case <- bootstrapTicker.C:
 			// bootstrap refesh
 			if err := h.Bootstrap(bootstraps); err != nil {
@@ -390,33 +345,6 @@ func (h *P2PHost) Background() error {
 		}
 	}
 }
-
-// // handle client stream
-// func (h *P2PHost) HandleClientStream(s network.Stream, localAddr string) error {
-// 	// protecte the peer from connection manager trimming
-// 	h.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
-// 	defer h.ConnManager().Unprotect(s.Conn().RemotePeer(), connectionTag)
-// 	// create wire
-// 	_, err := NewIPFSWire(s, s)
-// 	if err != nil {
-// 		return errors.Wrap(err, "create ipfs wire error")
-// 	}
-// 	return nil
-// }
-
-// // handle server stream
-// func (h *P2PHost) HandleServerStream(s network.Stream) error {
-// 	// protecte the peer from connection manager trimming
-// 	h.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
-// 	defer h.ConnManager().Unprotect(s.Conn().RemotePeer(), connectionTag)
-
-// 	_, err := NewIPFSWire(s, s)
-// 	if err != nil {
-// 		logger.Printf("create ipfs wire error %+v", err)
-// 		return err
-// 	}
-// 	return nil
-// }
 
 // get privkey, save it to local path
 func getPrivKey(path string) (crypto.PrivKey, error) {
@@ -497,97 +425,4 @@ func createHost(peerChan <- chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error)
 		return nil, nil, errors.WithStack(err)
 	}
 	return host, idht, nil
-}
-
-// run as a goose server in ipfs network
-// well.. the server is not actually a ipfs host, instead it talks in goose/0.0.1 protocol
-func ServeIPFS(tunnel *tunnel.Tunnel, namespace string) {
-	host, err := NewP2PHost()
-	if err != nil {
-		logger.Fatalf("Error: %+v", err)
-	}
-	// set server stream hanlder
-	host.SetStreamHandler(protocolName, func(s network.Stream) {
-		defer s.Close()
-		logger.Printf("received new stream %s", s.ID())
-	})
-	// host.SetAdvertise(true, namespace)
-	// do backgroud relay refresh jobs
-	if err := host.Background(); err != nil {
-		logger.Fatalf("Error: %+v", err)
-	}
-}
-
-// connect to remote peer once
-func connectLoopIPFS(host *P2PHost, p *peer.AddrInfo, localAddr string, tunnel *tunnel.Tunnel) error {
-
-	// connect to the peer
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	retries := 1
-	for {
-		s, err := host.NewStream(ctx, p.ID, protocolName)
-		msg := fmt.Sprintf("%+v", err)
-		if err != nil && retries > 0 && strings.Contains(msg, transientErrorString) {
-			time.Sleep(time.Second * 15)
-			logger.Printf("transient connection, try again for %s", p.ID)
-			retries -= 1
-			continue
-		} else if err != nil {
-			return errors.WithStack(err)
-		}
-		defer s.Close()
-	}
-	return errors.Errorf("failed connect to server, max retries reached")
-}
-
-// connect to remote peer by PeerId
-func ConnectIPFS(endpoint, localAddr, namespace string, tunnel *tunnel.Tunnel) error {
-
-	host, err := NewP2PHost()
-	if err != nil {
-		logger.Fatalf("Error: %+v", err)
-	}
-	// no advertise for client
-	// host.SetAdvertise(false, namespace)
-	go host.Background()
-	for {
-		time.Sleep(time.Second * 5)
-		// decode peerid
-		var p *peer.AddrInfo
-		// use certain server
-		if endpoint != "" {
-			peerID, err := peer.Decode(endpoint)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			p = &peer.AddrInfo{
-				ID: peerID,
-			}
-			logger.Printf("connecting to server %s", p.ID)
-			logger.Printf("connection to server %s failed: %+v", p.ID, connectLoopIPFS(host, p, localAddr, tunnel))
-			continue
-		} else {
-			// try find a random server
-			ctx, cancel := context.WithTimeout(context.Background(), time.Second * 300)
-			search := host.GetAdvertiseName()
-			logger.Printf("trying to find a server in namespace: %s\n", search)
-			peers, err := host.FindPeers(ctx, search)
-			if err != nil {
-				cancel()
-				return errors.WithStack(err)
-			}
-			// chose a random peer
-			for p := range peers {
-				logger.Printf("connecting to server %s", p.ID)
-				logger.Printf("connection to server %s failed: %+v", p.ID, connectLoopIPFS(host, &p, localAddr, tunnel))
-				time.Sleep(time.Second)
-			}
-			cancel()
-			if p == nil {
-				logger.Printf("no servers found\n")
-			}
-		}
-	}
-	return nil
 }

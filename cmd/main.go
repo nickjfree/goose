@@ -8,6 +8,7 @@ import (
 	"os/signal"
 	"goose/pkg/tunnel"
 	"goose/pkg/wire"
+	"goose/pkg/connector"
 )
 
 
@@ -74,10 +75,10 @@ func main() {
 	// set up tun device
 	t := tunnel.NewTunSwitch()
 	go func() { logger.Printf("tunnel quit: %s", <- t.Start()) } ()
-	// server the tun interface		
-	go func() { wire.ServeTun(t, localAddr, true) } ()
 
-	wire.Connect("ipfs", endpoint)
+	go connector.RunTestLoop()
+
+	wire.Dial("ipfs", endpoint)
 
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)

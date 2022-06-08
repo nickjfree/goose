@@ -1,6 +1,7 @@
 package wire
 
 import (
+	"encoding/gob"
 	"net"
 )
 
@@ -17,7 +18,7 @@ const (
 )
 
 // wire message
-type WireMessage struct {
+type Message struct {
 	Type int   		
 	Payload interface{}
 }
@@ -30,9 +31,18 @@ type Package struct {
 }
 
 // routing register msg
-type RoutingMessage struct {
+type Routing struct {
 	// type
 	Type int
-	// opposite peer's local networks
+	// peer's local networks
 	Routings []net.IPNet
+	// accepted routing
+	Accepted []net.IPNet
+}
+
+
+func init() {
+	gob.RegisterName("wire.Message", Message{})
+	gob.RegisterName("wire.Package", Package{})
+	gob.RegisterName("wire.Routing", Routing{})
 }

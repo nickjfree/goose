@@ -1,19 +1,21 @@
 // +build windows
 
-package wire
+package tun
 
 import (
 	"fmt"
 	"net"
 	"strconv"
 	"strings"
-	"goose/pkg/route"
 	"github.com/songgao/water"
 	"github.com/pkg/errors"
+
+	"goose/pkg/route"
+	"goose/pkg/wire"
 )
 
 // create tun device on windows
-func NewTunWire(name string, addr string) (Wire, error) {
+func NewTunWire(name string, addr string) (wire.Wire, error) {
 	// tun config, set 
 	config := water.Config{
 		DeviceType: water.TUN,
@@ -31,7 +33,6 @@ func NewTunWire(name string, addr string) (Wire, error) {
 		return nil, errors.Wrap(err, "")
 	}
 	return &TunWire{
-		BaseWire: BaseWire{},
 		ifTun: ifTun,
 	}, nil
 }

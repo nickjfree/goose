@@ -26,23 +26,14 @@ var (
 	outboundWires = make(chan Wire)
 )
 
-
 // wire interface
 type Wire interface {
-	// attach to port
-	Attach(p *tunnel.Port) (error)
-	// read a message
-	Read() (tunnel.Message, error)
-	// write a message
-	Write(tunnel.Message) (error)
-	// get port
-	GetPort() (*tunnel.Port)
-	// detach port
-	Detach() 
+	// addr
+	Addr() string
 	// Encode
-	Encode(*WireMessage) error
+	Encode(*Message) error
 	// Decode
-	Decode(*WireMessage) error
+	Decode(*Message) error
 	// close
 	Close() error
 }
@@ -55,43 +46,17 @@ type BaseWire struct {
 }
 
 
-// attach wire to port
-func (w *BaseWire) Attach(port *tunnel.Port) (error) {
-	w.port = port
-	return nil
-}
-
-// get port
-func (w *BaseWire) GetPort() (*tunnel.Port) {
-	return w.port
-}
-
-// close port
-func (w *BaseWire) Detach() {
-	if err := w.port.Close(); err != nil {
-		logger.Fatalf("close port error %s", err)
-	}
-}
-
-// read message from tun
-func (w *BaseWire) Read() (tunnel.Message, error) {
-	log.Fatal(errors.New("basewire read on implemented"))
-	return nil, nil
-}
-
-// send message to tun
-func (w *BaseWire) Write(tunnel.Message) (error) {
-	log.Fatal(errors.New("basewire write on implemented"))
-	return nil
+func (w *BaseWire) Addr() string {
+	return ""
 }
 
 // Encode
-func (w *BaseWire) Encode(msg *WireMessage) error {
+func (w *BaseWire) Encode(msg *Message) error {
 	return nil
 }
 
 // Decode
-func (w *BaseWire) Decode(msg *WireMessage) error {
+func (w *BaseWire) Decode(msg *Message) error {
 	return nil
 }
 
@@ -100,16 +65,26 @@ func (w *BaseWire) Close() error {
 	return nil
 }
 
-
 // wire manager
 type WireManager interface {
-	// New connection
-	Connect(string) error
+	// dial new connection
+	Dial(string) error
 	// return wire protocol
 	Protocol() string
 }
 
-type BaseWireManager struct {}
+
+type BaseWireManager struct {
+	In chan Wire
+	Out chan Wire
+}
+
+func NewBaseWireManager() BaseWireManager {
+	return BaseWireManager{
+		In: inboundWires,
+		Out: outboundWires,
+	}
+}
 
 
 func (m *BaseWireManager) Connect(endpoint string) error {
@@ -122,64 +97,6 @@ func (m *BaseWireManager) Protocol() string {
 	return "none"
 }
 
-// handle port <-> wire communication
-func Communicate(w Wire, port *tunnel.Port) (error) {
-
-	inDone := make(chan bool)
-	outDone := make(chan bool)
-
-	w.Attach(port)
-	// read wire data and relay it to port
-	go func () {
-		for {
-			msg, err := w.Read()
-			if err != nil {
-				logger.Printf("read wire error %+v", err)
-				w.Detach()
-				close(inDone)
-				return
-			}
-			// ignore nil msg
-			if msg == nil {
-				continue
-			}
-			// send msg to port
-			if err := port.WriteInput(msg); err != nil {
-				logger.Printf("send to port %+s error %+v", port.GetAddr(), err)
-				w.Detach()
-				close(inDone)
-				return
-			}
-		}
-	} ()
-
-	// read port data and relay it to wire
-	go func () {
-		for {
-			msg, err := port.ReadOutput()
-			if err != nil {
-				logger.Printf("read port %s error %+v", port.GetAddr(), err)
-				w.Detach()
-				close(outDone)
-				return
-			}
-			// send msg to wire
-			if err := w.Write(msg); err != nil {
-				logger.Printf("send to wire error %+v", err)
-				w.Detach()
-				close(outDone)
-				return
-			}
-		}
-	} ()
-	// wait either routine to quit
-	select {
-	case <- inDone:
-	case <- outDone:
-	}
-	return errors.Errorf("a wire <-> port(%s) communication was lost", port.GetAddr())
-}
-
 func RegisterWireManager(w WireManager) error {
 	managersLock.Lock()
 	defer managersLock.Unlock()
@@ -188,17 +105,26 @@ func RegisterWireManager(w WireManager) error {
 }
 
 
-func Connect(protocol string, endpoint string) error {
+func Dial(protocol string, endpoint string) error {
 	managersLock.Lock()
 	manager, ok := managers[protocol]
 	managersLock.Unlock()
 
 	if ok {
-		if err := manager.Connect(endpoint); err != nil {
-			logger.Printf("get new wire failed %+v", err)
+		if err := manager.Dial(endpoint); err != nil {
+			logger.Printf("dial wire(%s) failed %+v", endpoint, err)
 			return err
 		}
 		return nil
 	}
 	return errors.Errorf("protocol(%s) not supported", protocol)
+}
+
+
+func In() <-chan Wire {
+	return inboundWires
+}
+
+func Out() <-chan Wire {
+	return outboundWires
 }

@@ -1,6 +1,6 @@
 // +build linux
 
-package wire
+package tun
 
 import (
 	"net"
@@ -8,11 +8,12 @@ import (
 	"github.com/pkg/errors"
 	
 	"goose/pkg/route"
+	"goose/pkg/wire"
 )
 
 
 // create tun device on linux
-func NewTunWire(name string, addr string) (Wire, error) {
+func NewTunWire(name string, addr string) (wire.Wire, error) {
 	// tun config
 	config := water.Config{
 		DeviceType: water.TUN,
@@ -36,7 +37,6 @@ func NewTunWire(name string, addr string) (Wire, error) {
 		return nil, errors.Wrap(err, string(out))
 	}
 	return &TunWire{
-		BaseWire: BaseWire{},
 		ifTun: ifTun,
 	}, nil
 }
