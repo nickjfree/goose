@@ -3,15 +3,15 @@ package tun
 import (
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strings"
 
 	"github.com/songgao/water"
-	// "github.com/songgao/water/waterutil"
+	"github.com/songgao/water/waterutil"
 	"github.com/pkg/errors"
 
 	"goose/pkg/wire"
-	"goose/pkg/tunnel"
 )
 
 var (
@@ -21,7 +21,12 @@ var (
 )
 
 
-const TUN_BUFFERSIZE = 2048
+const (
+	// max receive buffer size
+	tunBuffSize = 2048
+	// ignored routing
+	defaultRouting = "0.0.0.0/0"
+)
 
 // register ipfs wire manager
 func init() {
@@ -36,53 +41,108 @@ type TunWire struct {
 	wire.BaseWire
 	// tun interface
 	ifTun *water.Interface
+	// address
+	address net.IP
+	// gateway
+	gateway net.IP
+	// local network
+	network net.IPNet
+	// provided network
+	providedNetwork []net.IPNet
+	// accepted network
+	acceptedNetwork []net.IPNet
 }
 
-// read message from tun 
-func (w *TunWire) Read() (tunnel.Message, error) {
+// Encode
+func (w *TunWire) Encode(msg *wire.Message) error {
 
-	// payload := make ([]byte, TUN_BUFFERSIZE)
-	// n, err := w.ifTun.Read(payload)
-	// if err != nil {
-	// 	return nil, err
-	// }
-	// if !waterutil.IsIPv4(payload) {
-	// 	// logger.Printf("recv: not ipv4 packet len %d", n)
-	// 	return nil, nil
-	// }
-	// srcIP := waterutil.IPv4Source(payload)
-	// dstIP := waterutil.IPv4Destination(payload)
-	// proto := waterutil.IPv4Protocol(payload)
-	// log the packet
-	// logger.Printf("recv: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, n)
-	return nil, nil
-}
+	switch msg.Type {
 
-
-// send message to tun
-func (w *TunWire) Write(msg tunnel.Message) (error) {
-
-	// payload, ok := msg.Payload().([]byte)
-	// if !ok {
-	// 	logger.Printf("invalid payload format %+v", payload)
-	// 	return nil
-	// }
-
-	// if !waterutil.IsIPv4(payload) {
-	// 	logger.Printf("send: not ipv4 packet len %d", len(payload))
-	// 	return nil
-	// }
-	// // srcIP := waterutil.IPv4Source(payload)
-	// // dstIP := waterutil.IPv4Destination(payload)
-	// // proto := waterutil.IPv4Protocol(payload)
-	// // logger.Printf("send: src %s, dst %s, protocol %+v, len %d", srcIP, dstIP, proto, len(payload))
-	// _, err := w.ifTun.Write(payload)
-	// if err != nil {
-	// 	return errors.Wrap(err, "write tun error")
-	// }
+	case wire.MessageTypePacket:
+		if err := w.writePacket(msg); err != nil {
+			return err
+		}
+	case wire.MessageTypeRouting:
+		if routing, ok := msg.Payload.(wire.Routing); ok {
+			return w.setupHostRouting(routing.Routings)
+		} else {
+			return errors.Errorf("invalid routing message %+v", msg)
+		}
+	}
 	return nil
 }
 
+
+// Decode
+func (w *TunWire) Decode(msg *wire.Message) error {
+
+	if err := w.readPacket(msg); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (w *TunWire) Close() error {
+	return w.ifTun.Close()
+}
+
+
+func (w *TunWire) readPacket(msg *wire.Message) error {
+	buff :=	make([]byte, tunBuffSize)
+	for {
+		n, err := w.ifTun.Read(buff)
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		if !waterutil.IsIPv4(buff) {
+			logger.Printf("recv: ignore none ipv4 packet len %d", n)
+			continue
+		} else {
+			msg.Type = wire.MessageTypePacket
+			msg.Payload = wire.Packet{
+				Src: waterutil.IPv4Source(buff),
+				Dst: waterutil.IPv4Destination(buff),
+				Data: buff[0:n],
+			}
+			return nil
+		}
+	}
+}
+
+func (w *TunWire) writePacket(msg *wire.Message) error {
+	packete, ok := msg.Payload.(wire.Packet)
+	if !ok {
+		return errors.Errorf("got invalid packet struct %+v", msg.Payload)
+	}
+	if !waterutil.IsIPv4(packete.Data) {
+		logger.Printf("sent: not ipv4 packet len %d", len(packete.Data))
+		return nil
+	}
+	if _, err := w.ifTun.Write(packete.Data); err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+func (w *TunWire) setupHostRouting(routings []net.IPNet) error {
+	// route host traffic to this tun interface
+
+	add := []net.IPNet{}
+	remove := []net.IPNet{}
+	for _, network := range routings {
+		// ignore defult routing
+		netString := network.String()
+		if netString == defaultRouting {
+			continue
+		}
+		// TODO: ignore already contained network
+		add = append(add, network)
+	}
+	if err := setRouting(add, remove, w.gateway.String()); err != nil {
+		return err
+	}
+	return nil
+}
 
 // Tun-wire manager
 type TunWireManager struct {
@@ -114,4 +174,29 @@ func (m *TunWireManager) Dial(endpoint string) error {
 
 func (m *TunWireManager) Protocol() string {
 	return "tun"
+}
+
+func inc(ip net.IP) {
+	for j := len(ip) - 1; j >= 0; j-- {
+		ip[j]++
+		if ip[j] > 0 {
+			break
+		}
+	}
+}
+
+
+// gen a default gateway from cidr address
+func defaultGateway(cidr string) (net.IP, error) {
+	var gateway net.IP 	
+	address, network, err := net.ParseCIDR(cidr)
+	if err != nil {
+		return gateway, errors.WithStack(err)
+	}
+	gateway = network.IP
+	inc(gateway)
+	if gateway.Equal(address) {
+		return gateway, errors.Errorf("%s is reserved for gateway", address.String())
+	}
+	return gateway, nil
 }

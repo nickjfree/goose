@@ -8,7 +8,6 @@ import (
 	"sync"
 	"time"
 	"github.com/pkg/errors"
-	"goose/pkg/route"
 )
 
 var (
@@ -167,30 +166,4 @@ func (t *Tunnel) run() (error) {
 		}
 	}
 	return nil
-}
-
-// setup route
-func (t *Tunnel) SetupRoute(tunnelGateway, serverIp string) {
-	if err := route.SetupRoute(tunnelGateway, serverIp); err != nil {
-		logger.Fatalf("setup route failed %+v", errors.Wrap(err, ""))
-	}
-	logger.Printf("setting up route to %s(%s) successful", tunnelGateway, serverIp)
-	t.tunnelGateway = tunnelGateway
-	t.serverIp = serverIp
-}
-
-// resotre route
-func (t *Tunnel) RestoreRoute() {
-	if err := route.RestoreRoute(t.tunnelGateway, t.serverIp); err != nil {
-		logger.Fatalf("restore route failed: %+v", errors.Wrap(err, ""))
-	}
-	logger.Printf("restoring route success")
-	t.serverIp = ""
-	t.tunnelGateway = ""
-}
-
-func (t *Tunnel) SetupNAT() {
-	if err := route.SetupNAT(); err != nil {
-		logger.Fatalf("setup nat failed: %+v", errors.Wrap(err, ""))
-	}
 }

@@ -24,7 +24,7 @@ type Message struct {
 }
 
 // packet of network traffic
-type Package struct {
+type Packet struct {
 	Src net.IP
 	Dst net.IP
 	Data []byte
@@ -34,15 +34,13 @@ type Package struct {
 type Routing struct {
 	// type
 	Type int
-	// peer's local networks
+	// peer's provided networks
 	Routings []net.IPNet
-	// accepted routing
-	Accepted []net.IPNet
 }
 
 
 func init() {
 	gob.RegisterName("wire.Message", Message{})
-	gob.RegisterName("wire.Package", Package{})
+	gob.RegisterName("wire.Packet",  Packet{})
 	gob.RegisterName("wire.Routing", Routing{})
 }

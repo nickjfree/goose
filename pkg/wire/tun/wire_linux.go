@@ -7,7 +7,7 @@ import (
 	"github.com/songgao/water"
 	"github.com/pkg/errors"
 	
-	"goose/pkg/route"
+	"goose/pkg/utils"
 	"goose/pkg/wire"
 )
 
@@ -24,19 +24,42 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 		logger.Fatal(err)
 	}
 	// check addr is cidr format
-	_, _, err = net.ParseCIDR(addr)
+	address, network, err := net.ParseCIDR(addr)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	// set ip address to the tunnel interface
-	if out, err := route.RunCmd("ip", "addr", "add", addr, "dev", name); err != nil {
+	if out, err := utils.RunCmd("ip", "addr", "add", addr, "dev", name); err != nil {
 		return nil, errors.Wrap(err, string(out))
 	}
 	// bring the tunnel interface up
-	if out, err := route.RunCmd("ip", "link", "set", name, "up"); err != nil {
+	if out, err := utils.RunCmd("ip", "link", "set", name, "up"); err != nil {
 		return nil, errors.Wrap(err, string(out))
+	}
+	gateway, err := defaultGateway(addr)
+	if err != nil {
+		return nil, err
 	}
 	return &TunWire{
 		ifTun: ifTun,
+		address: address,
+		network: *network,
+		gateway: gateway,
 	}, nil
+}
+
+func setRouting(add, remove []net.IPNet, gateway string) error {
+	for _, network := range add {
+		netString := network.String()
+		if out, err := utils.RunCmd("route", "add", "-net", netString, "gw", gateway); err != nil {
+			return errors.Wrap(err, string(out))
+		}
+	}
+	for _, network := range remove {
+		netString := network.String()
+		if out, err := utils.RunCmd("route", "delete", "-net", netString, "gw", gateway); err != nil {
+			return errors.Wrap(err, string(out))
+		}
+	}
+	return nil
 }

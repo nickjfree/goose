@@ -10,7 +10,7 @@ import (
 	"github.com/songgao/water"
 	"github.com/pkg/errors"
 
-	"goose/pkg/route"
+	"goose/pkg/utils"
 	"goose/pkg/wire"
 )
 
@@ -28,14 +28,26 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 	if err != nil {
 		logger.Fatal(err)
 	}
+	address, network, err := net.ParseCIDR(addr)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
 	// set ipaddress
 	if err := setIPAddress(ifTun, addr); err != nil {
 		return nil, errors.Wrap(err, "")
 	}
+	gateway, err := defaultGateway(addr)
+	if err != nil {
+		return nil, err
+	}
 	return &TunWire{
 		ifTun: ifTun,
+		address: address,
+		network: *network,
+		gateway: gateway,
 	}, nil
 }
+
 
 
 func maskString(mask net.IPMask) string {
@@ -51,14 +63,14 @@ func setIPAddress(iface *water.Interface, addr string) error {
 
 	localIP, ipNet, err := net.ParseCIDR(addr)
 	if err != nil {
-		return errors.Wrap(err, "")
+		return errors.WithStack(err)
 	}
 	args := fmt.Sprintf("interface ip set address name=\"%s\" static %s %s none", 
 		iface.Name(), 
 		localIP.String(), 
 		maskString(ipNet.Mask),
 	)
-	if out, err := route.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
+	if out, err := utils.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	logger.Printf("set tunnel ip address to %s", addr)
@@ -66,9 +78,26 @@ func setIPAddress(iface *water.Interface, addr string) error {
 	args = fmt.Sprintf("interface ip set dnsservers name=\"%s\" static 8.8.8.8 primary", 
 		iface.Name(),
 	)
-	if out, err := route.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
+	if out, err := utils.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	logger.Printf("set tunnel dnsservers to 8.8.8.8")
+	return nil
+}
+
+
+func setRouting(add, remove []net.IPNet, gateway string) error {
+	for _, network := range add {
+		netString := network.String()
+		if out, err := utils.RunCmd("route", "add", netString, gateway); err != nil {
+			return errors.Wrap(err, string(out))
+		}
+	}
+	for _, network := range remove {
+		netString := network.String()
+		if out, err := utils.RunCmd("route", "delete", netString, gateway); err != nil {
+			return errors.Wrap(err, string(out))
+		}
+	}
 	return nil
 }
