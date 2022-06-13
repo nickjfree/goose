@@ -1,4 +1,4 @@
-package wire
+package message
 
 import (
 	"encoding/gob"

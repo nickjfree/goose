@@ -38,10 +38,12 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 	}
 	gateway, err := defaultGateway(addr)
 	if err != nil {
+		ifTun.Close()
 		return nil, err
 	}
 	return &TunWire{
 		ifTun: ifTun,
+		name: name,
 		address: address,
 		network: *network,
 		gateway: gateway,

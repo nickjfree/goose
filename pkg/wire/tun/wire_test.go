@@ -8,6 +8,7 @@ import (
 	"sync"
 	"time"
 	"goose/pkg/wire"
+	"goose/pkg/message"
 	"goose/pkg/utils"
 )
 
@@ -34,11 +35,11 @@ func TestConnect(t *testing.T) {
 			}
 		}	
 	} ()
-	if err := wire.Dial("tun", "goose1/192.168.100.2/24"); err != nil {
+	if err := wire.Dial("tun/goose1/192.168.100.2/24"); err != nil {
 		t.Logf("%+v", err)
 		t.Fail()
 	}
-	if err := wire.Dial("tun", "goose2/192.168.101.2/24"); err != nil {
+	if err := wire.Dial("tun/goose2/192.168.101.2/24"); err != nil {
 		t.Logf("%+v", err)
 		t.Fail()
 	}
@@ -52,7 +53,7 @@ func TestConnect(t *testing.T) {
 // test wire read
 func TestTraffic(t *testing.T) {
 
-	ping := make(chan wire.Packet)
+	ping := make(chan message.Packet)
 	// outbount channel reader
 	go func () {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Second * 5)
@@ -65,9 +66,9 @@ func TestTraffic(t *testing.T) {
 				// send routing messages to wire
 				_, ipnet1, _ := net.ParseCIDR("10.1.0.0/16")
 				_, ipnet2, _ := net.ParseCIDR("10.2.2.0/24")
-				msg := wire.Message{
-					Type: wire.MessageTypeRouting,
-					Payload: wire.Routing{
+				msg := message.Message{
+					Type: message.MessageTypeRouting,
+					Payload: message.Routing{
 						Routings: []net.IPNet{*ipnet1, *ipnet2},
 					},
 				}
@@ -83,8 +84,8 @@ func TestTraffic(t *testing.T) {
 						t.Fail()
 					}
 					t.Logf("got one packet %+v", msg)
-					if msg.Type == wire.MessageTypePacket {
-						packet := msg.Payload.(wire.Packet)
+					if msg.Type == message.MessageTypePacket {
+						packet := msg.Payload.(message.Packet)
 						if packet.Dst.Equal(dst) {
 							ping <- packet
 						}
@@ -99,7 +100,7 @@ func TestTraffic(t *testing.T) {
 		}	
 	} ()
 	// dial wire
-	if err := wire.Dial("tun", "goose1/192.168.100.3/24"); err != nil {
+	if err := wire.Dial("tun/goose1/192.168.100.3/24"); err != nil {
 		t.Logf("%+v", err)
 		t.Fail()
 	}

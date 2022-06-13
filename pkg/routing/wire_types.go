@@ -1,4 +1,4 @@
-package connector
+package routing
 
 import (
 	_ "goose/pkg/wire/ipfs"

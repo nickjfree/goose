@@ -2,13 +2,13 @@ package main
 
 import (
 	// "context"
+	"fmt"
 	"flag"
 	"log"
 	"os"
 	"os/signal"
 	"goose/pkg/tunnel"
-	"goose/pkg/wire"
-	"goose/pkg/connector"
+	"goose/pkg/routing"
 )
 
 
@@ -68,7 +68,7 @@ func main() {
 	flag.StringVar(&endpoint, "e", "", ENDPOINT_HELP)
 	flag.BoolVar(&isClient, "c", false, "flag. run as client. if not set, it will run as a server")
 	flag.StringVar(&protocol, "p", "ipfs", PROTOCOL_HELP)
-	flag.StringVar(&localAddr, "local", "192.168.100.1/24", LOCAL_HELP)
+	flag.StringVar(&localAddr, "local", "192.168.100.2/24", LOCAL_HELP)
 	flag.StringVar(&namespace, "n", "", "namespace")
 	flag.Parse()
 
@@ -76,10 +76,19 @@ func main() {
 	t := tunnel.NewTunSwitch()
 	go func() { logger.Printf("tunnel quit: %s", <- t.Start()) } ()
 
-	go connector.RunTestLoop()
-
-	wire.Dial("ipfs", endpoint)
-
+	endpoint := fmt.Sprintf("%s/%s", protocol, endpoint)
+	r := routing.NewRouter()
+	connector, err := routing.NewConnector(r)
+	if err != nil {
+		logger.Fatal(err)
+	}
+	// setup tunnel
+	tunnel := fmt.Sprintf("tun/%s/%s", "goose", localAddr)
+	connector.ConnectEndpoint(tunnel)
+	// connect to server
+	if isClient {
+		connector.ConnectEndpoint(endpoint)
+	}
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
 	<- c

@@ -5,10 +5,11 @@ import (
 	// "bytes"
 	"context"
 	"encoding/gob"
+	"fmt"
+	"net"
 	// "io"
 	"io/ioutil"
 	"log"
-	"fmt"
 	"encoding/json"
 	"strings"
 	"time"
@@ -31,6 +32,7 @@ import (
 
 	"github.com/pkg/errors"
 	"goose/pkg/wire"
+	"goose/pkg/message"
 )
 
 // ipfs bootstrap node
@@ -83,6 +85,8 @@ type IPFSWire struct {
 	wire.BaseWire
 	// stream
 	s network.Stream
+	// address
+	address net.IP
 	// encoder and decoer
 	encoder *gob.Encoder 
 	decoder *gob.Decoder
@@ -91,8 +95,20 @@ type IPFSWire struct {
 	closeFunc func () error
 }
 
+
+func (w *IPFSWire) Endpoint() string {
+	return fmt.Sprintf("ipfs/%s", w.s.Conn().RemotePeer())
+}
+
+func (w *IPFSWire) Address() net.IP {
+	peerAddr := w.s.Conn().RemoteMultiaddr()
+	ip, _ := peerAddr.ValueForProtocol(ma.P_IP4)
+	return net.ParseIP(ip)
+}
+
+
 // Encode
-func (w *IPFSWire) Encode(msg *wire.Message) error {
+func (w *IPFSWire) Encode(msg *message.Message) error {
 	if err := w.encoder.Encode(msg); err != nil {
 		return errors.WithStack(err)
 	}
@@ -100,7 +116,7 @@ func (w *IPFSWire) Encode(msg *wire.Message) error {
 }
 
 // Decode
-func (w *IPFSWire) Decode(msg *wire.Message) error {
+func (w *IPFSWire) Decode(msg *message.Message) error {
 	if err := w.decoder.Decode(msg); err != nil {
 		return errors.WithStack(err)
 	}
@@ -187,7 +203,6 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 			cancel()
 			return nil
 		}
-		logger.Printf("outbound new stream %+v", s)
 		// got an outbound wire
 		m.Out <- &IPFSWire{
 			s: s,

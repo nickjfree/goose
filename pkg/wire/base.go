@@ -3,10 +3,13 @@ package wire
 
 import (
 	"log"
+	"net"
 	"os"
 	"sync"
+	"strings"
+
 	"github.com/pkg/errors"
-	"goose/pkg/tunnel"
+	"goose/pkg/message"
 )
 
 
@@ -28,35 +31,38 @@ var (
 
 // wire interface
 type Wire interface {
+	// endpoint
+	Endpoint() string
 	// addr
-	Addr() string
+	Address() net.IP
 	// Encode
-	Encode(*Message) error
+	Encode(*message.Message) error
 	// Decode
-	Decode(*Message) error
+	Decode(*message.Message) error
 	// close
 	Close() error
 }
 
 
 // base wire
-type BaseWire struct {
-	// the connected port
-	port *tunnel.Port
-}
+type BaseWire struct {}
 
 
-func (w *BaseWire) Addr() string {
+func (w *BaseWire) Endpoint() string {
 	return ""
 }
 
+func (w *BaseWire) Address() net.IP {
+	return net.IP{}
+}
+
 // Encode
-func (w *BaseWire) Encode(msg *Message) error {
+func (w *BaseWire) Encode(msg *message.Message) error {
 	return nil
 }
 
 // Decode
-func (w *BaseWire) Decode(msg *Message) error {
+func (w *BaseWire) Decode(msg *message.Message) error {
 	return nil
 }
 
@@ -105,7 +111,12 @@ func RegisterWireManager(w WireManager) error {
 }
 
 
-func Dial(protocol string, endpoint string) error {
+func Dial(endpoint string) error {
+
+	sep := strings.SplitN(endpoint, "/", 2)
+	protocol := sep[0]
+	endpoint = sep[1]
+
 	managersLock.Lock()
 	manager, ok := managers[protocol]
 	managersLock.Unlock()

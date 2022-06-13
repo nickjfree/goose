@@ -12,6 +12,7 @@ import (
 	"github.com/pkg/errors"
 
 	"goose/pkg/wire"
+	"goose/pkg/message"
 )
 
 var (
@@ -41,29 +42,38 @@ type TunWire struct {
 	wire.BaseWire
 	// tun interface
 	ifTun *water.Interface
+	// name
+	name string
 	// address
 	address net.IP
 	// gateway
 	gateway net.IP
 	// local network
 	network net.IPNet
-	// provided network
-	providedNetwork []net.IPNet
-	// accepted network
-	acceptedNetwork []net.IPNet
+}
+
+
+func (w *TunWire) Endpoint() string {
+	maskSize, _ := w.network.Mask.Size()
+	return fmt.Sprintf("tun/%s/%s/%d", w.name, w.address.String(), maskSize)
+}
+
+
+func (w *TunWire) Address() net.IP {
+	return w.address
 }
 
 // Encode
-func (w *TunWire) Encode(msg *wire.Message) error {
+func (w *TunWire) Encode(msg *message.Message) error {
 
 	switch msg.Type {
 
-	case wire.MessageTypePacket:
+	case message.MessageTypePacket:
 		if err := w.writePacket(msg); err != nil {
 			return err
 		}
-	case wire.MessageTypeRouting:
-		if routing, ok := msg.Payload.(wire.Routing); ok {
+	case message.MessageTypeRouting:
+		if routing, ok := msg.Payload.(message.Routing); ok {
 			return w.setupHostRouting(routing.Routings)
 		} else {
 			return errors.Errorf("invalid routing message %+v", msg)
@@ -74,7 +84,7 @@ func (w *TunWire) Encode(msg *wire.Message) error {
 
 
 // Decode
-func (w *TunWire) Decode(msg *wire.Message) error {
+func (w *TunWire) Decode(msg *message.Message) error {
 
 	if err := w.readPacket(msg); err != nil {
 		return err
@@ -87,7 +97,7 @@ func (w *TunWire) Close() error {
 }
 
 
-func (w *TunWire) readPacket(msg *wire.Message) error {
+func (w *TunWire) readPacket(msg *message.Message) error {
 	buff :=	make([]byte, tunBuffSize)
 	for {
 		n, err := w.ifTun.Read(buff)
@@ -98,8 +108,8 @@ func (w *TunWire) readPacket(msg *wire.Message) error {
 			logger.Printf("recv: ignore none ipv4 packet len %d", n)
 			continue
 		} else {
-			msg.Type = wire.MessageTypePacket
-			msg.Payload = wire.Packet{
+			msg.Type = message.MessageTypePacket
+			msg.Payload = message.Packet{
 				Src: waterutil.IPv4Source(buff),
 				Dst: waterutil.IPv4Destination(buff),
 				Data: buff[0:n],
@@ -109,8 +119,8 @@ func (w *TunWire) readPacket(msg *wire.Message) error {
 	}
 }
 
-func (w *TunWire) writePacket(msg *wire.Message) error {
-	packete, ok := msg.Payload.(wire.Packet)
+func (w *TunWire) writePacket(msg *message.Message) error {
+	packete, ok := msg.Payload.(message.Packet)
 	if !ok {
 		return errors.Errorf("got invalid packet struct %+v", msg.Payload)
 	}
@@ -157,12 +167,12 @@ func newTunWireManager() *TunWireManager {
 
 func (m *TunWireManager) Dial(endpoint string) error {
 
-	seg := strings.Split(endpoint, "/")
-	if len(seg) != 3 {
+	seg := strings.SplitN(endpoint, "/", 2)
+	if len(seg) != 2 {
 		return errors.Errorf("invalid tun endpoint %s", endpoint)
 	}
 	name := seg[0]
-	address := fmt.Sprintf("%s/%s", seg[1], seg[2])
+	address := seg[1]
 	
 	w, err := NewTunWire(name, address)
 	if err != nil {
