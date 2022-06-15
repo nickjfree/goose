@@ -35,7 +35,9 @@ type Routing struct {
 	// type
 	Type int
 	// peer's provided networks
-	Routings []net.IPNet
+	Networks []net.IPNet
+	// message
+	Message string
 }
 
 

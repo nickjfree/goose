@@ -284,6 +284,8 @@ func (p *Port) String() string {
 // close port
 func (p *Port) handleOutput() error {
 	var err error
+	// close wire when done
+	defer p.w.Close()
 	for {
 		select {
 		case packet := <- p.output:
@@ -303,8 +305,6 @@ func (p *Port) handleOutput() error {
 				return err
 			}
 		case <- p.ctx.Done():
-			// close wire
-			p.w.Close()
 			return errors.Errorf("port(%s) closed", p.w.Endpoint())
 		}
 	}

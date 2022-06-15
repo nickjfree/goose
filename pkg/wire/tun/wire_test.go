@@ -69,7 +69,7 @@ func TestTraffic(t *testing.T) {
 				msg := message.Message{
 					Type: message.MessageTypeRouting,
 					Payload: message.Routing{
-						Routings: []net.IPNet{*ipnet1, *ipnet2},
+						Networks: []net.IPNet{*ipnet1, *ipnet2},
 					},
 				}
 				if err := w.Encode(&msg); err != nil {

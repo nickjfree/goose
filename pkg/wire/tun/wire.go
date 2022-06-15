@@ -74,7 +74,10 @@ func (w *TunWire) Encode(msg *message.Message) error {
 		}
 	case message.MessageTypeRouting:
 		if routing, ok := msg.Payload.(message.Routing); ok {
-			return w.setupHostRouting(routing.Routings)
+			if routing.Type == message.RoutingRegisterFailed {
+				return errors.Errorf("register routing failed %s", routing.Message)
+			}
+			return w.setupHostRouting(routing.Networks)
 		} else {
 			return errors.Errorf("invalid routing message %+v", msg)
 		}
@@ -105,7 +108,7 @@ func (w *TunWire) readPacket(msg *message.Message) error {
 			return errors.WithStack(err)
 		}
 		if !waterutil.IsIPv4(buff) {
-			logger.Printf("recv: ignore none ipv4 packet len %d", n)
+			// logger.Printf("recv: ignore none ipv4 packet len %d", n)
 			continue
 		} else {
 			msg.Type = message.MessageTypePacket
@@ -134,12 +137,12 @@ func (w *TunWire) writePacket(msg *message.Message) error {
 	return nil
 }
 
-func (w *TunWire) setupHostRouting(routings []net.IPNet) error {
+func (w *TunWire) setupHostRouting(networks []net.IPNet) error {
 	// route host traffic to this tun interface
 
 	add := []net.IPNet{}
 	remove := []net.IPNet{}
-	for _, network := range routings {
+	for _, network := range networks {
 		// ignore defult routing
 		netString := network.String()
 		if netString == defaultRouting {

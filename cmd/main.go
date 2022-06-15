@@ -77,7 +77,7 @@ func main() {
 	go func() { logger.Printf("tunnel quit: %s", <- t.Start()) } ()
 
 	endpoint := fmt.Sprintf("%s/%s", protocol, endpoint)
-	r := routing.NewRouter()
+	r := routing.NewRouter(localAddr)
 	connector, err := routing.NewConnector(r)
 	if err != nil {
 		logger.Fatal(err)
