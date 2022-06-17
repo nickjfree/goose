@@ -64,8 +64,8 @@ func TestTraffic(t *testing.T) {
 				defer w.Close()
 				t.Logf("outbound wire %+v", w)
 				// send routing messages to wire
-				_, ipnet1, _ := net.ParseCIDR("10.1.0.0/16")
-				_, ipnet2, _ := net.ParseCIDR("10.2.2.0/24")
+				_, ipnet1, _ := net.ParseCIDR("20.1.0.0/16")
+				_, ipnet2, _ := net.ParseCIDR("20.2.2.0/24")
 				msg := message.Message{
 					Type: message.MessageTypeRouting,
 					Payload: message.Routing{
@@ -86,7 +86,7 @@ func TestTraffic(t *testing.T) {
 					t.Fail()
 				}
 				// expect to find the ping message
-				dst, _, _ := net.ParseCIDR("10.2.2.1/32")
+				dst, _, _ := net.ParseCIDR("20.2.2.1/32")
 				for {
 					if err := w.Decode(&msg); err != nil {
 						t.Logf("%+v", err)
@@ -116,7 +116,7 @@ func TestTraffic(t *testing.T) {
 	// ping the wire.
 	// fake ip, so ignore none zero return code
 	go func () {
-		if out, err := utils.RunCmd("ping", "-c", "30", "10.2.2.1"); err != nil {
+		if out, err := utils.RunCmd("ping", "-c", "30", "20.2.2.1"); err != nil {
 			t.Logf("%+v %s", err, out)
 		}
 	} ()
