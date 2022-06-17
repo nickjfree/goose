@@ -50,6 +50,8 @@ type TunWire struct {
 	gateway net.IP
 	// local network
 	network net.IPNet
+	// current routings
+	routings []net.IPNet
 }
 
 
@@ -77,7 +79,7 @@ func (w *TunWire) Encode(msg *message.Message) error {
 			if routing.Type == message.RoutingRegisterFailed {
 				return errors.Errorf("register routing failed %s", routing.Message)
 			}
-			return w.setupHostRouting(routing.Networks)
+			return w.setupHostRouting(routing.Routings)
 		} else {
 			return errors.Errorf("invalid routing message %+v", msg)
 		}
@@ -137,23 +139,56 @@ func (w *TunWire) writePacket(msg *message.Message) error {
 	return nil
 }
 
-func (w *TunWire) setupHostRouting(networks []net.IPNet) error {
+func (w *TunWire) setupHostRouting(routings []message.RoutingEntry) error {
 	// route host traffic to this tun interface
 
 	add := []net.IPNet{}
 	remove := []net.IPNet{}
-	for _, network := range networks {
+	newRoutings := []net.IPNet{}
+	// routings to add
+	for _, routing := range routings {
 		// ignore defult routing
-		netString := network.String()
+		netString := routing.Network.String()
 		if netString == defaultRouting {
 			continue
 		}
-		// TODO: ignore already contained network
-		add = append(add, network)
+		newRoutings = append(newRoutings, routing.Network)
+		skip := false
+		for _, exists := range w.routings {
+			// skip already exists routings
+			if netString == exists.String() {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		add = append(add, routing.Network)
+	}
+	//routings to remove
+	for _, exists := range w.routings {
+		// ignore defult routing
+		netString := exists.String()
+
+		skip := false
+		for _, routing := range routings {
+			// skip updated routings
+			if netString == routing.Network.String() {
+				skip = true
+				break
+			}
+		}
+		if skip {
+			continue
+		}
+		remove = append(remove, exists)
 	}
 	if err := setRouting(add, remove, w.gateway.String()); err != nil {
 		return err
 	}
+	// update routings
+	w.routings = newRoutings
 	return nil
 }
 

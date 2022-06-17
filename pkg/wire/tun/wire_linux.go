@@ -53,13 +53,13 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 func setRouting(add, remove []net.IPNet, gateway string) error {
 	for _, network := range add {
 		netString := network.String()
-		if out, err := utils.RunCmd("route", "add", "-net", netString, "gw", gateway); err != nil {
+		if out, err := utils.RunCmd("ip", "route", "add", netString, "via", gateway); err != nil {
 			return errors.Wrap(err, string(out))
 		}
 	}
 	for _, network := range remove {
 		netString := network.String()
-		if out, err := utils.RunCmd("route", "delete", "-net", netString, "gw", gateway); err != nil {
+		if out, err := utils.RunCmd("ip", "route", "delete", netString, "via", gateway); err != nil {
 			return errors.Wrap(err, string(out))
 		}
 	}

@@ -30,12 +30,21 @@ type Packet struct {
 	Data []byte
 }
 
+
+// routing entry 
+type RoutingEntry struct {
+	// network
+	Network net.IPNet
+	// metric
+	Metric int
+}
+
 // routing register msg
 type Routing struct {
 	// type
 	Type int
-	// peer's provided networks
-	Networks []net.IPNet
+	// peer's provided routings
+	Routings []RoutingEntry
 	// message
 	Message string
 }

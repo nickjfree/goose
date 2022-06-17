@@ -216,16 +216,16 @@ func (c *Connector) handleConnection() error {
 
 func (p *Port) ReadPacket(packet *message.Packet) error {
 	
-	msg := message.Message{}
 	for {
+			msg := message.Message{}
 			if err := p.w.Decode(&msg); err != nil {
-			return err
-		}
+				return err
+			}
 		switch msg.Type {
 		case message.MessageTypePacket:
 			if p, ok := msg.Payload.(message.Packet); ok {
 				*packet = p
-				break
+				return nil
 			} else {
 				return errors.Errorf("invalid packet %+v", msg)
 			}

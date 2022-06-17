@@ -7,7 +7,6 @@ import (
 	"log"
 	"os"
 	"os/signal"
-	"goose/pkg/tunnel"
 	"goose/pkg/routing"
 )
 
@@ -72,20 +71,19 @@ func main() {
 	flag.StringVar(&namespace, "n", "", "namespace")
 	flag.Parse()
 
-	// set up tun device
-	t := tunnel.NewTunSwitch()
-	go func() { logger.Printf("tunnel quit: %s", <- t.Start()) } ()
 
 	endpoint := fmt.Sprintf("%s/%s", protocol, endpoint)
-	r := routing.NewRouter(localAddr)
+	tunnel := fmt.Sprintf("tun/%s/%s", "goose", localAddr)
+	// create router
+	r := routing.NewRouter(localAddr, routing.WithMaxMetric(4))
+	// create connector
 	connector, err := routing.NewConnector(r)
 	if err != nil {
 		logger.Fatal(err)
 	}
 	// setup tunnel
-	tunnel := fmt.Sprintf("tun/%s/%s", "goose", localAddr)
 	connector.ConnectEndpoint(tunnel)
-	// connect to server
+	// connect to remote
 	if isClient {
 		connector.ConnectEndpoint(endpoint)
 	}
