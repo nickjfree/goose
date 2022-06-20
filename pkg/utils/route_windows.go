@@ -124,54 +124,37 @@ func waitTunnelUp(tunnelGateway string) error {
 }
 
 // set route for server
-func setServerRoute(serverIp string) error {
+func SetWireRoute(serverIp string) error {
 	if out, err := RunCmd("route", "add", fmt.Sprintf("%s/32", serverIp), defaultGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	return nil
 }
 
-// set traffic route
-func setTrafficRoute(tunnelGateway string) error {
-	// set 0.0.0.0 to use tunnelGateway
-	waitTunnelUp(tunnelGateway)
-	if out, err := RunCmd("route", "add", "0.0.0.0/0", tunnelGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	// clear old traffic route
-	if out, err := RunCmd("route", "delete", "0.0.0.0/0", defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
-// restore network
-func RestoreRoute(tunnelGateway string, serverIp string) error {
-	// set 0.0.0.0 to use virtual gateway
-	if out, err := RunCmd("route", "add", "0.0.0.0/0", defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	// clear old traffic route
-	if out, err := RunCmd("route", "delete", "0.0.0.0/0", tunnelGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	// remove server route
+// restore route for server
+func RestoreWireRoute(serverIp string) error {
 	if out, err := RunCmd("route", "delete", fmt.Sprintf("%s/32", serverIp), defaultGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	return nil
 }
 
-// setup route
-func SetupRoute(tunnelGateway string, serverIp string) error {
-	if err := setServerRoute(serverIp); err != nil {
-		return err
-	}
-	if err := setTrafficRoute(tunnelGateway); err != nil {
-		return err
+// remove default route
+func RemoveDefaultRoute() error {
+	if out, err := RunCmd("route", "delete", "0.0.0.0/0", defaultGateway); err != nil {
+		return errors.Wrap(err, string(out))
 	}
 	return nil
 }
+
+// restore default route
+func RestoreDefaultRoute() error {
+	if out, err := RunCmd("route", "add", "0.0.0.0/0", defaultGateway); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	return nil
+}
+
 
 // nat rules
 func SetupNAT() error {

@@ -39,6 +39,8 @@ type Wire interface {
 	Encode(*message.Message) error
 	// Decode
 	Decode(*message.Message) error
+	// set route
+	SetRoute() error
 	// close
 	Close() error
 }
@@ -63,6 +65,11 @@ func (w *BaseWire) Encode(msg *message.Message) error {
 
 // Decode
 func (w *BaseWire) Decode(msg *message.Message) error {
+	return nil
+}
+
+// SetRoute
+func (w *BaseWire)  SetRoute() error {
 	return nil
 }
 
@@ -123,7 +130,7 @@ func Dial(endpoint string) error {
 
 	if ok {
 		if err := manager.Dial(endpoint); err != nil {
-			logger.Printf("dial wire(%s) failed %+v", endpoint, err)
+			logger.Printf("dial wire(%s) failed %s", endpoint, err)
 			return err
 		}
 		return nil

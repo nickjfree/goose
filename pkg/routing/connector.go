@@ -24,14 +24,33 @@ const (
 	dialConcurrency = 8
 	// port send buffer size
 	portBufferSize = 2048
+	// max retries 
+	connMaxRetries = 32
+
+	// wire status
+	statusUnknown = 0
+	statusConnected = 1
+	statusConnecting = 2
+	statusFailed = 3
+	
 )
+
+
+// endpoint state
+type endpointState struct {
+	// wire
+	wire wire.Wire
+	// status
+	status int 
+	// failed times	
+	failed int
+}
+
 
 // wire connector
 type Connector struct {
-	// connected wire
-	connected map[string]wire.Wire
-	// failed
-	failed map[string]int
+	// endpoint stats
+	endpointStats map[string]endpointState
 	// wire status lock
 	lock sync.Mutex
 	// connection requests
@@ -61,8 +80,7 @@ type Port struct {
 
 func NewConnector(router *Router) (*Connector, error) {
 	c := &Connector{
-		connected: make(map[string]wire.Wire),
-		failed: make(map[string]int),
+		endpointStats: make(map[string]endpointState),
 		requests: make(chan string, dialConcurrency),
 		router: router,
 	}
@@ -78,12 +96,89 @@ func (c *Connector) ConnectEndpoint(endpoint string) {
 
 
 func (c *Connector) CloseEndpoint(endpoint string, reconnect bool) {
-	c.lock.Lock()
-	delete(c.connected, endpoint)
-	c.lock.Unlock()
 	if reconnect {
-		c.requests <- endpoint
+		c.setFailed(endpoint)
+	} else {
+		c.setUnknow(endpoint)
 	}
+}
+
+func (c *Connector) isConnected(endpoint string) bool {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if state, ok := c.endpointStats[endpoint]; ok {
+		return state.status == statusConnected
+	}
+	return false
+}
+
+func (c *Connector) isConnecting(endpoint string) bool {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if state, ok := c.endpointStats[endpoint]; ok {
+		return state.status == statusConnecting
+	}
+	return false
+}
+
+func (c *Connector) isFailed(endpoint string) bool {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	if state, ok := c.endpointStats[endpoint]; ok {
+		return state.status == statusFailed
+	}
+	return false
+}
+
+
+func (c *Connector) setConnected(endpoint string, w wire.Wire) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	state := endpointState{
+		wire: w,
+		status: statusConnected,
+		failed: 0,
+	}
+	c.endpointStats[endpoint] = state
+}
+
+func (c *Connector) setFailed(endpoint string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	state, ok := c.endpointStats[endpoint]
+	if ok {
+		state.status = statusFailed
+		state.failed += 1
+	} else {
+		state = endpointState{
+			wire: nil,
+			status: statusFailed,
+			failed: 1,
+		}
+	}
+	c.endpointStats[endpoint] = state
+}
+
+func (c *Connector) setConnecting(endpoint string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	state, ok := c.endpointStats[endpoint]
+	if ok {
+		state.status = statusConnecting
+	} else {
+		state = endpointState{
+			wire: nil,
+			status: statusConnecting,
+			failed: 0,
+		}
+	}
+	c.endpointStats[endpoint] = state
+}
+
+func (c *Connector) setUnknow(endpoint string) {
+	c.lock.Lock()
+	defer c.lock.Unlock()
+	delete(c.endpointStats, endpoint)
 }
 
 
@@ -121,12 +216,18 @@ func (c *Connector) Start() error {
 	for i := 1; i < dialConcurrency; i++ {
 		go func () {
 			for {
-				endpoint := <- c.requests
-				if err := c.connect(endpoint); err != nil {
-					logger.Printf("connection failed %+v", err)
-					c.lock.Lock()
-					c.failed[endpoint] += 1
-					c.lock.Unlock()
+				select {
+				case endpoint := <- c.requests:
+					if c.isConnecting(endpoint) {
+						// already connecting
+						continue
+					}
+					if err := c.connect(endpoint); err != nil {
+						c.setFailed(endpoint)
+						logger.Printf("connection failed %+v", err)
+					}
+				case <- c.router.Done():
+					return
 				}
 			}
 		} ()
@@ -140,8 +241,8 @@ func (c *Connector) Start() error {
 			requests := []string{}
 			// find connection to retry
 			c.lock.Lock()
-			for endpoint, failCount := range c.failed {
-				if failCount > 0 {
+			for endpoint, state := range c.endpointStats {
+				if state.status == statusFailed && state.failed < connMaxRetries {
 					requests = append(requests, endpoint)
 				}
 			}
@@ -149,6 +250,8 @@ func (c *Connector) Start() error {
 			for i, _ := range requests {
 				c.requests <- requests[i]
 			}
+		case <- c.router.Done():
+			return nil
 		}
 	}
 	return nil
@@ -158,14 +261,11 @@ func (c *Connector) Start() error {
 // connect the wire
 func (c *Connector) connect(endpoint string) error {
 
-	c.lock.Lock()
-	_, ok := c.connected[endpoint]	
-	c.lock.Unlock()
-	
-	if ok {
+	if c.isConnected(endpoint) || c.isConnecting(endpoint) {
 		// wire already connected
-		return errors.Errorf("ignore already connected wire %s", endpoint)
+		return nil
 	}
+	c.setConnecting(endpoint)
 	// connecto the wire
 	if err := wire.Dial(endpoint); err != nil {
 		return err
@@ -175,23 +275,28 @@ func (c *Connector) connect(endpoint string) error {
 
 // handle new wire
 func (c *Connector) handleNewWire(w wire.Wire, reconnect bool) error {
-	c.lock.Lock()
-	defer c.lock.Unlock()
-
+	
 	endpoint := w.Endpoint()
-	_, ok := c.connected[endpoint]
-	if ok {
+	// find exists wiew connection
+	if c.isConnected(endpoint) {
 		// close it
 		w.Close()
 		return errors.Errorf("ignore already connected wire %s", endpoint)
 	}
+
 	// add wire to router
 	port := c.newPort(w, reconnect)
 	if err := c.router.RegisterPort(port); err != nil {
 		port.Close()
+		return err
 	}
-	c.connected[endpoint] = w
-	delete(c.failed, endpoint)
+	// set up route for wire
+	if err := w.SetRoute(); err != nil {
+		port.Close()
+		return err
+	}
+	// mark this wire as connected
+	c.setConnected(endpoint, w)
 	logger.Printf("connected to %s", endpoint)
 	return nil
 }
@@ -206,6 +311,8 @@ func (c *Connector) handleConnection() error {
 			err = c.handleNewWire(w, false)
 		case w := <- wire.Out():
 			err = c.handleNewWire(w, true)
+		case <- c.router.Done():
+			return nil
 		}
 		if err != nil {
 			logger.Printf("handle connection %+v", err)
@@ -279,7 +386,6 @@ func (p *Port) Close() error {
 func (p *Port) String() string {
 	return fmt.Sprintf("%s@%s", p.w.Endpoint(), p.w.Address().String())
 }
-
 
 // close port
 func (p *Port) handleOutput() error {

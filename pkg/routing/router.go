@@ -12,6 +12,7 @@ import (
 	"github.com/yl2chen/cidranger"
 
 	"goose/pkg/message"
+	"goose/pkg/utils"
 )
 
 const (
@@ -67,11 +68,13 @@ type Router struct {
 	routeTable cidranger.Ranger
 	// max metric allowed
 	maxMetric int
+	// closed
+	closed chan struct{}
 }
 
 
 // router option
-type option func (r *Router) error
+type Option func (r *Router) error
 
 // max metric allowd for this rouer
 func WithMaxMetric(metric int) func (r *Router) error {
@@ -88,15 +91,21 @@ func WithForward(forwardCIDRs ...string) func (r *Router) error {
 		for _, cidr := range forwardCIDRs {
 			_, network, err := net.ParseCIDR(cidr)
 			if err != nil {
-				logger.Fatalf("%+v", errors.WithStack(err))
+				return errors.WithStack(err)
 			}
 			r.localNets = append(r.localNets, *network)
+		}
+		// set up nat
+		if len(forwardCIDRs) > 0 {
+			if err := utils.SetupNAT(); err != nil {
+				return err
+			}
 		}
 		return nil
 	}
 }
 
-func NewRouter(localcidr string, opts ...option) *Router {
+func NewRouter(localcidr string, opts ...Option) *Router {
 	localNets := []net.IPNet{}
 	// ipaddress
 	address, _, err := net.ParseCIDR(localcidr)
@@ -112,6 +121,7 @@ func NewRouter(localcidr string, opts ...option) *Router {
 		portStats: make(map[*Port]portState),
 		routeTable: cidranger.NewPCTrieRanger(),
 		localNets: localNets,
+		closed: make(chan struct{}),
 	}
 	for _, opt := range opts {
 		if err := opt(r); err != nil {
@@ -145,7 +155,6 @@ func (r *Router) RegisterPort(p *Port) error {
 // update routing tables for this port
 func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 	// log the peer provided networks
-	logger.Printf("peer routing: %s(%s) provides %+v", p, routing.Message, routing.Routings)
 	err := func() error {
 		r.lock.Lock()
 		defer r.lock.Unlock()
@@ -229,7 +238,7 @@ func (r *Router) FindDestPort(packet message.Packet) (*Port, error) {
 		return nil, errors.WithStack(err)
 	}
 	var targetEntry	*routingEntry
-	maskLen := 0
+	maskLen := -1
 	for _, e := range containingNetworks {
 		if entry, ok := e.(*routingEntry); ok {
 			n, _ := entry.network.Mask.Size()
@@ -245,29 +254,44 @@ func (r *Router) FindDestPort(packet message.Packet) (*Port, error) {
 	return nil, nil
 }
 
+// Close the router
+func (r *Router) Close() {
+	close(r.closed)
+}
+
+
+func (r *Router) Done() <- chan struct{} {
+	return r.closed
+}
+
 func (r *Router) handleTraffic(p *Port) error {
 
 	defer p.Close()	
 	for {
-		packet := message.Packet{}
-		if err := p.ReadPacket(&packet); err != nil {
-			return err
-		}
-		// routing 
-		target, err := r.FindDestPort(packet)
-		if err != nil {
-			return err
-		}
-		if target != nil {
-			if err := target.WritePacket(&packet); err != nil {
-				// target port too slow or dead. we should close it. or it will slowdown everyone
-				logger.Printf("error relaying packet to port(%s). too slow. close it: %+v", p, err)
-				target.Close()
-				return nil
+		select {
+		case <- r.closed:
+			return nil
+		default:
+			packet := message.Packet{}
+			if err := p.ReadPacket(&packet); err != nil {
+				return err
 			}
-		} else {
-			// TODO: record not routed dst ip
-			// logger.Printf("Send packet %+v, no destination\n", packet)
+			// routing 
+			target, err := r.FindDestPort(packet)
+			if err != nil {
+				return err
+			}
+			if target != nil {
+				if err := target.WritePacket(&packet); err != nil {
+					// target port too slow or dead. we should close it. or it will slowdown everyone
+					logger.Printf("error relaying packet to port(%s). too slow. close it: %+v", p, err)
+					target.Close()
+					return nil
+				}
+			} else {
+				// TODO: record not routed dst ip
+				// logger.Printf("Send packet %+v, no destination\n", packet)
+			}
 		}
 	}
 }
@@ -403,6 +427,9 @@ func (r *Router) background() {
 			if err := r.refreshRoutings(); err != nil {
 				logger.Printf("refresh routing failed with: %+v", err)
 			}
+		case <- r.closed:
+			logger.Printf("router closed")
+			return
 		}
 	}
 }

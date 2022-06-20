@@ -53,12 +53,24 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 func setRouting(add, remove []net.IPNet, gateway string) error {
 	for _, network := range add {
 		netString := network.String()
+		if netString == defaultRouting {
+			// redirect all traffic to tunnel
+			if err := utils.RemoveDefaultRoute(); err != nil {
+				return err
+			}
+		}
 		if out, err := utils.RunCmd("ip", "route", "add", netString, "via", gateway); err != nil {
 			return errors.Wrap(err, string(out))
 		}
 	}
 	for _, network := range remove {
 		netString := network.String()
+		if netString == defaultRouting {
+			// restore traffic
+			if err := utils.RestoreDefaultRoute(); err != nil {
+				return err
+			}
+		}
 		if out, err := utils.RunCmd("ip", "route", "delete", netString, "via", gateway); err != nil {
 			return errors.Wrap(err, string(out))
 		}

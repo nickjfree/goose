@@ -7,46 +7,27 @@ import (
 	"log"
 	"os"
 	"os/signal"
+	"strings"
 	"goose/pkg/routing"
 )
 
 
 var (
 	logger = log.New(os.Stdout, "logger: ", log.Lshortfile)
-	// run as client
-	isClient = false
 	// remote http1.1/http3 endpoint or libp2p peerid
-	endpoint = ""
-	// protocl
-	protocol = ""
+	endpoints = ""
 	// local addr
 	localAddr = ""
+	// forward
+	forward = ""
 	// namespace 
 	namespace = ""
 )
 
 
 const (
-	PROTOCOL_HELP = `
-transport protocol.
-
-options: http/http3/ipfs
-
-http: 
-	Client and server communicate through an upgraded http1.1 protocol. (HTTP 101 Switching Protocol)
-	Can be used with Cloudflare
-http3: 
-	Client and server communicate through HTTP3 stream
-	faster then http1.1 but doesn't support Cloudflare for now
-ipfs:
-	Client and server communicate through a libp2p stream. 
-	With some cool features:
-	Server discovery, client can search for random servers to connect through the public IPFS network
-	Hole puching service, client and server can both run behind their NAT firewalls. NO PUBLIC IP NEEDED
-`
-
 	ENDPOINT_HELP = `
-remote server endpoint.
+comma separated remote endpoints.
 
 for http/http3 protocols. this should be a http url of the goose server.
 for ipfs protocols, this should be a libp2p PeerID. If empty, the client will try to find a random goose server in the network
@@ -61,21 +42,24 @@ if the error message shows someone else is using the same ip address, please cha
 )
 
 
-
 func main() {
 
-	flag.StringVar(&endpoint, "e", "", ENDPOINT_HELP)
-	flag.BoolVar(&isClient, "c", false, "flag. run as client. if not set, it will run as a server")
-	flag.StringVar(&protocol, "p", "ipfs", PROTOCOL_HELP)
-	flag.StringVar(&localAddr, "local", "192.168.100.2/24", LOCAL_HELP)
+	flag.StringVar(&endpoints, "e", "", ENDPOINT_HELP)
+	flag.StringVar(&localAddr, "l", "192.168.100.2/24", LOCAL_HELP)
+	flag.StringVar(&forward, "f", "", "forward networks, comma separated CIDRs")
 	flag.StringVar(&namespace, "n", "", "namespace")
 	flag.Parse()
 
-
-	endpoint := fmt.Sprintf("%s/%s", protocol, endpoint)
 	tunnel := fmt.Sprintf("tun/%s/%s", "goose", localAddr)
 	// create router
-	r := routing.NewRouter(localAddr, routing.WithMaxMetric(4))
+	opts := []routing.Option{
+		// metric
+		routing.WithMaxMetric(4),
+	}
+	if forward != "" {
+		opts = append(opts, routing.WithForward(strings.Split(forward, ",")...))
+	}
+	r := routing.NewRouter(localAddr, opts...)
 	// create connector
 	connector, err := routing.NewConnector(r)
 	if err != nil {
@@ -83,11 +67,18 @@ func main() {
 	}
 	// setup tunnel
 	connector.ConnectEndpoint(tunnel)
-	// connect to remote
-	if isClient {
-		connector.ConnectEndpoint(endpoint)
+	// connect to peers
+	if endpoints != "" {
+		addrs := strings.Split(endpoints, ",")
+		for _, endpoint := range addrs {
+			connector.ConnectEndpoint(endpoint)
+		}
 	}
+	
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
+	<- c
+	r.Close()
+	logger.Printf("Press Ctrl+C again to quit")
 	<- c
 }

@@ -33,6 +33,7 @@ import (
 	"github.com/pkg/errors"
 	"goose/pkg/wire"
 	"goose/pkg/message"
+	"goose/pkg/utils"
 )
 
 // ipfs bootstrap node
@@ -85,12 +86,11 @@ type IPFSWire struct {
 	wire.BaseWire
 	// stream
 	s network.Stream
-	// address
-	address net.IP
 	// encoder and decoer
 	encoder *gob.Encoder 
 	decoder *gob.Decoder
-
+	// has route
+	hasRoute bool
 	// close func
 	closeFunc func () error
 }
@@ -105,7 +105,6 @@ func (w *IPFSWire) Address() net.IP {
 	ip, _ := peerAddr.ValueForProtocol(ma.P_IP4)
 	return net.ParseIP(ip)
 }
-
 
 // Encode
 func (w *IPFSWire) Encode(msg *message.Message) error {
@@ -123,8 +122,22 @@ func (w *IPFSWire) Decode(msg *message.Message) error {
 	return nil
 }
 
+// SetRoute
+func (w *IPFSWire) SetRoute() error {
+	if err := utils.SetWireRoute(w.Address().String()); err != nil {
+		return err
+	}
+	w.hasRoute = true
+	return nil
+}
+
 // send message to ipfs wire
 func (w *IPFSWire) Close() (error) {
+	if w.hasRoute {
+		if err := utils.RestoreWireRoute(w.Address().String()); err != nil {
+			return err
+		}
+	}
 	return w.closeFunc()
 }
 
