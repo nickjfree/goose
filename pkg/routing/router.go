@@ -11,6 +11,7 @@ import (
 	"github.com/pkg/errors"
 	"github.com/yl2chen/cidranger"
 
+	"goose/pkg/routing/discovery"
 	"goose/pkg/message"
 	"goose/pkg/utils"
 )
@@ -58,6 +59,8 @@ type portState struct {
 
 // router
 type Router struct {
+	// connector
+	Connector
 	// lock
 	lock sync.Mutex
 	// port routing infos
@@ -79,15 +82,28 @@ type Router struct {
 type Option func (r *Router) error
 
 // max metric allowd for this rouer
-func WithMaxMetric(metric int) func (r *Router) error {
+func WithMaxMetric(metric int) Option {
 	return func (r *Router) error {
 		r.maxMetric = metric
 		return nil
 	}
 }
 
+
+func WithConnector() Option {
+	return func (r *Router) error {
+		// create connector
+		c, err := NewBaseConnector(r)
+		if err != nil {
+			return err
+		}
+		r.Connector = c
+		return nil
+	}
+}
+
 // forward cidrs
-func WithForward(forwardCIDRs ...string) func (r *Router) error {
+func WithForward(forwardCIDRs ...string) Option {
 	return func (r *Router) error {
 		// append local forward nets
 		for _, cidr := range forwardCIDRs {
@@ -110,6 +126,19 @@ func WithForward(forwardCIDRs ...string) func (r *Router) error {
 			}
 		}
 		r.forwardCIDRs = forwardCIDRs
+		return nil
+	}
+}
+
+// discovery
+func WithDiscovery(namespace string) Option {
+	return func (r *Router) error {
+		go func () {
+			pf := discovery.NewPeerFinder(namespace)
+			for peer := range pf.Peers() {
+				r.Dial(peer)
+			}
+		} ()
 		return nil
 	}
 }

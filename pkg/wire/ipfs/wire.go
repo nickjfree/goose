@@ -49,12 +49,6 @@ var(
 )
 
 const (
-	// advertise server prefix
-	PrefixGooseServer = "/goose/0.1.0/server"
-	// advertise network prefix
-	PrefixGooseNetwork = "/goose/0.1.0/network"
-	// advertise relay prefix
-	PrefixGooseRelay = "/goose/0.1.0/relay"
 	// connection protection tag
 	connectionTag = "goose"
 	// protocol name
@@ -147,6 +141,12 @@ type IPFSWireManager struct {
 	wire.BaseWireManager
 	*P2PHost
 }
+
+
+func GetP2PHost() *P2PHost {
+	return ipfsWireManager.P2PHost
+}
+
 
 func newIPFSWireManager() *IPFSWireManager {
 	host, err := NewP2PHost()
@@ -331,9 +331,6 @@ func (h *P2PHost) Background() error {
 	// state ticker
 	ticker := time.NewTicker(time.Second * 60)
 	defer ticker.Stop()
-	// advertise ticker
-	advertiseTicker := time.NewTicker(time.Hour * 6)
-	defer advertiseTicker.Stop()
 	// bootstrap ticker
 	bootstrapTicker := time.NewTicker(time.Second * 900)
 	defer bootstrapTicker.Stop()
@@ -357,14 +354,12 @@ func (h *P2PHost) Background() error {
 					return nil
 				}
 			}
-			logger.Printf("%d peers", len(peerList))
+			logger.Printf("%d peers(ipfs)", len(peerList))
 			addrText, err := json.MarshalIndent(h.Addrs(), "", "  ")
 			if err != nil {
 				logger.Printf("error %s", errors.WithStack(err))
 			}
 			logger.Printf("peerid: %s\naddrs: %s\n", h.ID(), addrText)
-		case <- advertiseTicker.C:
-			// time to advertise
 		case <- bootstrapTicker.C:
 			// bootstrap refesh
 			if err := h.Bootstrap(bootstraps); err != nil {

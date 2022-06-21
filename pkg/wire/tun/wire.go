@@ -99,12 +99,13 @@ func (w *TunWire) Decode(msg *message.Message) error {
 }
 
 func (w *TunWire) Close() error {
+	w.ifTun.Close()
 	// clear all routings
 	if err := w.setupHostRouting([]message.RoutingEntry{}); err != nil {
 		logger.Printf("clear routings failed: %+v", err)
 		return err
 	}
-	return w.ifTun.Close()
+	return nil
 }
 
 
@@ -210,6 +211,7 @@ func setRouting(add, remove []net.IPNet, gateway string) error {
 			if err := utils.RestoreDefaultRoute(); err != nil {
 				return err
 			}
+			continue
 		}
 		if err := utils.RemoveRoute(netString, gateway); err != nil {
 			return err
