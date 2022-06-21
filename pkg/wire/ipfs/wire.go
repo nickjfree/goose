@@ -127,12 +127,12 @@ func (w *IPFSWire) SetRoute() error {
 
 // send message to ipfs wire
 func (w *IPFSWire) Close() (error) {
+	w.closeFunc()
 	if w.hasRoute {
 		if err := utils.RestoreWireRoute(w.Address().String()); err != nil {
 			return err
 		}
 	}
-	return w.closeFunc()
 }
 
 
