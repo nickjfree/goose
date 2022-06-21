@@ -15,6 +15,8 @@ const (
 	RoutingRegister = 0
 	RoutingRegisterOK = 1
 	RoutingRegisterFailed = 2
+	// ttl
+	PacketTTL = 32
 )
 
 // wire message
@@ -25,8 +27,13 @@ type Message struct {
 
 // packet of network traffic
 type Packet struct {
-	Src net.IP
+	// dst
 	Dst net.IP
+	// src
+	Src net.IP
+	// ttl
+	TTL int
+	// the real ip packet
 	Data []byte
 }
 
@@ -51,7 +58,7 @@ type Routing struct {
 
 
 func init() {
-	gob.RegisterName("wire.Message", Message{})
-	gob.RegisterName("wire.Packet",  Packet{})
-	gob.RegisterName("wire.Routing", Routing{})
+	gob.RegisterName("M", Message{})
+	gob.RegisterName("P", Packet{})
+	gob.RegisterName("R", Routing{})
 }

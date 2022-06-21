@@ -86,32 +86,3 @@ func setIPAddress(iface *water.Interface, addr string) error {
 	logger.Printf("set tunnel dnsservers to 8.8.8.8")
 	return nil
 }
-
-
-func setRouting(add, remove []net.IPNet, gateway string) error {
-	for _, network := range add {
-		netString := network.String()
-		if netString == defaultRouting {
-			// redirect all traffic to tunnel
-			if err := utils.RemoveDefaultRoute(); err != nil {
-				return err
-			}
-		}
-		if out, err := utils.RunCmd("route", "add", netString, gateway); err != nil {
-			return errors.Wrap(err, string(out))
-		}
-	}
-	for _, network := range remove {
-		netString := network.String()
-		if netString == defaultRouting {
-			// restore default traffic
-			if err := utils.RestoreDefaultRoute(); err != nil {
-				return err
-			}
-		}
-		if out, err := utils.RunCmd("route", "delete", netString, gateway); err != nil {
-			return errors.Wrap(err, string(out))
-		}
-	}
-	return nil
-}

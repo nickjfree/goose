@@ -131,6 +131,20 @@ func SetWireRoute(serverIp string) error {
 	return nil
 }
 
+func SetRoute(network string, gateway string) error {
+	if out, err := RunCmd("route", "add", network, gateway); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	return nil
+}
+
+func RemoveRoute(network string, gateway string) error {
+	if out, err := RunCmd("route", "delete", network, gateway); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	return nil
+}
+
 // restore route for server
 func RestoreWireRoute(serverIp string) error {
 	if out, err := RunCmd("route", "delete", fmt.Sprintf("%s/32", serverIp), defaultGateway); err != nil {
@@ -139,24 +153,15 @@ func RestoreWireRoute(serverIp string) error {
 	return nil
 }
 
-// remove default route
-func RemoveDefaultRoute() error {
-	if out, err := RunCmd("route", "delete", "0.0.0.0/0", defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
 // restore default route
 func RestoreDefaultRoute() error {
-	if out, err := RunCmd("route", "add", "0.0.0.0/0", defaultGateway); err != nil {
+	if out, err := RunCmd("route", "change", "0.0.0.0/0", defaultGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	return nil
 }
-
 
 // nat rules
 func SetupNAT() error {
-	return nil
+	return errors.Errorf("can not forward packets on windows")
 }

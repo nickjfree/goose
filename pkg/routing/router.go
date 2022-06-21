@@ -62,6 +62,8 @@ type Router struct {
 	lock sync.Mutex
 	// port routing infos
 	portStats map[*Port]portState
+	// forward networks
+	forwardCIDRs []string
 	// provided networks form local networks
 	localNets []net.IPNet
 	// route table
@@ -101,6 +103,13 @@ func WithForward(forwardCIDRs ...string) func (r *Router) error {
 				return err
 			}
 		}
+		// forward network must use default gateway
+		for _, cidr := range forwardCIDRs {
+			if err := utils.SetWireRoute(cidr); err != nil {
+				return err
+			}
+		}
+		r.forwardCIDRs = forwardCIDRs
 		return nil
 	}
 }
@@ -257,8 +266,13 @@ func (r *Router) FindDestPort(packet message.Packet) (*Port, error) {
 // Close the router
 func (r *Router) Close() {
 	close(r.closed)
+	// remove forward routings
+	for _, cidr := range r.forwardCIDRs {
+		if err := utils.RestoreWireRoute(cidr); err != nil {
+			logger.Printf("remove route %s failed %+v", cidr, err)
+		}
+	}
 }
-
 
 func (r *Router) Done() <- chan struct{} {
 	return r.closed
@@ -276,6 +290,11 @@ func (r *Router) handleTraffic(p *Port) error {
 			if err := p.ReadPacket(&packet); err != nil {
 				return err
 			}
+			// check packet ttl
+			packet.TTL -= 1
+			if packet.TTL <= 0 {
+				continue
+			}
 			// routing 
 			target, err := r.FindDestPort(packet)
 			if err != nil {
@@ -284,12 +303,13 @@ func (r *Router) handleTraffic(p *Port) error {
 			if target != nil {
 				if err := target.WritePacket(&packet); err != nil {
 					// target port too slow or dead. we should close it. or it will slowdown everyone
-					logger.Printf("error relaying packet to port(%s). too slow. close it: %+v", p, err)
+					logger.Printf("error relaying packet to port(%s). it is too slow. close port: %+v", p, err)
 					target.Close()
 					return nil
 				}
 			} else {
 				// TODO: record not routed dst ip
+				// TODO: dst ip as peer discovery keys
 				// logger.Printf("Send packet %+v, no destination\n", packet)
 			}
 		}
@@ -428,7 +448,7 @@ func (r *Router) background() {
 				logger.Printf("refresh routing failed with: %+v", err)
 			}
 		case <- r.closed:
-			logger.Printf("router closed")
+			logger.Println("router closed")
 			return
 		}
 	}

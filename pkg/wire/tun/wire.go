@@ -13,6 +13,7 @@ import (
 
 	"goose/pkg/wire"
 	"goose/pkg/message"
+	"goose/pkg/utils"
 )
 
 var (
@@ -122,6 +123,7 @@ func (w *TunWire) readPacket(msg *message.Message) error {
 			msg.Payload = message.Packet{
 				Src: waterutil.IPv4Source(buff),
 				Dst: waterutil.IPv4Destination(buff),
+				TTL: message.PacketTTL,
 				Data: buff[0:n],
 			}
 			return nil
@@ -191,6 +193,28 @@ func (w *TunWire) setupHostRouting(routings []message.RoutingEntry) error {
 	}
 	// update routings
 	w.routings = newRoutings
+	return nil
+}
+
+func setRouting(add, remove []net.IPNet, gateway string) error {
+	for _, network := range add {
+		netString := network.String()
+		if err := utils.SetRoute(netString, gateway); err != nil {
+			return err
+		}
+	}
+	for _, network := range remove {
+		netString := network.String()
+		if netString == defaultRouting {
+			// restore traffic
+			if err := utils.RestoreDefaultRoute(); err != nil {
+				return err
+			}
+		}
+		if err := utils.RemoveRoute(netString, gateway); err != nil {
+			return err
+		}
+	}
 	return nil
 }
 
