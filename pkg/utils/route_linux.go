@@ -42,7 +42,7 @@ func getDefaultGateway() (string, error) {
 
 // set route for server
 func SetWireRoute(serverIp string) error {
-	if out, err := RunCmd("route", "add", "-host", fmt.Sprintf("%s/32", serverIp), "gw", defaultGateway); err != nil {
+	if out, err := RunCmd("ip", "route", "add", fmt.Sprintf("%s/32", serverIp), "via", defaultGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	return nil
@@ -50,7 +50,7 @@ func SetWireRoute(serverIp string) error {
 
 // restore route for server
 func RestoreWireRoute(serverIp string) error {
-	if out, err := RunCmd("route", "delete", "-host", fmt.Sprintf("%s/32", serverIp), "gw", defaultGateway); err != nil {
+	if out, err := RunCmd("ip", "route", "delete", fmt.Sprintf("%s/32", serverIp), "via", defaultGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	return nil
@@ -58,7 +58,7 @@ func RestoreWireRoute(serverIp string) error {
 
 // remove default route
 func RemoveDefaultRoute() error {
-	if out, err := RunCmd("route", "delete", "-net", "0.0.0.0/0", "gw", defaultGateway); err != nil {
+	if out, err := RunCmd("ip", "route", "delete", "0.0.0.0/0", "via", defaultGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	return nil
@@ -66,7 +66,7 @@ func RemoveDefaultRoute() error {
 
 // restore default route
 func RestoreDefaultRoute() error {
-	if out, err := RunCmd("route", "add", "-net", "0.0.0.0/0", "gw", defaultGateway); err != nil {
+	if out, err := RunCmd("ip", "route", "add", "0.0.0.0/0", "via", defaultGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	return nil
