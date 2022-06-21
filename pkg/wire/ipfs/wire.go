@@ -133,6 +133,7 @@ func (w *IPFSWire) Close() (error) {
 			return err
 		}
 	}
+	return nil
 }
 
 
