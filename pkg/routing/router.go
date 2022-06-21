@@ -105,7 +105,7 @@ func WithForward(forwardCIDRs ...string) func (r *Router) error {
 		}
 		// forward network must use default gateway
 		for _, cidr := range forwardCIDRs {
-			if err := utils.SetWireRoute(cidr); err != nil {
+			if err := utils.SetForwardRoute(cidr); err != nil {
 				return err
 			}
 		}
@@ -268,7 +268,7 @@ func (r *Router) Close() {
 	close(r.closed)
 	// remove forward routings
 	for _, cidr := range r.forwardCIDRs {
-		if err := utils.RestoreWireRoute(cidr); err != nil {
+		if err := utils.RestoreForwardRoute(cidr); err != nil {
 			logger.Printf("remove route %s failed %+v", cidr, err)
 		}
 	}

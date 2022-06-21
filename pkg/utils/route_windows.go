@@ -131,6 +131,23 @@ func SetWireRoute(serverIp string) error {
 	return nil
 }
 
+// set forward route
+func SetForwardRoute(network string) error {
+	if out, err := RunCmd("route", "add", network, defaultGateway); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	return nil
+}
+
+// set forward route
+func RestoreForwardRoute(network string) error {
+	if out, err := RunCmd("route", "delete", network, defaultGateway); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	return nil
+}
+
+
 func SetRoute(network string, gateway string) error {
 	if out, err := RunCmd("route", "add", network, gateway); err != nil {
 		return errors.Wrap(err, string(out))
