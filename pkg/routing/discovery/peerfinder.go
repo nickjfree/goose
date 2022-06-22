@@ -76,9 +76,10 @@ func (pf *PeerFinder) findPeers() error {
 			continue
 		}
 		pf.peers <- fmt.Sprintf("ipfs/%s", p.ID)
+		logger.Printf("found peer %s in %s", p.ID, pf.ns)
 		count += 1
 	}
-	logger.Printf("found %d peers(goose) in %s", count, pf.ns)
+	logger.Printf("found %d peers(goose)", count)
 	return nil
 }
 
