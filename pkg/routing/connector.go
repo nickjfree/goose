@@ -144,8 +144,8 @@ func (c *BaseConnector) setFailed(endpoint string) error {
 		state.status = statusFailed
 		state.failed += 1
 		// remove endpoint failed to many times
-		if state.failed > connMaxRetries {
-			logger.Printf("endpoint %s failed to many times, remove it")
+		if state.failed >= connMaxRetries {
+			logger.Printf("endpoint %s failed to many times, remove it", endpoint)
 			delete(c.epStats, endpoint)
 		} else {
 			c.epStats[endpoint] = state
