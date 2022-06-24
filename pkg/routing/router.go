@@ -354,6 +354,8 @@ func (r *Router) handleRouting(p *Port) error {
 
 	for {
 		select {
+		case <- r.closed:
+			return nil
 		case <- ticker.C:
 			// check routing status
 			r.lock.Lock()
