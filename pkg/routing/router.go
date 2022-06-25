@@ -332,9 +332,8 @@ func (r *Router) handleTraffic(p *Port) error {
 			if target != nil {
 				if err := target.WritePacket(&packet); err != nil {
 					// target port too slow or dead. we should close it. or it will slowdown everyone
-					logger.Printf("error relaying packet to port(%s). it is too slow. close port: %+v", p, err)
+					logger.Printf("error relaying packet to port(%s). it is too slow. close port: %+v", target, err)
 					target.Close()
-					return nil
 				}
 			} else {
 				// TODO: record not routed dst ip
