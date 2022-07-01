@@ -73,6 +73,8 @@ type Router struct {
 	routeTable cidranger.Ranger
 	// max metric allowed
 	maxMetric int
+	// force using default route
+	keepDefaultRoute bool
 	// closed
 	closed chan struct{}
 }
@@ -139,6 +141,13 @@ func WithDiscovery(namespace string) Option {
 				r.Dial(peer)
 			}
 		} ()
+		return nil
+	}
+}
+
+func WithDefaultRoute() Option {
+	return func (r *Router) error {
+		r.keepDefaultRoute = true
 		return nil
 	}
 }

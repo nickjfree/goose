@@ -31,6 +31,10 @@ func main() {
 	if options.Namespace != "" {
 		opts = append(opts, routing.WithDiscovery(options.Namespace))
 	}
+	
+	if options.KeepDefaultRoute {
+		opts = append(opts, routing.WithDefaultRoute())
+	}
 
 	r := routing.NewRouter(options.LocalAddr, opts...)
 	

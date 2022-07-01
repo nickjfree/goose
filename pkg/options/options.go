@@ -29,6 +29,8 @@ var (
 	Forward = ""
 	// namespace 
 	Namespace = ""
+	// keep default route
+	KeepDefaultRoute = false
 )
 
 func init() {
@@ -36,5 +38,6 @@ func init() {
 	flag.StringVar(&LocalAddr, "l", "192.168.100.2/24", LOCAL_HELP)
 	flag.StringVar(&Forward, "f", "", "forward networks, comma separated CIDRs")
 	flag.StringVar(&Namespace, "n", "", "namespace")
+	flag.BoolVar(&KeepDefaultRoute, "d", false, "keep default route")
 	flag.Parse()
 }
