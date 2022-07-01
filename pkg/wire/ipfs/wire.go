@@ -34,6 +34,7 @@ import (
 	"goose/pkg/wire"
 	"goose/pkg/message"
 	"goose/pkg/utils"
+	"goose/pkg/options"
 )
 
 // ipfs bootstrap node
@@ -408,16 +409,16 @@ func getPrivKey(path string) (crypto.PrivKey, error) {
 	}
 }
 
-
 // create libp2p node
 // circuit relay need to be enabled to hide the real server ip.
 func createHost(peerChan <- chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error) {
 
-	if err := os.MkdirAll("data", 0644); err != nil {
+	folder := fmt.Sprintf("data/%s", strings.ReplaceAll(options.Namespace, "-", "_"))
+	if err := os.MkdirAll(folder, 0644); err != nil {
 		return nil, nil, errors.WithStack(err)
 	}
-
-	priv, err := getPrivKey("data/keyfile")
+	keyPath := fmt.Sprintf("%s/keyfile", folder)
+	priv, err := getPrivKey(keyPath)
 	if err != nil {
 		return nil, nil, err
 	}
