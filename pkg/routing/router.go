@@ -426,6 +426,10 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			if entry.port == p {
 				continue
 			}
+			// keep default routing
+			if r.keepDefaultRoute && entry.network.String() == "0.0.0.0/0" && strings.HasPrefix(p.String(), "tun") {
+				continue
+			}
 			routings = append(routings, message.RoutingEntry{
 				Network: entry.network,
 				Metric: entry.metric,
