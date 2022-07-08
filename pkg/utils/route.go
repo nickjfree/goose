@@ -43,10 +43,10 @@ func (h *HostRoute) SetRoute(target, gateway string) error {
 	if gateway == "" {
 		gateway = defaultGateway
 	}
-
 	r, ok := h.rules[target]
 	if ok {
 		r.ref += 1
+		r.gateway = gateway
 	} else {
 		r = route{
 			target: target,
