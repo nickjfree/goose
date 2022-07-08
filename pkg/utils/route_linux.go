@@ -56,6 +56,10 @@ func RemoveRoute(network string, gateway string) error {
 
 // nat rules
 func SetupNAT() error {
+	// increase udp receive buffer size
+	if out, err := RunCmd("sysctl", "-w", "net.core.rmem_max=2500000"); err != nil {
+		return errors.Wrap(err, string(out))
+	}
 	// enabled ip forward
 	if out, err := RunCmd("sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
 		return errors.Wrap(err, string(out))
