@@ -124,22 +124,21 @@ func waitTunnelUp(tunnelGateway string) error {
 
 
 func SetRoute(network string, gateway string) error {
-	if out, err := RunCmd("route", "add", network, gateway); err != nil {
-		return errors.Wrap(err, string(out))
+	if network == "0.0.0.0/0" {
+		// change default route
+		if out, err := RunCmd("route", "change", network, gateway); err != nil {
+			return errors.Wrap(err, string(out))
+		}
+	} else {
+		if out, err := RunCmd("route", "add", network, gateway); err != nil {
+			return errors.Wrap(err, string(out))
+		}
 	}
 	return nil
 }
 
 func RemoveRoute(network string, gateway string) error {
 	if out, err := RunCmd("route", "delete", network, gateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
-// restore default route
-func RestoreDefaultRoute() error {
-	if out, err := RunCmd("route", "change", "0.0.0.0/0", defaultGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	return nil
