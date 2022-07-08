@@ -2,7 +2,6 @@ package utils
 
 
 import (
-	"fmt"
 	"net"
 	"syscall"
 	"time"
@@ -123,30 +122,6 @@ func waitTunnelUp(tunnelGateway string) error {
 	}
 }
 
-// set route for server
-func SetWireRoute(serverIp string) error {
-	if out, err := RunCmd("route", "add", fmt.Sprintf("%s/32", serverIp), defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
-// set forward route
-func SetForwardRoute(network string) error {
-	if out, err := RunCmd("route", "add", network, defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
-// set forward route
-func RestoreForwardRoute(network string) error {
-	if out, err := RunCmd("route", "delete", network, defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
 
 func SetRoute(network string, gateway string) error {
 	if out, err := RunCmd("route", "add", network, gateway); err != nil {
@@ -157,14 +132,6 @@ func SetRoute(network string, gateway string) error {
 
 func RemoveRoute(network string, gateway string) error {
 	if out, err := RunCmd("route", "delete", network, gateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
-// restore route for server
-func RestoreWireRoute(serverIp string) error {
-	if out, err := RunCmd("route", "delete", fmt.Sprintf("%s/32", serverIp), defaultGateway); err != nil {
 		return errors.Wrap(err, string(out))
 	}
 	return nil

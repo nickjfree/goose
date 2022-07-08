@@ -119,7 +119,7 @@ func (w *IPFSWire) Decode(msg *message.Message) error {
 
 // SetRoute
 func (w *IPFSWire) SetRoute() error {
-	if err := utils.SetWireRoute(w.Address().String()); err != nil {
+	if err := utils.RouteTable.SetRoute(fmt.Sprintf("%s/32", w.Address().String()), ""); err != nil {
 		return err
 	}
 	w.hasRoute = true
@@ -130,7 +130,7 @@ func (w *IPFSWire) SetRoute() error {
 func (w *IPFSWire) Close() (error) {
 	w.closeFunc()
 	if w.hasRoute {
-		if err := utils.RestoreWireRoute(w.Address().String()); err != nil {
+		if err := utils.RouteTable.RemoveRoute(fmt.Sprintf("%s/32", w.Address().String())); err != nil {
 			return err
 		}
 	}

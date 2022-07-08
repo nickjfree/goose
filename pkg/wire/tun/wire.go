@@ -200,7 +200,7 @@ func (w *TunWire) setupHostRouting(routings []message.RoutingEntry) error {
 func setRouting(add, remove []net.IPNet, gateway string) error {
 	for _, network := range add {
 		netString := network.String()
-		if err := utils.SetRoute(netString, gateway); err != nil {
+		if err := utils.RouteTable.SetRoute(netString, gateway); err != nil {
 			return err
 		}
 	}
@@ -208,12 +208,12 @@ func setRouting(add, remove []net.IPNet, gateway string) error {
 		netString := network.String()
 		if netString == defaultRouting {
 			// restore traffic
-			if err := utils.RestoreDefaultRoute(); err != nil {
+			if err := utils.RouteTable.SetRoute(defaultRouting, ""); err != nil {
 				return err
 			}
 			continue
 		}
-		if err := utils.RemoveRoute(netString, gateway); err != nil {
+		if err := utils.RouteTable.RemoveRoute(netString); err != nil {
 			return err
 		}
 	}

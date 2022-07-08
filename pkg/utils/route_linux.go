@@ -2,7 +2,6 @@ package utils
 
 
 import (
-	"fmt"
 	"regexp"
 
 	"github.com/pkg/errors"
@@ -40,31 +39,6 @@ func getDefaultGateway() (string, error) {
 	return matches[1], nil
 }
 
-// set route for server
-func SetWireRoute(serverIp string) error {
-	if out, err := RunCmd("ip", "route", "replace", fmt.Sprintf("%s/32", serverIp), "via", defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
-// set forward route
-func SetForwardRoute(network string) error {
-	if out, err := RunCmd("ip", "route", "replace", network, "via", defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
-// set forward route
-func RestoreForwardRoute(network string) error {
-	if out, err := RunCmd("ip", "route", "delete", network, "via", defaultGateway); err != nil {
-		logger.Printf("error remove route %s %+v", string(out), err)
-		return nil
-	}
-	return nil
-}
-
 func SetRoute(network string, gateway string) error {
 	if out, err := RunCmd("ip", "route", "replace", network, "via", gateway); err != nil {
 		return errors.Wrap(err, string(out))
@@ -76,24 +50,6 @@ func RemoveRoute(network string, gateway string) error {
 	if out, err := RunCmd("ip", "route", "delete", network, "via", gateway); err != nil {
 		logger.Printf("error remove route %s %+v", string(out), err)
 		return nil
-	}
-	return nil
-}
-
-// restore route for server
-func RestoreWireRoute(serverIp string) error {
-	if out, err := RunCmd("ip", "route", "delete", fmt.Sprintf("%s/32", serverIp), "via", defaultGateway); err != nil {
-		logger.Printf("error remove route %s %+v", string(out), err)
-		return errors.Wrap(err, string(out))
-	}
-	return nil
-}
-
-
-// restore default route
-func RestoreDefaultRoute() error {
-	if out, err := RunCmd("ip", "route", "replace", "0.0.0.0/0", "via", defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
 	}
 	return nil
 }
