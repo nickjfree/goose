@@ -59,7 +59,8 @@ func SetForwardRoute(network string) error {
 // set forward route
 func RestoreForwardRoute(network string) error {
 	if out, err := RunCmd("ip", "route", "delete", network, "via", defaultGateway); err != nil {
-		return errors.Wrap(err, string(out))
+		logger.Printf("error remove route %s %+v", string(out), err)
+		return nil
 	}
 	return nil
 }
@@ -73,7 +74,8 @@ func SetRoute(network string, gateway string) error {
 
 func RemoveRoute(network string, gateway string) error {
 	if out, err := RunCmd("ip", "route", "delete", network, "via", gateway); err != nil {
-		return errors.Wrap(err, string(out))
+		logger.Printf("error remove route %s %+v", string(out), err)
+		return nil
 	}
 	return nil
 }
@@ -81,6 +83,7 @@ func RemoveRoute(network string, gateway string) error {
 // restore route for server
 func RestoreWireRoute(serverIp string) error {
 	if out, err := RunCmd("ip", "route", "delete", fmt.Sprintf("%s/32", serverIp), "via", defaultGateway); err != nil {
+		logger.Printf("error remove route %s %+v", string(out), err)
 		return errors.Wrap(err, string(out))
 	}
 	return nil
