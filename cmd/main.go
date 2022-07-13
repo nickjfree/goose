@@ -36,6 +36,10 @@ func main() {
 		opts = append(opts, routing.WithDefaultRoute())
 	}
 
+	if options.FakeRange != "" {
+		opts = append(opts, routing.WithFakeIP(options.FakeRange))
+	}
+
 	r := routing.NewRouter(options.LocalAddr, opts...)
 	
 	// connct to tunnel and peers

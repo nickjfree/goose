@@ -31,6 +31,8 @@ var (
 	Namespace = ""
 	// keep default route
 	KeepDefaultRoute = false
+	// fake ip range
+	FakeRange = ""
 )
 
 func init() {
@@ -38,6 +40,7 @@ func init() {
 	flag.StringVar(&LocalAddr, "l", "192.168.100.2/24", LOCAL_HELP)
 	flag.StringVar(&Forward, "f", "", "forward networks, comma separated CIDRs")
 	flag.StringVar(&Namespace, "n", "", "namespace")
-	flag.BoolVar(&KeepDefaultRoute, "d", false, "keep default route")
+	flag.BoolVar(&KeepDefaultRoute, "d", true, "keep default route")
+	flag.StringVar(&FakeRange, "r", "10.0.0.0/16", "fake ip range")
 	flag.Parse()
 }

@@ -133,15 +133,15 @@ func (w *TunWire) readPacket(msg *message.Message) error {
 }
 
 func (w *TunWire) writePacket(msg *message.Message) error {
-	packete, ok := msg.Payload.(message.Packet)
+	packet, ok := msg.Payload.(message.Packet)
 	if !ok {
 		return errors.Errorf("got invalid packet struct %+v", msg.Payload)
 	}
-	if !waterutil.IsIPv4(packete.Data) {
-		logger.Printf("sent: not ipv4 packet len %d", len(packete.Data))
+	if !waterutil.IsIPv4(packet.Data) {
+		logger.Printf("sent: not ipv4 packet len %d", len(packet.Data))
 		return nil
 	}
-	if _, err := w.ifTun.Write(packete.Data); err != nil {
+	if _, err := w.ifTun.Write(packet.Data); err != nil {
 		return errors.WithStack(err)
 	}
 	return nil

@@ -11,9 +11,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/yl2chen/cidranger"
 
-	"goose/pkg/routing/discovery"
+	"goose/pkg/routing/fakeip"
 	"goose/pkg/message"
-	"goose/pkg/utils"
 )
 
 const (
@@ -75,81 +74,10 @@ type Router struct {
 	maxMetric int
 	// force using default route
 	keepDefaultRoute bool
+	// fake ip manager
+	fakeIP *fakeip.FakeIPManager
 	// closed
 	closed chan struct{}
-}
-
-
-// router option
-type Option func (r *Router) error
-
-// max metric allowd for this rouer
-func WithMaxMetric(metric int) Option {
-	return func (r *Router) error {
-		r.maxMetric = metric
-		return nil
-	}
-}
-
-
-func WithConnector() Option {
-	return func (r *Router) error {
-		// create connector
-		c, err := NewBaseConnector(r)
-		if err != nil {
-			return err
-		}
-		r.Connector = c
-		return nil
-	}
-}
-
-// forward cidrs
-func WithForward(forwardCIDRs ...string) Option {
-	return func (r *Router) error {
-		// append local forward nets
-		for _, cidr := range forwardCIDRs {
-			_, network, err := net.ParseCIDR(cidr)
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			r.localNets = append(r.localNets, *network)
-		}
-		// set up nat
-		if len(forwardCIDRs) > 0 {
-			if err := utils.SetupNAT(); err != nil {
-				return err
-			}
-		}
-		// forward network must use default gateway
-		for _, cidr := range forwardCIDRs {
-			if err := utils.RouteTable.SetRoute(cidr, ""); err != nil {
-				return err
-			}
-		}
-		r.forwardCIDRs = forwardCIDRs
-		return nil
-	}
-}
-
-// discovery
-func WithDiscovery(namespace string) Option {
-	return func (r *Router) error {
-		go func () {
-			pf := discovery.NewPeerFinder(namespace)
-			for peer := range pf.Peers() {
-				r.Dial(peer)
-			}
-		} ()
-		return nil
-	}
-}
-
-func WithDefaultRoute() Option {
-	return func (r *Router) error {
-		r.keepDefaultRoute = true
-		return nil
-	}
 }
 
 func NewRouter(localcidr string, opts ...Option) *Router {
@@ -304,12 +232,6 @@ func (r *Router) FindDestPort(packet message.Packet) (*Port, error) {
 // Close the router
 func (r *Router) Close() {
 	close(r.closed)
-	// remove forward routings
-	for _, cidr := range r.forwardCIDRs {
-		if err := utils.RouteTable.RemoveRoute(cidr); err != nil {
-			logger.Printf("remove route %s failed %+v", cidr, err)
-		}
-	}
 }
 
 func (r *Router) Done() <- chan struct{} {
@@ -333,12 +255,29 @@ func (r *Router) handleTraffic(p *Port) error {
 			if packet.TTL <= 0 {
 				continue
 			}
+			// replace fake ip to real ip in dst
+			if r.fakeIP != nil && strings.HasPrefix(p.String(), "tun") {
+				if err := r.fakeIP.DstToReal(&packet); err != nil {
+					return err
+				}
+			}
 			// routing 
 			target, err := r.FindDestPort(packet)
 			if err != nil {
 				return err
 			}
 			if target != nil {
+				// fake ip enabled
+				if r.fakeIP != nil && strings.HasPrefix(target.String(), "tun") {
+					// modify dns response
+					if err := r.fakeIP.FakeDnsResponse(&packet); err != nil {
+						return err
+					}
+					// replace real ip to fake ip in src
+					if err := r.fakeIP.SrcToFake(&packet); err != nil {
+						return err
+					}
+				}
 				if err := target.WritePacket(&packet); err != nil {
 					// target port too slow or dead. we should close it. or it will slowdown everyone
 					logger.Printf("error relaying packet to port(%s). it is too slow. close port: %+v", target, err)
@@ -426,14 +365,25 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			if entry.port == p {
 				continue
 			}
-			// keep default routing
-			if r.keepDefaultRoute && entry.network.String() == "0.0.0.0/0" && strings.HasPrefix(p.String(), "tun") {
-				continue
+			// fake ip, add route for fake ip
+			if r.fakeIP != nil  && entry.network.String() == "0.0.0.0/0" && strings.HasPrefix(p.String(), "tun") {
+				routings = append(routings, 
+					message.RoutingEntry{
+					Network: r.fakeIP.Network(),
+					Metric: entry.metric,
+				}, message.RoutingEntry{
+					Network: net.IPNet{
+						IP: net.IPv4(8, 8, 8, 8),
+						Mask: net.IPv4Mask(255, 255, 255, 255),
+					},
+					Metric: entry.metric,
+				})
+			} else {
+				routings = append(routings, message.RoutingEntry{
+					Network: entry.network,
+					Metric: entry.metric,
+				})
 			}
-			routings = append(routings, message.RoutingEntry{
-				Network: entry.network,
-				Metric: entry.metric,
-			})
 		}
 	}
 	return routings, nil

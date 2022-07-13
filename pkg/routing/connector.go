@@ -290,11 +290,6 @@ func (c *BaseConnector) handleNewWire(w wire.Wire, reconnect bool) error {
 		port.Close()
 		return err
 	}
-	// set up route for wire
-	if err := w.SetRoute(); err != nil {
-		port.Close()
-		return err
-	}
 	logger.Printf("new wire connection: %s", endpoint)
 	return nil
 }

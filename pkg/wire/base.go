@@ -39,8 +39,6 @@ type Wire interface {
 	Encode(*message.Message) error
 	// Decode
 	Decode(*message.Message) error
-	// set route
-	SetRoute() error
 	// close
 	Close() error
 }
@@ -65,11 +63,6 @@ func (w *BaseWire) Encode(msg *message.Message) error {
 
 // Decode
 func (w *BaseWire) Decode(msg *message.Message) error {
-	return nil
-}
-
-// SetRoute
-func (w *BaseWire)  SetRoute() error {
 	return nil
 }
 

@@ -33,7 +33,6 @@ import (
 	"github.com/pkg/errors"
 	"goose/pkg/wire"
 	"goose/pkg/message"
-	"goose/pkg/utils"
 	"goose/pkg/options"
 )
 
@@ -117,26 +116,11 @@ func (w *IPFSWire) Decode(msg *message.Message) error {
 	return nil
 }
 
-// SetRoute
-func (w *IPFSWire) SetRoute() error {
-	if err := utils.RouteTable.SetRoute(fmt.Sprintf("%s/32", w.Address().String()), ""); err != nil {
-		return err
-	}
-	w.hasRoute = true
-	return nil
-}
-
 // send message to ipfs wire
 func (w *IPFSWire) Close() (error) {
 	w.closeFunc()
-	if w.hasRoute {
-		if err := utils.RouteTable.RemoveRoute(fmt.Sprintf("%s/32", w.Address().String())); err != nil {
-			return err
-		}
-	}
 	return nil
 }
-
 
 // IPFS wire manager
 type IPFSWireManager struct {
