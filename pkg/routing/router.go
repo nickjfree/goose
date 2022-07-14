@@ -365,24 +365,26 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			if entry.port == p {
 				continue
 			}
+			// not tunnel			
+			if !strings.HasPrefix(p.String(), "tun") {
+				routings = append(routings, message.RoutingEntry{
+					Network: entry.network,
+					Metric: entry.metric,
+				})
+				continue
+			}
+			// tunnel 
 			// route none default traffics
 			if entry.network.String() != defaultRouting {
 				routings = append(routings, message.RoutingEntry{
 					Network: entry.network,
 					Metric: entry.metric,
 				})
-			} else {
+			} else if r.fakeIP != nil {
 				// if fakeip is enabled, route dns traffics to the tunnel
-				if r.fakeIP != nil && strings.HasPrefix(p.String(), "tun") {
-					for _, network := range r.fakeIP.DNSRoutings() {
-						routings = append(routings, message.RoutingEntry{
-							Network: network,
-							Metric: entry.metric,
-						})
-					}
-				} else {
+				for _, network := range r.fakeIP.DNSRoutings() {
 					routings = append(routings, message.RoutingEntry{
-						Network: entry.network,
+						Network: network,
 						Metric: entry.metric,
 					})
 				}
