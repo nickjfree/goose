@@ -8,9 +8,7 @@ import (
 const (
 	ENDPOINT_HELP = `
 comma separated remote endpoints.
-
-for http/http3 protocols. this should be a http url of the goose server.
-for ipfs protocols, this should be a libp2p PeerID. If empty, the client will try to find a random goose server in the network
+eg. ipfs/QmVCVa7RfutQDjvUYTejMyVLMMF5xYAM1mEddDVwMmdLf4,ipfs/QmYXWTQ1jTZ3ZEXssCyBHMh4H4HqLPez5dhpqkZbSJjh7r
 `
 
 	LOCAL_HELP = `
@@ -29,8 +27,6 @@ var (
 	Forward = ""
 	// namespace 
 	Namespace = ""
-	// keep default route
-	KeepDefaultRoute = false
 	// fake ip range
 	FakeRange = ""
 )
@@ -40,7 +36,6 @@ func init() {
 	flag.StringVar(&LocalAddr, "l", "192.168.100.2/24", LOCAL_HELP)
 	flag.StringVar(&Forward, "f", "", "forward networks, comma separated CIDRs")
 	flag.StringVar(&Namespace, "n", "", "namespace")
-	flag.BoolVar(&KeepDefaultRoute, "d", true, "keep default route")
-	flag.StringVar(&FakeRange, "r", "10.0.0.0/16", "fake ip range")
+	flag.StringVar(&FakeRange, "p", "", "fake ip range")
 	flag.Parse()
 }

@@ -84,5 +84,11 @@ func setIPAddress(iface *water.Interface, addr string) error {
 		return errors.Wrap(err, string(out))
 	}
 	logger.Printf("set tunnel dnsservers to 8.8.8.8")
+	// to make windows use this dnsserver, we must set interface metric to a small value
+	args = fmt.Sprintf("interface ipv4 set interface \"%s\" metric=9", iface.Name())
+	if out, err := utils.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	logger.Printf("set tunnel metric to 9")
 	return nil
 }

@@ -22,6 +22,8 @@ const (
 	routingInterval = time.Second * 30
 	// routing entry expire time
 	routingExpire =  time.Second * 90
+	// default routing
+	defaultRouting = "0.0.0.0/0"
 )
 
 
@@ -72,8 +74,6 @@ type Router struct {
 	routeTable cidranger.Ranger
 	// max metric allowed
 	maxMetric int
-	// force using default route
-	keepDefaultRoute bool
 	// fake ip manager
 	fakeIP *fakeip.FakeIPManager
 	// closed
@@ -255,9 +255,9 @@ func (r *Router) handleTraffic(p *Port) error {
 			if packet.TTL <= 0 {
 				continue
 			}
-			// replace fake ip to real ip in dst
+			// replace fake ip to src ip
 			if r.fakeIP != nil && strings.HasPrefix(p.String(), "tun") {
-				if err := r.fakeIP.DstToReal(&packet); err != nil {
+				if err := r.fakeIP.DNAT(&packet); err != nil {
 					return err
 				}
 			}
@@ -273,8 +273,8 @@ func (r *Router) handleTraffic(p *Port) error {
 					if err := r.fakeIP.FakeDnsResponse(&packet); err != nil {
 						return err
 					}
-					// replace real ip to fake ip in src
-					if err := r.fakeIP.SrcToFake(&packet); err != nil {
+					// replace src ip to fake ip
+					if err := r.fakeIP.SNAT(&packet); err != nil {
 						return err
 					}
 				}
@@ -365,24 +365,22 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			if entry.port == p {
 				continue
 			}
-			// fake ip, add route for fake ip
-			if r.fakeIP != nil  && entry.network.String() == "0.0.0.0/0" && strings.HasPrefix(p.String(), "tun") {
-				routings = append(routings, 
-					message.RoutingEntry{
-					Network: r.fakeIP.Network(),
-					Metric: entry.metric,
-				}, message.RoutingEntry{
-					Network: net.IPNet{
-						IP: net.IPv4(8, 8, 8, 8),
-						Mask: net.IPv4Mask(255, 255, 255, 255),
-					},
-					Metric: entry.metric,
-				})
-			} else {
+			// route none default traffics
+			if entry.network.String() != defaultRouting {
 				routings = append(routings, message.RoutingEntry{
 					Network: entry.network,
 					Metric: entry.metric,
 				})
+			} else {
+				// if fakeip is enabled, route dns traffics to the tunnel
+				if r.fakeIP != nil && strings.HasPrefix(p.String(), "tun") {
+					for _, network := range r.fakeIP.DNSRoutings() {
+						routings = append(routings, message.RoutingEntry{
+							Network: network,
+							Metric: entry.metric,
+						})
+					}
+				}
 			}
 		}
 	}

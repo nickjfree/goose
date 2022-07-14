@@ -31,10 +31,6 @@ func main() {
 	if options.Namespace != "" {
 		opts = append(opts, routing.WithDiscovery(options.Namespace))
 	}
-	
-	if options.KeepDefaultRoute {
-		opts = append(opts, routing.WithDefaultRoute())
-	}
 
 	if options.FakeRange != "" {
 		opts = append(opts, routing.WithFakeIP(options.FakeRange))

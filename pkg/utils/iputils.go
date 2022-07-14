@@ -77,6 +77,9 @@ func (c *IPMapping) Get(ip net.IP) *net.IP {
 
 	entry, exists := c.data[ipToUint(ip)]
 	if exists && time.Since(entry.expire) < keyExpiration {
+		// update expiration time
+		entry.expire = time.Now().Add(keyExpiration)
+		c.data[ipToUint(ip)] = entry
 		return &entry.value
 	}
 	return nil

@@ -69,13 +69,6 @@ func WithDiscovery(namespace string) Option {
 	}
 }
 
-func WithDefaultRoute() Option {
-	return func (r *Router) error {
-		r.keepDefaultRoute = true
-		return nil
-	}
-}
-
 // dns fake ip
 func WithFakeIP(network string) Option {
 	return func (r *Router) error {

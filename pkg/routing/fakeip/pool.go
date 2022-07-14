@@ -3,22 +3,10 @@ package fakeip
 import (
 	"net"
 	"sync"
-	"time"
 
 	"goose/pkg/utils"
 )
 
-// fake ip entry
-type FakeEntry struct {
-	// domain name
-	Name string
-	// fake ip
-	Fake  net.IP
-	// real ip
-	Real net.IP
-	// expire
-	Expire time.Time
-}
 
 // fake ip manager
 type FakeIPManager struct {
@@ -26,8 +14,6 @@ type FakeIPManager struct {
 	network net.IPNet
 	// fake ip pool
 	pool *utils.IPPool
-	// domain entry
-	domains map[string]FakeEntry
 	// fake to real ip mapping
 	f2r *utils.IPMapping
 	// real to fake ip mapping
@@ -46,83 +32,58 @@ func NewFakeIPManager(network string) *FakeIPManager {
 	m := &FakeIPManager{
 		network: *ipNet,
 		pool: utils.NewIPPool(*ipNet),
-		domains: make(map[string]FakeEntry),
 		f2r: utils.NewIPMapping(),
 		r2f: utils.NewIPMapping(),
 		skipHosts: make(map[string]struct{}),
 	}
-	go m.refresh()
 	return m
 }
 
-
-// get fakeip by domain
-func (manager *FakeIPManager) Network() net.IPNet {
-	return manager.network
-}
-
-// get fakeip by domain
-func (manager *FakeIPManager) GetFakeByDomain(domain string, real net.IP) (net.IP, error) {
+// alloc fake ip
+func (manager *FakeIPManager) Alloc(domain string, real net.IP) (net.IP, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
-	entry, ok := manager.domains[domain]
-	if ok {
-		entry.Real = real
+	var fake net.IP
+	var err error
+
+	// find fakeip from mapping
+	if f := manager.r2f.Get(real); f != nil {
+		fake = *f
 	} else {
-		// alloc new ip from fake pool
-		fake, err := manager.pool.Alloc()
-		if err != nil {
-			return fake, err
-		}
-		entry = FakeEntry{
-			Real: real,
-			Fake: fake,
-			Name: domain,
+		// alloc new fake ip
+		if fake, err = manager.pool.Alloc(); err != nil {
+			return nil, err
 		}
 	}
-	// update expire time
-	entry.Expire = time.Now().Add(time.Second * 300)
-	manager.domains[domain] = entry
 	// update mapping
-	manager.f2r.Put(entry.Fake, entry.Real)
-	manager.r2f.Put(entry.Real, entry.Fake)
-	return entry.Fake, nil
+	manager.f2r.Put(fake, real)
+	manager.r2f.Put(real, fake)
+	return fake, nil
 }
 
 // get real ip by fake ip
-func (manager *FakeIPManager) GetRealByIP(fake net.IP) *net.IP {
+func (manager *FakeIPManager) ToReal(fake net.IP) *net.IP {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	return manager.f2r.Get(fake)
 }
 
 // get fake ip by real ip
-func (manager *FakeIPManager) GetFakeByIP(real net.IP) *net.IP {
+func (manager *FakeIPManager) ToFake(real net.IP) *net.IP {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	return manager.r2f.Get(real)
 }
 
-// clear expired hosts
-func (manager *FakeIPManager) refresh() {
-	// refresh mapping every 120s
-	ticker := time.NewTicker(time.Second * 120)
-	defer ticker.Stop()
 
-	for {
-		select {
-		case <- ticker.C:
-			manager.mu.Lock()
-			for k, v := range manager.domains {
-				logger.Printf("host: %s Fake: %s Real %s", v.Name, v.Fake, v.Real)
-				if time.Since(v.Expire) > time.Second * 300 {
-					// delete host entry and free fake ip
-					delete(manager.domains, k)
-					manager.pool.Free(v.Fake)
-				}
-			}
-			manager.mu.Unlock()
-		}
+// dns traffice routing
+func (manager *FakeIPManager) DNSRoutings() []net.IPNet {
+	return []net.IPNet{
+		manager.network,
+		net.IPNet{
+			IP: net.IPv4(8, 8, 8, 8),
+			Mask: net.IPv4Mask(255, 255, 255, 255),
+		},
 	}
 }

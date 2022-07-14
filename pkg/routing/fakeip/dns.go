@@ -40,7 +40,7 @@ func (manager *FakeIPManager) FakeDnsResponse(p *message.Packet) error {
 				}
 				for i, ans := range dns.Answers {
 					if ans.Type == layers.DNSTypeA {
-						fakeIP, err := manager.GetFakeByDomain(string(ans.Name), ans.IP)
+						fakeIP, err := manager.Alloc(string(ans.Name), ans.IP)
 						if err != nil {
 							return err
 						}
@@ -68,58 +68,60 @@ func (manager *FakeIPManager) FakeDnsResponse(p *message.Packet) error {
 
 
 // replace fake ip to real ip
-func (manager *FakeIPManager) DstToReal(p *message.Packet) error {
+func (manager *FakeIPManager) DNAT(p *message.Packet) error {
 
 	packet := gopacket.NewPacket(p.Data, layers.LayerTypeIPv4, gopacket.Default)
 
 	if ipLayer := packet.Layer(layers.LayerTypeIPv4); ipLayer != nil {
 		ip := ipLayer.(*layers.IPv4)
-		if dst := manager.GetRealByIP(ip.DstIP); dst != nil {
-			if trans := packet.TransportLayer(); trans != nil {
-				ip.DstIP = *dst
-				buffer := gopacket.NewSerializeBuffer()
-				options := gopacket.SerializeOptions{
-					ComputeChecksums: true,
-					FixLengths: true,
-				}
-				if checksum, ok := trans.(ChecksumLayer); ok {
+		if dst := manager.ToReal(ip.DstIP); dst != nil {
+			// set network layers
+			for _, layer := range packet.Layers() {
+				if checksum, ok := layer.(ChecksumLayer); ok {
 					checksum.SetNetworkLayerForChecksum(ip)
 				}
-				if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
-					return errors.WithStack(err)
-				}
-				p.Dst = *dst
-				p.Data = buffer.Bytes()
 			}
+			ip.DstIP = *dst
+			buffer := gopacket.NewSerializeBuffer()
+			options := gopacket.SerializeOptions{
+				ComputeChecksums: true,
+				FixLengths: true,
+			}
+			if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
+				return errors.WithStack(err)
+			}
+			p.Dst = *dst
+			p.Data = buffer.Bytes()
 		}
 	}
 	return nil
 }
 
 // replace real src ip to fake ip
-func (manager *FakeIPManager) SrcToFake(p *message.Packet) error {
+func (manager *FakeIPManager) SNAT(p *message.Packet) error {
 
 	packet := gopacket.NewPacket(p.Data, layers.LayerTypeIPv4, gopacket.Default)
 
 	if ipLayer := packet.Layer(layers.LayerTypeIPv4); ipLayer != nil {
 		ip := ipLayer.(*layers.IPv4)
-		if src := manager.GetFakeByIP(ip.SrcIP); src != nil {
-			if trans := packet.TransportLayer(); trans != nil {
-				ip.SrcIP = *src
-				buffer := gopacket.NewSerializeBuffer()
-				options := gopacket.SerializeOptions{
-					ComputeChecksums: true,
-					FixLengths: true,
-				}
-				if checksum, ok := trans.(ChecksumLayer); ok {
+		if src := manager.ToFake(ip.SrcIP); src != nil {
+			// set network layers
+			for _, layer := range packet.Layers() {
+				if checksum, ok := layer.(ChecksumLayer); ok {
 					checksum.SetNetworkLayerForChecksum(ip)
 				}
-				if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
-					return errors.WithStack(err)
-				}
-				p.Src = *src
-				p.Data = buffer.Bytes()
 			}
+			ip.SrcIP = *src
+			buffer := gopacket.NewSerializeBuffer()
+			options := gopacket.SerializeOptions{
+				ComputeChecksums: true,
+				FixLengths: true,
+			}
+			if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
+				return errors.WithStack(err)
+			}
+			p.Src = *src
+			p.Data = buffer.Bytes()
 		}
 	}
 	return nil
