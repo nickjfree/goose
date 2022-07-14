@@ -380,6 +380,11 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 							Metric: entry.metric,
 						})
 					}
+				} else {
+					routings = append(routings, message.RoutingEntry{
+						Network: entry.network,
+						Metric: entry.metric,
+					})
 				}
 			}
 		}
