@@ -48,12 +48,15 @@ type IPMapping struct {
 	data map[uint32]entry
 	// mutex
 	mux sync.Mutex
+	// expire handler
+	expireCB func(net.IP) error
 }
 
 // create an ip to ip mapping
-func NewIPMapping() *IPMapping {
+func NewIPMapping(expire func(net.IP) error) *IPMapping {
 	m := &IPMapping{
 		data: make(map[uint32]entry),
+		expireCB: expire,
 	}
 	go m.refresh()
 	return m
@@ -105,13 +108,15 @@ func (c *IPMapping) refresh() {
 			for k, v := range c.data {
 				if time.Since(v.expire) > keyExpiration {
 					delete(c.data, k)
+					if c.expireCB != nil  {
+						c.expireCB(uintToIP(k))
+					}
 				}
 			}
 			c.mux.Unlock()
 		}
 	}
 }
-
 
 // ip pool
 type IPPool struct {

@@ -29,11 +29,17 @@ func NewFakeIPManager(network string) *FakeIPManager {
 	if err != nil {
 		logger.Fatal(err)
 	}
+
+	pool := utils.NewIPPool(*ipNet)
+
 	m := &FakeIPManager{
 		network: *ipNet,
-		pool: utils.NewIPPool(*ipNet),
-		f2r: utils.NewIPMapping(),
-		r2f: utils.NewIPMapping(),
+		pool: pool,
+		f2r: utils.NewIPMapping(func (ip net.IP) error {
+			pool.Free(ip)
+			return nil 
+		}),
+		r2f: utils.NewIPMapping(nil),
 		skipHosts: make(map[string]struct{}),
 	}
 	return m
