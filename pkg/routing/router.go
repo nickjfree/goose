@@ -399,6 +399,20 @@ func (r *Router) clearRouting(p *Port) error {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 	delete(r.portStats, p)
+	all, err := r.routeTable.CoveredNetworks(*cidranger.AllIPv4)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	for _, e := range all {
+		if entry, ok := e.(*routingEntry); ok {
+			if entry.port == p {
+				// entry expired, remove the routing
+				if _, err := r.routeTable.Remove(entry.Network()); err != nil {
+					return errors.WithStack(err)
+				}
+			}
+		}
+	}
 	return nil
 }
 

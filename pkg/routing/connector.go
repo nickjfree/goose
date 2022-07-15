@@ -344,11 +344,9 @@ func (p *Port) ReadPacket(packet *message.Packet) error {
 
 // send packet to target wire
 func (p *Port) WritePacket(packet *message.Packet) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 1)
-	defer cancel()
 	select {
 	case p.output <- *packet:
-	case <- ctx.Done():
+	default:
 		return errors.Errorf("port(%s) dead", p.w.Endpoint())
 	}
 	return nil
