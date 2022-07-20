@@ -4,15 +4,15 @@ import (
 	"fmt"
 	"net"
 	"runtime"
-	"sync"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pkg/errors"
 	"github.com/yl2chen/cidranger"
 
-	"goose/pkg/routing/fakeip"
 	"goose/pkg/message"
+	"goose/pkg/routing/fakeip"
 )
 
 const (
@@ -21,12 +21,10 @@ const (
 	// routing interval
 	routingInterval = time.Second * 30
 	// routing entry expire time
-	routingExpire =  time.Second * 90
+	routingExpire = time.Second * 90
 	// default routing
 	defaultRouting = "0.0.0.0/0"
 )
-
-
 
 // routing entry
 type routingEntry struct {
@@ -40,7 +38,6 @@ type routingEntry struct {
 	updatedAt time.Time
 }
 
-
 func (entry *routingEntry) Network() net.IPNet {
 	return entry.network
 }
@@ -49,14 +46,11 @@ func (entry *routingEntry) String() string {
 	return fmt.Sprintf("%s -> %s metric %d", entry.network.String(), entry.port, entry.metric)
 }
 
-
 type portState struct {
-
 	updatedAt time.Time
 	// routing entries
 	routings []routingEntry
 }
-
 
 // router
 type Router struct {
@@ -89,14 +83,14 @@ func NewRouter(localcidr string, opts ...Option) *Router {
 	}
 	// local ip/32
 	localNets = append(localNets, net.IPNet{
-		IP: address,
+		IP:   address,
 		Mask: net.CIDRMask(32, 32),
 	})
 	r := &Router{
-		portStats: make(map[*Port]portState),
+		portStats:  make(map[*Port]portState),
 		routeTable: cidranger.NewPCTrieRanger(),
-		localNets: localNets,
-		closed: make(chan struct{}),
+		localNets:  localNets,
+		closed:     make(chan struct{}),
 	}
 	for _, opt := range opts {
 		if err := opt(r); err != nil {
@@ -118,12 +112,12 @@ func (r *Router) RegisterPort(p *Port) error {
 	go func() {
 		logger.Printf("traffic quite for port(%s) %+v", p, r.handleTraffic(p))
 		r.clearRouting(p)
-	} ()
+	}()
 
 	go func() {
 		logger.Printf("routing quite for port(%s) %+v", p, r.handleRouting(p))
 		r.clearRouting(p)
-	} ()
+	}()
 	return nil
 }
 
@@ -137,9 +131,9 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 		for _, entry := range routing.Routings {
 			peerEntry := routingEntry{
 				network: entry.Network,
-				port: p,
+				port:    p,
 				// inc distance
-				metric: entry.Metric + 1,
+				metric:    entry.Metric + 1,
 				updatedAt: time.Now(),
 			}
 			// routings reach max hops
@@ -183,15 +177,15 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 			r.portStats[p] = state
 		}
 		return nil
-	} ()
+	}()
 
 	// if there is error in routing update for this port. close this port
 	if err != nil {
 		defer p.Close()
-		msg := message.Routing{ 
-			Type: message.RoutingRegisterFailed,
+		msg := message.Routing{
+			Type:     message.RoutingRegisterFailed,
 			Routings: []message.RoutingEntry{},
-			Message: fmt.Sprintf("peer closed with error: %s", err),
+			Message:  fmt.Sprintf("peer closed with error: %s", err),
 		}
 		// send error message
 		if err := p.AnnouceRouting(&msg); err != nil {
@@ -212,7 +206,7 @@ func (r *Router) FindDestPort(packet message.Packet) (*Port, error) {
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	var targetEntry	*routingEntry
+	var targetEntry *routingEntry
 	maskLen := -1
 	for _, e := range containingNetworks {
 		if entry, ok := e.(*routingEntry); ok {
@@ -234,16 +228,16 @@ func (r *Router) Close() {
 	close(r.closed)
 }
 
-func (r *Router) Done() <- chan struct{} {
+func (r *Router) Done() <-chan struct{} {
 	return r.closed
 }
 
 func (r *Router) handleTraffic(p *Port) error {
 
-	defer p.Close()	
+	defer p.Close()
 	for {
 		select {
-		case <- r.closed:
+		case <-r.closed:
 			return nil
 		default:
 			packet := message.Packet{}
@@ -261,7 +255,7 @@ func (r *Router) handleTraffic(p *Port) error {
 					return err
 				}
 			}
-			// routing 
+			// routing
 			target, err := r.FindDestPort(packet)
 			if err != nil {
 				return err
@@ -301,16 +295,16 @@ func (r *Router) handleRouting(p *Port) error {
 
 	for {
 		select {
-		case <- r.closed:
+		case <-r.closed:
 			return nil
-		case <- ticker.C:
+		case <-ticker.C:
 			// check routing status
 			r.lock.Lock()
 			state, ok := r.portStats[p]
 			r.lock.Unlock()
 			if ok {
 				diff := time.Now().Sub(state.updatedAt)
-				if diff > time.Second * 300 {
+				if diff > time.Second*300 {
 					return errors.Errorf("port(%s) idle closed", p)
 				}
 			} else {
@@ -321,7 +315,7 @@ func (r *Router) handleRouting(p *Port) error {
 			if err != nil {
 				return err
 			}
-			msg := message.Routing{ Routings: routings }
+			msg := message.Routing{Routings: routings}
 			// send routings
 			if err := p.AnnouceRouting(&msg); err != nil {
 				return err
@@ -331,7 +325,7 @@ func (r *Router) handleRouting(p *Port) error {
 			if strings.HasPrefix(p.String(), "tun") {
 
 				routing := message.Routing{
-					Type: message.MessageTypeRouting,
+					Type:     message.MessageTypeRouting,
 					Routings: []message.RoutingEntry{},
 				}
 				for _, network := range r.localNets {
@@ -365,27 +359,27 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			if entry.port == p {
 				continue
 			}
-			// not tunnel			
+			// not tunnel
 			if !strings.HasPrefix(p.String(), "tun") {
 				routings = append(routings, message.RoutingEntry{
 					Network: entry.network,
-					Metric: entry.metric,
+					Metric:  entry.metric,
 				})
 				continue
 			}
-			// tunnel 
+			// tunnel
 			// route none default traffics
 			if entry.network.String() != defaultRouting {
 				routings = append(routings, message.RoutingEntry{
 					Network: entry.network,
-					Metric: entry.metric,
+					Metric:  entry.metric,
 				})
 			} else if r.fakeIP != nil {
 				// if fakeip is enabled, route dns traffics to the tunnel
 				for _, network := range r.fakeIP.DNSRoutings() {
 					routings = append(routings, message.RoutingEntry{
 						Network: network,
-						Metric: entry.metric,
+						Metric:  entry.metric,
 					})
 				}
 			}
@@ -416,7 +410,6 @@ func (r *Router) clearRouting(p *Port) error {
 	return nil
 }
 
-
 // refresh routing tables
 func (r *Router) refreshRoutings() error {
 
@@ -442,7 +435,6 @@ func (r *Router) refreshRoutings() error {
 	return nil
 }
 
-
 // do background works
 // refresh routing table
 func (r *Router) background() {
@@ -452,14 +444,14 @@ func (r *Router) background() {
 
 	for {
 		select {
-		case <- ticker.C:
-			// infos 
+		case <-ticker.C:
+			// infos
 			logger.Println("goroutines:", runtime.NumGoroutine())
 			// refresh
 			if err := r.refreshRoutings(); err != nil {
 				logger.Printf("refresh routing failed with: %+v", err)
 			}
-		case <- r.closed:
+		case <-r.closed:
 			logger.Println("router closed")
 			return
 		}

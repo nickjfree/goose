@@ -1,6 +1,5 @@
 package utils
 
-
 import (
 	"regexp"
 
@@ -13,7 +12,6 @@ var (
 	// default interface
 	defaultInterface string
 )
-
 
 func init() {
 	var err error

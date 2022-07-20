@@ -2,9 +2,9 @@ package discovery
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"os"
-	"fmt"
 	"time"
 
 	"github.com/libp2p/go-libp2p-core/discovery"
@@ -12,7 +12,6 @@ import (
 
 	"goose/pkg/wire/ipfs"
 )
-
 
 const (
 	// advertise node [refix]
@@ -26,9 +25,8 @@ const (
 )
 
 var (
-	logger = log.New(os.Stdout, "discovery: ", log.LstdFlags | log.Lshortfile)
+	logger = log.New(os.Stdout, "discovery: ", log.LstdFlags|log.Lshortfile)
 )
-
 
 type PeerFinder struct {
 	// p2p host
@@ -39,30 +37,26 @@ type PeerFinder struct {
 	peers chan string
 }
 
-
 func nodeKey(ns string) string {
 	return fmt.Sprintf("%s/%s", prefixGooseNode, ns)
 }
 
-
 func NewPeerFinder(ns string) PeerFinder {
 	pf := PeerFinder{
 		P2PHost: ipfs.GetP2PHost(),
-		ns: nodeKey(ns),
-		peers: make(chan string),
+		ns:      nodeKey(ns),
+		peers:   make(chan string),
 	}
 	go pf.start()
 	return pf
 }
 
-
 func (pf *PeerFinder) Peers() <-chan string {
 	return pf.peers
 }
 
-
 func (pf *PeerFinder) findPeers() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 300)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*300)
 	defer cancel()
 	logger.Printf("searching peers in %s", pf.ns)
 	peers, err := pf.FindPeers(ctx, pf.ns)
@@ -93,7 +87,6 @@ func (pf *PeerFinder) start() error {
 
 	ctx := context.Background()
 
-
 	if _, err := pf.Advertise(ctx, pf.ns, discovery.TTL(advertiseInterval)); err != nil {
 		logger.Println("failed to advertise", err)
 	}
@@ -104,11 +97,11 @@ func (pf *PeerFinder) start() error {
 	// loop
 	for {
 		select {
-		case <- searchTicker.C:
+		case <-searchTicker.C:
 			if err := pf.findPeers(); err != nil {
 				logger.Println("failed find peers", err)
 			}
-		case <- advertiseTicker.C:
+		case <-advertiseTicker.C:
 			if _, err := pf.Advertise(ctx, pf.ns, discovery.TTL(advertiseInterval)); err != nil {
 				logger.Println("failed to advertise", err)
 			}

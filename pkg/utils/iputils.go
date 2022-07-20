@@ -8,7 +8,6 @@ import (
 	"github.com/pkg/errors"
 )
 
-
 const (
 	// key expiration time
 	keyExpiration = time.Second * 900
@@ -26,7 +25,6 @@ func uintToIP(v uint32) net.IP {
 	return net.IP{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}
 }
 
-
 // inc ip
 func inc(ip net.IP) {
 	for j := len(ip) - 1; j >= 0; j-- {
@@ -38,7 +36,7 @@ func inc(ip net.IP) {
 }
 
 type entry struct {
-	value net.IP
+	value  net.IP
 	expire time.Time
 }
 
@@ -55,7 +53,7 @@ type IPMapping struct {
 // create an ip to ip mapping
 func NewIPMapping(expire func(net.IP) error) *IPMapping {
 	m := &IPMapping{
-		data: make(map[uint32]entry),
+		data:     make(map[uint32]entry),
 		expireCB: expire,
 	}
 	go m.refresh()
@@ -66,9 +64,9 @@ func NewIPMapping(expire func(net.IP) error) *IPMapping {
 func (c *IPMapping) Put(ip1, ip2 net.IP) {
 	c.mux.Lock()
 	defer c.mux.Unlock()
-	
+
 	c.data[ipToUint(ip1)] = entry{
-		value: ip2,
+		value:  ip2,
 		expire: time.Now().Add(keyExpiration),
 	}
 }
@@ -103,12 +101,12 @@ func (c *IPMapping) refresh() {
 
 	for {
 		select {
-		case <- ticker.C:
+		case <-ticker.C:
 			c.mux.Lock()
 			for k, v := range c.data {
 				if time.Since(v.expire) > keyExpiration {
 					delete(c.data, k)
-					if c.expireCB != nil  {
+					if c.expireCB != nil {
 						c.expireCB(uintToIP(k))
 					}
 				}
@@ -134,7 +132,7 @@ type IPPool struct {
 func NewIPPool(network net.IPNet) *IPPool {
 	return &IPPool{
 		network: network,
-		max: network.IP,
+		max:     network.IP,
 	}
 }
 
@@ -156,7 +154,7 @@ func (p *IPPool) Alloc() (net.IP, error) {
 	}
 	// deep copy ip data
 	result = uintToIP(ipToUint(p.max))
-	return result, nil	
+	return result, nil
 }
 
 // free ip

@@ -4,7 +4,6 @@ import (
 	"flag"
 )
 
-
 const (
 	ENDPOINT_HELP = `
 comma separated remote endpoints.
@@ -17,7 +16,6 @@ local ipv4 address to set on the tunnel interface.
 `
 )
 
-
 var (
 	// remote http1.1/http3 endpoint or libp2p peerid
 	Endpoints = ""
@@ -25,7 +23,7 @@ var (
 	LocalAddr = ""
 	// forward
 	Forward = ""
-	// namespace 
+	// namespace
 	Namespace = ""
 	// fake ip range
 	FakeRange = ""

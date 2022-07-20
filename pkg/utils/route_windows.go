@@ -1,6 +1,5 @@
 package utils
 
-
 import (
 	"net"
 	"syscall"
@@ -101,10 +100,9 @@ func getDefaultGateway() (string, error) {
 	return dwordIP(row.DwForwardNextHop).String(), nil
 }
 
-
 // wait tunnel status up
 func waitTunnelUp(tunnelGateway string) error {
-	for {	
+	for {
 		var row MIB_IPFORWARDROW
 		_, _, err := syscall.Syscall(nGetBestRoute, 3,
 			uintptr(ipDword(net.ParseIP(tunnelGateway))),
@@ -116,12 +114,11 @@ func waitTunnelUp(tunnelGateway string) error {
 		if row.DwForwardIfIndex != defaultIfIndex {
 			// tunnelGateway is at tap interface now
 			return nil
-		} 
+		}
 		// continue wait
 		time.Sleep(5 * time.Second)
 	}
 }
-
 
 func SetRoute(network string, gateway string) error {
 	if network == "0.0.0.0/0" {

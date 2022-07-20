@@ -2,20 +2,19 @@ package utils
 
 import (
 	"context"
+	"github.com/pkg/errors"
 	"log"
-	"time"
 	"os"
 	"os/exec"
-	"github.com/pkg/errors"
+	"time"
 )
 
 var (
 	logger = log.New(os.Stdout, "route: ", log.Lshortfile)
 )
 
-
 func RunCmd(name string, cmdStr ...string) ([]byte, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 300 * time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, cmdStr...)
 	if out, err := cmd.CombinedOutput(); err != nil {

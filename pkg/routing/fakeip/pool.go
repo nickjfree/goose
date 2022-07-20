@@ -7,7 +7,6 @@ import (
 	"goose/pkg/utils"
 )
 
-
 // fake ip manager
 type FakeIPManager struct {
 	// network
@@ -18,7 +17,7 @@ type FakeIPManager struct {
 	f2r *utils.IPMapping
 	// real to fake ip mapping
 	r2f *utils.IPMapping
-	// hosts to skip 
+	// hosts to skip
 	skipHosts map[string]struct{}
 	// lock
 	mu sync.Mutex
@@ -34,12 +33,12 @@ func NewFakeIPManager(network string) *FakeIPManager {
 
 	m := &FakeIPManager{
 		network: *ipNet,
-		pool: pool,
-		f2r: utils.NewIPMapping(func (ip net.IP) error {
+		pool:    pool,
+		f2r: utils.NewIPMapping(func(ip net.IP) error {
 			pool.Free(ip)
-			return nil 
+			return nil
 		}),
-		r2f: utils.NewIPMapping(nil),
+		r2f:       utils.NewIPMapping(nil),
 		skipHosts: make(map[string]struct{}),
 	}
 	return m
@@ -82,13 +81,12 @@ func (manager *FakeIPManager) ToFake(real net.IP) *net.IP {
 	return manager.r2f.Get(real)
 }
 
-
 // dns traffice routing
 func (manager *FakeIPManager) DNSRoutings() []net.IPNet {
 	return []net.IPNet{
 		manager.network,
 		net.IPNet{
-			IP: net.IPv4(8, 8, 8, 8),
+			IP:   net.IPv4(8, 8, 8, 8),
 			Mask: net.IPv4Mask(255, 255, 255, 255),
 		},
 	}

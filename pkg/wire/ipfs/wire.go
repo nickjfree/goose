@@ -8,19 +8,17 @@ import (
 	"fmt"
 	"net"
 	// "io"
+	"crypto/rand"
+	"encoding/json"
 	"io/ioutil"
 	"log"
-	"encoding/json"
 	"strings"
 	"time"
-	"crypto/rand"
 	// "path/filepath"
-	"sync"
 	"os"
+	"sync"
 
 	"github.com/libp2p/go-libp2p"
-	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
-	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p-core/crypto"
 	"github.com/libp2p/go-libp2p-core/host"
 	"github.com/libp2p/go-libp2p-core/network"
@@ -28,16 +26,18 @@ import (
 	"github.com/libp2p/go-libp2p-core/peerstore"
 	"github.com/libp2p/go-libp2p-core/routing"
 	dht "github.com/libp2p/go-libp2p-kad-dht"
+	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
+	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/pkg/errors"
-	"goose/pkg/wire"
 	"goose/pkg/message"
 	"goose/pkg/options"
+	"goose/pkg/wire"
 )
 
 // ipfs bootstrap node
-var( 
+var (
 	bootstraps = []string{
 		"/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
 		"/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
@@ -59,14 +59,12 @@ const (
 	keyBits = 2048
 )
 
-
 var (
-	logger = log.New(os.Stdout, "ipfswire: ", log.LstdFlags | log.Lshortfile)
+	logger = log.New(os.Stdout, "ipfswire: ", log.LstdFlags|log.Lshortfile)
 
 	// manager
 	ipfsWireManager *IPFSWireManager
 )
-
 
 // register ipfs wire manager
 func init() {
@@ -81,14 +79,13 @@ type IPFSWire struct {
 	// stream
 	s network.Stream
 	// encoder and decoer
-	encoder *gob.Encoder 
+	encoder *gob.Encoder
 	decoder *gob.Decoder
 	// has route
 	hasRoute bool
 	// close func
-	closeFunc func () error
+	closeFunc func() error
 }
-
 
 func (w *IPFSWire) Endpoint() string {
 	return fmt.Sprintf("ipfs/%s", w.s.Conn().RemotePeer())
@@ -117,7 +114,7 @@ func (w *IPFSWire) Decode(msg *message.Message) error {
 }
 
 // send message to ipfs wire
-func (w *IPFSWire) Close() (error) {
+func (w *IPFSWire) Close() error {
 	w.closeFunc()
 	return nil
 }
@@ -128,11 +125,9 @@ type IPFSWireManager struct {
 	*P2PHost
 }
 
-
 func GetP2PHost() *P2PHost {
 	return ipfsWireManager.P2PHost
 }
-
 
 func newIPFSWireManager() *IPFSWireManager {
 	host, err := NewP2PHost()
@@ -142,7 +137,7 @@ func newIPFSWireManager() *IPFSWireManager {
 	// do backgroud relay refresh jobs
 	go host.Background()
 	m := &IPFSWireManager{
-		P2PHost: host,
+		P2PHost:         host,
 		BaseWireManager: wire.NewBaseWireManager(),
 	}
 	// set server stream hanlder
@@ -150,7 +145,7 @@ func newIPFSWireManager() *IPFSWireManager {
 		host.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
 		logger.Printf("received new stream(%s) peerId (%s)", s.ID(), s.Conn().RemotePeer())
 		// close func
-		close := func () error {
+		close := func() error {
 			// unprotect connecttion
 			host.ConnManager().Unprotect(s.Conn().RemotePeer(), connectionTag)
 			// close stream
@@ -159,10 +154,10 @@ func newIPFSWireManager() *IPFSWireManager {
 		}
 		// got an inbound wire
 		m.In <- &IPFSWire{
-			s: s,
+			s:         s,
 			closeFunc: close,
-			encoder: gob.NewEncoder(s),
-			decoder: gob.NewDecoder(s),
+			encoder:   gob.NewEncoder(s),
+			decoder:   gob.NewDecoder(s),
 		}
 	})
 	return m
@@ -189,11 +184,12 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 			retries -= 1
 			continue
 		} else if err != nil {
+			cancel()
 			return errors.WithStack(err)
 		}
 		m.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
 		// close func
-		close := func () error {
+		close := func() error {
 			// unprotect connecttion
 			m.ConnManager().Unprotect(s.Conn().RemotePeer(), connectionTag)
 			// close stream
@@ -204,14 +200,13 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 		}
 		// got an outbound wire
 		m.Out <- &IPFSWire{
-			s: s,
+			s:         s,
 			closeFunc: close,
-			encoder: gob.NewEncoder(s),
-			decoder: gob.NewDecoder(s),
+			encoder:   gob.NewEncoder(s),
+			decoder:   gob.NewDecoder(s),
 		}
 		return nil
 	}
-	return nil
 }
 
 func (m *IPFSWireManager) Protocol() string {
@@ -231,7 +226,7 @@ type P2PHost struct {
 	// host context
 	ctx context.Context
 	// cancel
-	cancel context.CancelFunc 
+	cancel context.CancelFunc
 	// advertise namespace
 	namespace string
 }
@@ -239,7 +234,7 @@ type P2PHost struct {
 func NewP2PHost() (*P2PHost, error) {
 	// crreate peer chan
 	peerChan := make(chan peer.AddrInfo, 100)
-	// create p2p host	
+	// create p2p host
 	host, dht, err := createHost(peerChan)
 	if err != nil {
 		return nil, err
@@ -247,12 +242,12 @@ func NewP2PHost() (*P2PHost, error) {
 	routingDiscovery := dis_routing.NewRoutingDiscovery(dht)
 	ctx, cancel := context.WithCancel(context.Background())
 	h := &P2PHost{
-		Host: host,
+		Host:             host,
 		RoutingDiscovery: routingDiscovery,
-		dht: dht,
-		ctx: ctx,
-		peerChan: peerChan,
-		cancel : cancel,
+		dht:              dht,
+		ctx:              ctx,
+		peerChan:         peerChan,
+		cancel:           cancel,
 	}
 	if h.Bootstrap(bootstraps); err != nil {
 		return nil, err
@@ -263,7 +258,7 @@ func NewP2PHost() (*P2PHost, error) {
 // bootstrap with public peers
 func (h *P2PHost) Bootstrap(peers []string) error {
 	// bootstrap timeout
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 300)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*300)
 	defer cancel()
 
 	if len(peers) < 1 {
@@ -271,7 +266,7 @@ func (h *P2PHost) Bootstrap(peers []string) error {
 	}
 	errs := make(chan error, len(peers))
 	var wg sync.WaitGroup
-	for _, str := range peers {	
+	for _, str := range peers {
 		maddr := ma.StringCast(str)
 		p, err := peer.AddrInfoFromP2pAddr(maddr)
 		if err != nil {
@@ -310,7 +305,6 @@ func (h *P2PHost) Bootstrap(peers []string) error {
 	return nil
 }
 
-
 // run some background jobs
 func (h *P2PHost) Background() error {
 
@@ -323,9 +317,9 @@ func (h *P2PHost) Background() error {
 
 	for {
 		select {
-		case <- h.ctx.Done():
+		case <-h.ctx.Done():
 			return nil
-		case <- ticker.C:
+		case <-ticker.C:
 			// show network state
 			peers := h.Network().Peers()
 			peerList := []peer.AddrInfo{}
@@ -336,7 +330,7 @@ func (h *P2PHost) Background() error {
 			for _, peer := range peerList {
 				select {
 				case h.peerChan <- peer:
-				case <- h.ctx.Done():
+				case <-h.ctx.Done():
 					return nil
 				}
 			}
@@ -346,7 +340,7 @@ func (h *P2PHost) Background() error {
 				logger.Printf("error %s", errors.WithStack(err))
 			}
 			logger.Printf("peerid: %s\naddrs: %s\n", h.ID(), addrText)
-		case <- bootstrapTicker.C:
+		case <-bootstrapTicker.C:
 			// bootstrap refesh
 			if err := h.Bootstrap(bootstraps); err != nil {
 				logger.Printf("bootstrap error %+v", err)
@@ -395,7 +389,7 @@ func getPrivKey(path string) (crypto.PrivKey, error) {
 
 // create libp2p node
 // circuit relay need to be enabled to hide the real server ip.
-func createHost(peerChan <- chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error) {
+func createHost(peerChan <-chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error) {
 
 	folder := fmt.Sprintf("data/%s", strings.ReplaceAll(options.Namespace, "-", "_"))
 	if err := os.MkdirAll(folder, 0644); err != nil {

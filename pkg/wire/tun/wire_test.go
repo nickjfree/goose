@@ -1,15 +1,14 @@
 package tun
 
-
 import (
-	"net"
-	"testing"
 	"context"
-	"sync"
-	"time"
-	"goose/pkg/wire"
 	"goose/pkg/message"
 	"goose/pkg/utils"
+	"goose/pkg/wire"
+	"net"
+	"sync"
+	"testing"
+	"time"
 )
 
 // test dial ipfs wire
@@ -19,22 +18,22 @@ func TestConnect(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(1)
 	// outbount channel reader
-	go func () {
+	go func() {
 		defer wg.Done()
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second * 5)
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()
 		for {
 			select {
-			case w, _ := <- wire.Out():
+			case w, _ := <-wire.Out():
 				defer w.Close()
 				t.Logf("outbound wire %+v", w)
 				wires = append(wires, w)
-			case <- ctx.Done():
+			case <-ctx.Done():
 				t.Log("wait for wire timed out")
 				return
 			}
-		}	
-	} ()
+		}
+	}()
 	if err := wire.Dial("tun/goose1/192.168.100.2/24"); err != nil {
 		t.Logf("%+v", err)
 		t.Fail()
@@ -55,12 +54,12 @@ func TestTraffic(t *testing.T) {
 
 	ping := make(chan message.Packet)
 	// outbount channel reader
-	go func () {
-		ctx, cancel := context.WithTimeout(context.Background(), time.Second * 5)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*5)
 		defer cancel()
 		for {
 			select {
-			case w, _ := <- wire.Out():
+			case w, _ := <-wire.Out():
 				defer w.Close()
 				t.Logf("outbound wire %+v", w)
 				// send routing messages to wire
@@ -72,11 +71,11 @@ func TestTraffic(t *testing.T) {
 						Routings: []message.RoutingEntry{
 							{
 								Network: *ipnet1,
-								Metric: 0,
+								Metric:  0,
 							},
 							{
 								Network: *ipnet2,
-								Metric: 0,
+								Metric:  0,
 							},
 						},
 					},
@@ -100,14 +99,13 @@ func TestTraffic(t *testing.T) {
 						}
 					}
 				}
-				return
-			case <- ctx.Done():
+			case <-ctx.Done():
 				t.Log("wait for wire timed out")
 				t.Fail()
 				return
 			}
-		}	
-	} ()
+		}
+	}()
 	// dial wire
 	if err := wire.Dial("tun/goose1/192.168.100.3/24"); err != nil {
 		t.Logf("%+v", err)
@@ -115,17 +113,17 @@ func TestTraffic(t *testing.T) {
 	}
 	// ping the wire.
 	// fake ip, so ignore none zero return code
-	go func () {
+	go func() {
 		if out, err := utils.RunCmd("ping", "-c", "30", "20.2.2.1"); err != nil {
 			t.Logf("%+v %s", err, out)
 		}
-	} ()
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 30)
+	}()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 	select {
-	case <- ping:
+	case <-ping:
 		return
-	case <- ctx.Done():
+	case <-ctx.Done():
 		t.Log("not any ping messages")
 		t.Fail()
 	}

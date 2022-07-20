@@ -1,29 +1,27 @@
 package routing
 
 import (
-	"net"
 	"github.com/pkg/errors"
+	"net"
 
 	"goose/pkg/routing/discovery"
 	"goose/pkg/routing/fakeip"
 	"goose/pkg/utils"
 )
 
-
 // router option
-type Option func (r *Router) error
+type Option func(r *Router) error
 
 // max metric allowd for this rouer
 func WithMaxMetric(metric int) Option {
-	return func (r *Router) error {
+	return func(r *Router) error {
 		r.maxMetric = metric
 		return nil
 	}
 }
 
-
 func WithConnector() Option {
-	return func (r *Router) error {
+	return func(r *Router) error {
 		// create connector
 		c, err := NewBaseConnector(r)
 		if err != nil {
@@ -36,7 +34,7 @@ func WithConnector() Option {
 
 // forward cidrs
 func WithForward(forwardCIDRs ...string) Option {
-	return func (r *Router) error {
+	return func(r *Router) error {
 		// append local forward nets
 		for _, cidr := range forwardCIDRs {
 			_, network, err := net.ParseCIDR(cidr)
@@ -58,20 +56,20 @@ func WithForward(forwardCIDRs ...string) Option {
 
 // discovery
 func WithDiscovery(namespace string) Option {
-	return func (r *Router) error {
-		go func () {
+	return func(r *Router) error {
+		go func() {
 			pf := discovery.NewPeerFinder(namespace)
 			for peer := range pf.Peers() {
 				r.Dial(peer)
 			}
-		} ()
+		}()
 		return nil
 	}
 }
 
 // dns fake ip
 func WithFakeIP(network string) Option {
-	return func (r *Router) error {
+	return func(r *Router) error {
 		r.fakeIP = fakeip.NewFakeIPManager(network)
 		return nil
 	}

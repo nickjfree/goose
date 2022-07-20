@@ -7,21 +7,20 @@ import (
 	"os"
 	"strings"
 
+	"github.com/pkg/errors"
 	"github.com/songgao/water"
 	"github.com/songgao/water/waterutil"
-	"github.com/pkg/errors"
 
-	"goose/pkg/wire"
 	"goose/pkg/message"
 	"goose/pkg/utils"
+	"goose/pkg/wire"
 )
 
 var (
-	logger = log.New(os.Stdout, "tunwire: ", log.LstdFlags | log.Lshortfile)
+	logger = log.New(os.Stdout, "tunwire: ", log.LstdFlags|log.Lshortfile)
 	// manager
 	tunWireManager *TunWireManager
 )
-
 
 const (
 	// max receive buffer size
@@ -35,7 +34,6 @@ func init() {
 	tunWireManager = newTunWireManager()
 	wire.RegisterWireManager(tunWireManager)
 }
-
 
 // tun device
 type TunWire struct {
@@ -55,12 +53,10 @@ type TunWire struct {
 	routings []net.IPNet
 }
 
-
 func (w *TunWire) Endpoint() string {
 	maskSize, _ := w.network.Mask.Size()
 	return fmt.Sprintf("tun/%s/%s/%d", w.name, w.address.String(), maskSize)
 }
-
 
 func (w *TunWire) Address() net.IP {
 	return w.address
@@ -88,7 +84,6 @@ func (w *TunWire) Encode(msg *message.Message) error {
 	return nil
 }
 
-
 // Decode
 func (w *TunWire) Decode(msg *message.Message) error {
 
@@ -108,9 +103,8 @@ func (w *TunWire) Close() error {
 	return nil
 }
 
-
 func (w *TunWire) readPacket(msg *message.Message) error {
-	buff :=	make([]byte, tunBuffSize)
+	buff := make([]byte, tunBuffSize)
 	for {
 		n, err := w.ifTun.Read(buff)
 		if err != nil {
@@ -122,9 +116,9 @@ func (w *TunWire) readPacket(msg *message.Message) error {
 		} else {
 			msg.Type = message.MessageTypePacket
 			msg.Payload = message.Packet{
-				Src: waterutil.IPv4Source(buff),
-				Dst: waterutil.IPv4Destination(buff),
-				TTL: message.PacketTTL,
+				Src:  waterutil.IPv4Source(buff),
+				Dst:  waterutil.IPv4Destination(buff),
+				TTL:  message.PacketTTL,
 				Data: buff[0:n],
 			}
 			return nil
@@ -239,7 +233,7 @@ func (m *TunWireManager) Dial(endpoint string) error {
 	}
 	name := seg[0]
 	address := seg[1]
-	
+
 	w, err := NewTunWire(name, address)
 	if err != nil {
 		return err
@@ -261,10 +255,9 @@ func inc(ip net.IP) {
 	}
 }
 
-
 // gen a default gateway from cidr address
 func defaultGateway(cidr string) (net.IP, error) {
-	var gateway net.IP 	
+	var gateway net.IP
 	address, network, err := net.ParseCIDR(cidr)
 	if err != nil {
 		return gateway, errors.WithStack(err)

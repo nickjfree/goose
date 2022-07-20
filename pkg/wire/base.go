@@ -1,27 +1,25 @@
 package wire
 
-
 import (
 	"log"
 	"net"
 	"os"
-	"sync"
 	"strings"
+	"sync"
 
 	"github.com/pkg/errors"
 	"goose/pkg/message"
 )
 
-
 var (
-	logger = log.New(os.Stdout, "wire: ", log.LstdFlags | log.Lshortfile)
+	logger = log.New(os.Stdout, "wire: ", log.LstdFlags|log.Lshortfile)
 
 	// wire managers
 	managers = map[string]WireManager{}
 	// wire managers lock
-	managersLock sync.Mutex	
+	managersLock sync.Mutex
 	// wire handler, set by connector
-	wireHandler func (Wire, bool) error
+	wireHandler func(Wire, bool) error
 
 	// inbound wire channel
 	inboundWires = make(chan Wire)
@@ -43,10 +41,8 @@ type Wire interface {
 	Close() error
 }
 
-
 // base wire
-type BaseWire struct {}
-
+type BaseWire struct{}
 
 func (w *BaseWire) Endpoint() string {
 	return ""
@@ -79,19 +75,17 @@ type WireManager interface {
 	Protocol() string
 }
 
-
 type BaseWireManager struct {
-	In chan Wire
+	In  chan Wire
 	Out chan Wire
 }
 
 func NewBaseWireManager() BaseWireManager {
 	return BaseWireManager{
-		In: inboundWires,
+		In:  inboundWires,
 		Out: outboundWires,
 	}
 }
-
 
 func (m *BaseWireManager) Connect(endpoint string) error {
 	logger.Fatalf("Connect() not implemented %+v", m)
@@ -109,7 +103,6 @@ func RegisterWireManager(w WireManager) error {
 	managers[w.Protocol()] = w
 	return nil
 }
-
 
 func Dial(endpoint string) error {
 
@@ -130,7 +123,6 @@ func Dial(endpoint string) error {
 	}
 	return errors.Errorf("protocol(%s) not supported", protocol)
 }
-
 
 func In() <-chan Wire {
 	return inboundWires

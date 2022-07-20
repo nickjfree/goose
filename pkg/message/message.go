@@ -6,14 +6,14 @@ import (
 )
 
 const (
-	
+
 	// traffic data
 	MessageTypePacket = 0
 	// routing info
 	MessageTypeRouting = 1
-	// routing 
-	RoutingRegister = 0
-	RoutingRegisterOK = 1
+	// routing
+	RoutingRegister       = 0
+	RoutingRegisterOK     = 1
 	RoutingRegisterFailed = 2
 	// ttl
 	PacketTTL = 32
@@ -21,7 +21,7 @@ const (
 
 // wire message
 type Message struct {
-	Type int   		
+	Type    int
 	Payload interface{}
 }
 
@@ -37,8 +37,7 @@ type Packet struct {
 	Data []byte
 }
 
-
-// routing entry 
+// routing entry
 type RoutingEntry struct {
 	// network
 	Network net.IPNet
@@ -55,7 +54,6 @@ type Routing struct {
 	// message
 	Message string
 }
-
 
 func init() {
 	gob.RegisterName("M", Message{})

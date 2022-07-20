@@ -1,6 +1,5 @@
 package routing
 
-
 import (
 	"context"
 	"fmt"
@@ -10,13 +9,12 @@ import (
 	"time"
 
 	"github.com/pkg/errors"
-	"goose/pkg/wire"
 	"goose/pkg/message"
+	"goose/pkg/wire"
 )
 
-
 var (
-	logger = log.New(os.Stdout, "routing: ", log.LstdFlags | log.Lshortfile)
+	logger = log.New(os.Stdout, "routing: ", log.LstdFlags|log.Lshortfile)
 )
 
 const (
@@ -24,31 +22,28 @@ const (
 	dialConcurrency = 8
 	// port send buffer size
 	portBufferSize = 2048
-	// max retries 
+	// max retries
 	connMaxRetries = 32
 
 	// wire status
-	statusUnknown = 0
-	statusConnected = 1
+	statusUnknown    = 0
+	statusConnected  = 1
 	statusConnecting = 2
-	statusFailed = 3
-	
+	statusFailed     = 3
 )
-
 
 // Connector interface
 type Connector interface {
 	Dial(string)
 }
 
-
 // endpoint state
 type epState struct {
 	// wire
 	wire wire.Wire
 	// status
-	status int 
-	// failed times	
+	status int
+	// failed times
 	failed int
 }
 
@@ -82,23 +77,20 @@ type Port struct {
 	ctx context.Context
 }
 
-
 func NewBaseConnector(r *Router) (Connector, error) {
 	c := &BaseConnector{
-		epStats: make(map[string]epState),
+		epStats:  make(map[string]epState),
 		requests: make(chan string, dialConcurrency),
-		router: r,
+		router:   r,
 	}
 	go c.start()
 	return c, nil
 }
 
-
 // connect to endpoint
 func (c *BaseConnector) Dial(endpoint string) {
 	c.requests <- endpoint
 }
-
 
 func (c *BaseConnector) remove(endpoint string, reconnect bool) {
 	if reconnect {
@@ -107,7 +99,6 @@ func (c *BaseConnector) remove(endpoint string, reconnect bool) {
 		c.setUnknow(endpoint)
 	}
 }
-
 
 // mark endpint as connected
 func (c *BaseConnector) setConnected(endpoint string, w wire.Wire) error {
@@ -151,7 +142,7 @@ func (c *BaseConnector) setFailed(endpoint string) error {
 			c.epStats[endpoint] = state
 		}
 		return nil
-	} 
+	}
 	return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
 }
 
@@ -189,12 +180,11 @@ func (c *BaseConnector) setUnknow(endpoint string) error {
 	return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
 }
 
-
 // connect to endpoint
 func (c *BaseConnector) newPort(w wire.Wire, reconnect bool) *Port {
 
 	ctx, cancel := context.WithCancel(context.Background())
-	
+
 	closeFunc := func() error {
 		cancel()
 		c.remove(w.Endpoint(), reconnect)
@@ -202,19 +192,18 @@ func (c *BaseConnector) newPort(w wire.Wire, reconnect bool) *Port {
 	}
 
 	p := &Port{
-		w: w,
-		router: c.router,
-		output: make(chan message.Packet, portBufferSize),
-		announce: make(chan message.Routing),
+		w:         w,
+		router:    c.router,
+		output:    make(chan message.Packet, portBufferSize),
+		announce:  make(chan message.Routing),
 		closeFunc: closeFunc,
-		ctx: ctx,
+		ctx:       ctx,
 	}
 	go func() {
 		logger.Printf("handle port(%s) output: %+v", p, p.handleOutput())
-	} ()
+	}()
 	return p
 }
-
 
 // run the connector
 func (c *BaseConnector) start() error {
@@ -222,10 +211,10 @@ func (c *BaseConnector) start() error {
 	go c.handleConnection()
 	// handle connection requests
 	for i := 1; i < dialConcurrency; i++ {
-		go func () {
+		go func() {
 			for {
 				select {
-				case endpoint := <- c.requests:
+				case endpoint := <-c.requests:
 					if err := c.setConnecting(endpoint); err != nil {
 						logger.Printf("%+v", err)
 						continue
@@ -234,18 +223,18 @@ func (c *BaseConnector) start() error {
 						logger.Printf("connection failed %+v", err)
 						c.setFailed(endpoint)
 					}
-				case <- c.router.Done():
+				case <-c.router.Done():
 					return
 				}
 			}
-		} ()
+		}()
 	}
 	// handle failed connection
 	ticker := time.NewTicker(time.Second * 15)
 	defer ticker.Stop()
 	for {
 		select {
-		case <- ticker.C:			
+		case <-ticker.C:
 			requests := []string{}
 			// find connection to retry
 			c.lock.Lock()
@@ -254,15 +243,14 @@ func (c *BaseConnector) start() error {
 					requests = append(requests, endpoint)
 				}
 			}
-			c.lock.Unlock()		
+			c.lock.Unlock()
 			for i, _ := range requests {
 				c.requests <- requests[i]
 			}
-		case <- c.router.Done():
+		case <-c.router.Done():
 			return nil
 		}
 	}
-	return nil
 }
 
 // connect the wire
@@ -276,14 +264,14 @@ func (c *BaseConnector) connect(endpoint string) error {
 
 // handle new wire
 func (c *BaseConnector) handleNewWire(w wire.Wire, reconnect bool) error {
-	
+
 	endpoint := w.Endpoint()
 
 	if err := c.setConnected(endpoint, w); err != nil {
 		w.Close()
 		return errors.Errorf("ignore already connected wire %s %+v", endpoint, err)
 	}
-	
+
 	// add wire to router
 	port := c.newPort(w, reconnect)
 	if err := c.router.RegisterPort(port); err != nil {
@@ -300,11 +288,11 @@ func (c *BaseConnector) handleConnection() error {
 	for {
 		var err error
 		select {
-		case w := <- wire.In():
+		case w := <-wire.In():
 			err = c.handleNewWire(w, false)
-		case w := <- wire.Out():
+		case w := <-wire.Out():
 			err = c.handleNewWire(w, true)
-		case <- c.router.Done():
+		case <-c.router.Done():
 			return nil
 		}
 		if err != nil {
@@ -313,9 +301,8 @@ func (c *BaseConnector) handleConnection() error {
 	}
 }
 
-
 func (p *Port) ReadPacket(packet *message.Packet) error {
-	
+
 	for {
 		msg := message.Message{}
 		if err := p.w.Decode(&msg); err != nil {
@@ -338,9 +325,7 @@ func (p *Port) ReadPacket(packet *message.Packet) error {
 			}
 		}
 	}
-	return nil
 }
-
 
 // send packet to target wire
 func (p *Port) WritePacket(packet *message.Packet) error {
@@ -354,11 +339,11 @@ func (p *Port) WritePacket(packet *message.Packet) error {
 
 // send routing info to peers
 func (p *Port) AnnouceRouting(routings *message.Routing) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second * 1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
 	defer cancel()
 	select {
 	case p.announce <- *routings:
-	case <- ctx.Done():
+	case <-ctx.Done():
 		return errors.Errorf("port(%s) dead", p.w.Endpoint())
 	}
 	return nil
@@ -380,30 +365,28 @@ func (p *Port) String() string {
 
 // close port
 func (p *Port) handleOutput() error {
-	var err error
 	// close wire when done
 	defer p.w.Close()
 	for {
 		select {
-		case packet := <- p.output:
+		case packet := <-p.output:
 			msg := message.Message{
-				Type: message.MessageTypePacket,
+				Type:    message.MessageTypePacket,
 				Payload: packet,
 			}
 			if err := p.w.Encode(&msg); err != nil {
 				return err
 			}
-		case routings := <- p.announce:
+		case routings := <-p.announce:
 			msg := message.Message{
-				Type: message.MessageTypeRouting,
+				Type:    message.MessageTypeRouting,
 				Payload: routings,
 			}
 			if err := p.w.Encode(&msg); err != nil {
 				return err
 			}
-		case <- p.ctx.Done():
+		case <-p.ctx.Done():
 			return errors.Errorf("port(%s) closed", p.w.Endpoint())
 		}
 	}
-	return err
 }

@@ -3,19 +3,17 @@ package main
 import (
 	// "context"
 	"fmt"
+	"goose/pkg/options"
+	"goose/pkg/routing"
 	"log"
 	"os"
 	"os/signal"
 	"strings"
-	"goose/pkg/routing"
-	"goose/pkg/options"
 )
-
 
 var (
 	logger = log.New(os.Stdout, "logger: ", log.Lshortfile)
 )
-
 
 func main() {
 
@@ -37,7 +35,7 @@ func main() {
 	}
 
 	r := routing.NewRouter(options.LocalAddr, opts...)
-	
+
 	// connct to tunnel and peers
 	tunnel := fmt.Sprintf("tun/%s/%s", "goose", options.LocalAddr)
 	r.Dial(tunnel)
@@ -47,11 +45,11 @@ func main() {
 			r.Dial(endpoint)
 		}
 	}
-	
+
 	c := make(chan os.Signal, 1)
 	signal.Notify(c, os.Interrupt)
-	<- c
+	<-c
 	r.Close()
 	logger.Printf("Press Ctrl+C again to quit")
-	<- c
+	<-c
 }

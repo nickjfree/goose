@@ -1,26 +1,23 @@
 package fakeip
 
-
 import (
-	"log"
-	"os"
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
 	"github.com/pkg/errors"
-	
+	"log"
+	"os"
 
 	"goose/pkg/message"
 )
 
 var (
-	logger = log.New(os.Stdout, "fakeip: ", log.LstdFlags | log.Lshortfile)
+	logger = log.New(os.Stdout, "fakeip: ", log.LstdFlags|log.Lshortfile)
 )
 
 // checksum layer
 type ChecksumLayer interface {
 	SetNetworkLayerForChecksum(gopacket.NetworkLayer) error
 }
-
 
 func (manager *FakeIPManager) FakeDnsResponse(p *message.Packet) error {
 
@@ -50,7 +47,7 @@ func (manager *FakeIPManager) FakeDnsResponse(p *message.Packet) error {
 						buffer := gopacket.NewSerializeBuffer()
 						options := gopacket.SerializeOptions{
 							ComputeChecksums: true,
-							FixLengths: true,
+							FixLengths:       true,
 						}
 						udp.SetNetworkLayerForChecksum(ip)
 						if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
@@ -65,7 +62,6 @@ func (manager *FakeIPManager) FakeDnsResponse(p *message.Packet) error {
 	}
 	return nil
 }
-
 
 // replace fake ip to real ip
 func (manager *FakeIPManager) DNAT(p *message.Packet) error {
@@ -85,7 +81,7 @@ func (manager *FakeIPManager) DNAT(p *message.Packet) error {
 			buffer := gopacket.NewSerializeBuffer()
 			options := gopacket.SerializeOptions{
 				ComputeChecksums: true,
-				FixLengths: true,
+				FixLengths:       true,
 			}
 			if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
 				return errors.WithStack(err)
@@ -115,7 +111,7 @@ func (manager *FakeIPManager) SNAT(p *message.Packet) error {
 			buffer := gopacket.NewSerializeBuffer()
 			options := gopacket.SerializeOptions{
 				ComputeChecksums: true,
-				FixLengths: true,
+				FixLengths:       true,
 			}
 			if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
 				return errors.WithStack(err)

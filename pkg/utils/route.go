@@ -5,24 +5,22 @@ import (
 	"time"
 )
 
-
 var RouteTable *HostRoute
 
 func init() {
 	RouteTable = &HostRoute{
-		rules: make(map[string]route),
+		rules:   make(map[string]route),
 		actions: make(chan route),
 	}
 	// handle route actions
 	go RouteTable.Start()
 }
 
-
 // route entry
 type route struct {
-	target string
+	target  string
 	gateway string
-	ref int
+	ref     int
 }
 
 // host route tables
@@ -49,12 +47,12 @@ func (h *HostRoute) SetRoute(target, gateway string) error {
 		r.gateway = gateway
 	} else {
 		r = route{
-			target: target,
+			target:  target,
 			gateway: gateway,
-			ref: 1,
+			ref:     1,
 		}
 	}
-	h.rules[target]	= r
+	h.rules[target] = r
 	// notify route change
 	h.actions <- r
 	return nil
@@ -72,12 +70,11 @@ func (h *HostRoute) RemoveRoute(target string) error {
 			// notify route change
 			h.actions <- r
 		} else {
-			h.rules[target]	= r
+			h.rules[target] = r
 		}
 	}
 	return nil
 }
-
 
 // refresh route
 func (h *HostRoute) Start() error {
@@ -90,7 +87,7 @@ func (h *HostRoute) Start() error {
 
 		select {
 		// handle route update and delete
-		case r := <- h.actions:
+		case r := <-h.actions:
 			if r.ref <= 0 {
 				// delete route
 				logger.Printf("delete host route %s -> %s", r.target, r.gateway)
@@ -105,10 +102,10 @@ func (h *HostRoute) Start() error {
 				}
 			}
 		// refresh
-		case <- ticker.C:
+		case <-ticker.C:
 			h.mu.Lock()
 			for _, r := range h.rules {
-				logger.Printf("update host route %s -> %s", r.target, r.gateway)			
+				logger.Printf("update host route %s -> %s", r.target, r.gateway)
 				if err := SetRoute(r.target, r.gateway); err != nil {
 					logger.Printf("error set route %+v", err)
 				}

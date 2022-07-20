@@ -1,16 +1,16 @@
+//go:build linux
 // +build linux
 
 package tun
 
 import (
-	"net"
-	"github.com/songgao/water"
 	"github.com/pkg/errors"
-	
+	"github.com/songgao/water"
+	"net"
+
 	"goose/pkg/utils"
 	"goose/pkg/wire"
 )
-
 
 // create tun device on linux
 func NewTunWire(name string, addr string) (wire.Wire, error) {
@@ -42,8 +42,8 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 		return nil, err
 	}
 	return &TunWire{
-		ifTun: ifTun,
-		name: name,
+		ifTun:   ifTun,
+		name:    name,
 		address: address,
 		network: *network,
 		gateway: gateway,
