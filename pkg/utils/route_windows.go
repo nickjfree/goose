@@ -143,5 +143,5 @@ func RemoveRoute(network string, gateway string) error {
 
 // nat rules
 func SetupNAT() error {
-	return errors.Errorf("can not forward packets on windows")
+	return nil
 }
