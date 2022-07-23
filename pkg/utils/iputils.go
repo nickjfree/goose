@@ -130,10 +130,10 @@ type IPPool struct {
 
 // create ip pool
 func NewIPPool(network net.IPNet) *IPPool {
-	return &IPPool{
-		network: network,
-		max:     network.IP,
-	}
+	p := &IPPool{ network: network }
+	// we will modify ip value, that is why we make a copy of the network.IP
+	p.max = uintToIP(ipToUint(network.IP))
+	return p
 }
 
 // alloc new ip
