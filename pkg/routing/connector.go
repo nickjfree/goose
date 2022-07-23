@@ -339,7 +339,7 @@ func (p *Port) WritePacket(packet *message.Packet) error {
 
 // send routing info to peers
 func (p *Port) AnnouceRouting(routings *message.Routing) error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*1)
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*30)
 	defer cancel()
 	select {
 	case p.announce <- *routings:
