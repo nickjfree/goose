@@ -332,7 +332,14 @@ func (p *Port) WritePacket(packet *message.Packet) error {
 	select {
 	case p.output <- *packet:
 	default:
-		return errors.Errorf("port(%s) dead", p.w.Endpoint())
+		// throttle
+		timer := time.NewTimer(time.Second * 30)
+		defer timer.Stop()
+		select {
+		case p.output <- *packet:
+		case <-timer.C:
+			return errors.Errorf("port(%s) dead", p.w.Endpoint())
+		}
 	}
 	return nil
 }
