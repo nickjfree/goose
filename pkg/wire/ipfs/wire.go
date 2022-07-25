@@ -4,7 +4,6 @@ package ipfs
 import (
 	// "bytes"
 	"context"
-	"encoding/gob"
 	"fmt"
 	"net"
 	// "io"
@@ -12,8 +11,10 @@ import (
 	"encoding/json"
 	"io/ioutil"
 	"log"
+	"reflect"
 	"strings"
 	"time"
+	"unsafe"
 	// "path/filepath"
 	"os"
 	"sync"
@@ -28,6 +29,7 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
+	"github.com/lucas-clemente/quic-go"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/pkg/errors"
@@ -72,17 +74,23 @@ func init() {
 	wire.RegisterWireManager(ipfsWireManager)
 }
 
+// hack. get quic.Connection to send datagram
+func getQuicConn(c network.Conn) quic.Connection {
+	quicConn := reflect.ValueOf(c).Elem().FieldByName("conn").Elem().Elem().FieldByName("quicConn")
+	logger.Printf("%s", quicConn.Type())
+
+	v := reflect.NewAt(quicConn.Type(), unsafe.Pointer(quicConn.UnsafeAddr())).Elem()
+	return v.Interface().(quic.Connection)
+}
+
 // ipfs wire
 type IPFSWire struct {
 	// base
 	wire.BaseWire
 	// stream
 	s network.Stream
-	// encoder and decoer
-	encoder *gob.Encoder
-	decoder *gob.Decoder
-	// has route
-	hasRoute bool
+	// quic connection
+	conn quic.Connection
 	// close func
 	closeFunc func() error
 }
@@ -99,16 +107,39 @@ func (w *IPFSWire) Address() net.IP {
 
 // Encode
 func (w *IPFSWire) Encode(msg *message.Message) error {
-	if err := w.encoder.Encode(msg); err != nil {
-		return errors.WithStack(err)
+	var err error
+	msgs := []message.Message{}
+	// routings message may exceed MTU, split it
+	if msg.Type == message.MessageTypeRouting {
+		msgs, err = msg.Split()
+		if err != nil {
+			return err
+		}
+	} else {
+		// traffic message, risk of exceeding MTU
+		// TODO: fix this, can we lower the MTU of the tunnel interface?
+		msgs = []message.Message{*msg}
+	}
+	for _, msg := range msgs {
+		buf, err := msg.Encode()
+		if err != nil {
+			return err
+		}
+		if err := w.conn.SendMessage(buf); err != nil {
+			return errors.WithStack(err)
+		}
 	}
 	return nil
 }
 
 // Decode
 func (w *IPFSWire) Decode(msg *message.Message) error {
-	if err := w.decoder.Decode(msg); err != nil {
+	buf, err := w.conn.ReceiveMessage()
+	if err != nil {
 		return errors.WithStack(err)
+	}
+	if err := msg.Decode(buf); err != nil {
+		return err
 	}
 	return nil
 }
@@ -150,14 +181,15 @@ func newIPFSWireManager() *IPFSWireManager {
 			host.ConnManager().Unprotect(s.Conn().RemotePeer(), connectionTag)
 			// close stream
 			s.Close()
+			// we use quic datagram, also close the connection
+			s.Conn().Close()
 			return nil
 		}
 		// got an inbound wire
 		m.In <- &IPFSWire{
 			s:         s,
+			conn:      getQuicConn(s.Conn()),
 			closeFunc: close,
-			encoder:   gob.NewEncoder(s),
-			decoder:   gob.NewDecoder(s),
 		}
 	})
 	return m
@@ -194,6 +226,8 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 			m.ConnManager().Unprotect(s.Conn().RemotePeer(), connectionTag)
 			// close stream
 			s.Close()
+			// we use quic datagram, also close the connection
+			s.Conn().Close()
 			// cancel stream context
 			cancel()
 			return nil
@@ -201,9 +235,8 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 		// got an outbound wire
 		m.Out <- &IPFSWire{
 			s:         s,
+			conn:      getQuicConn(s.Conn()),
 			closeFunc: close,
-			encoder:   gob.NewEncoder(s),
-			decoder:   gob.NewDecoder(s),
 		}
 		return nil
 	}

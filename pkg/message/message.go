@@ -1,8 +1,11 @@
 package message
 
 import (
+	"bytes"
 	"encoding/gob"
 	"net"
+
+	"github.com/pkg/errors"
 )
 
 const (
@@ -59,4 +62,68 @@ func init() {
 	gob.RegisterName("M", Message{})
 	gob.RegisterName("P", Packet{})
 	gob.RegisterName("R", Routing{})
+}
+
+// encode to bytes
+func (m *Message) Encode() ([]byte, error) {
+
+	b := bytes.Buffer{}
+	enc := gob.NewEncoder(&b)
+	if err := enc.Encode(m); err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return b.Bytes(), nil
+}
+
+// decode from bytes
+func (m *Message) Decode(buf []byte) error {
+	b := bytes.NewBuffer(buf)
+
+	dec := gob.NewDecoder(b)
+	if err := dec.Decode(m); err != nil {
+		return errors.WithStack(err)
+	}
+	return nil
+}
+
+// split routing message into multiple small messages
+func (m *Message) Split() ([]Message, error) {
+
+	if m.Type != MessageTypeRouting {
+		return nil, errors.Errorf("can only split routing messages")
+	}
+	msgs := []Message{}
+
+	routingMessage, ok := m.Payload.(Routing)
+	if !ok {
+		return nil, errors.Errorf("bad message %+v", m)
+	}
+
+	fragment := []RoutingEntry{}
+	for i, _ := range routingMessage.Routings {
+
+		fragment = append(fragment, routingMessage.Routings[i])
+		if len(fragment) >= 32 {
+			msg := Message{
+				Type: MessageTypeRouting,
+				Payload: Routing{
+					Type:     routingMessage.Type,
+					Routings: fragment,
+				},
+			}
+			msgs = append(msgs, msg)
+			fragment = []RoutingEntry{}
+		}
+	}
+	if len(fragment) > 0 {
+		msg := Message{
+			Type: MessageTypeRouting,
+			Payload: Routing{
+				Type:     routingMessage.Type,
+				Routings: fragment,
+			},
+		}
+		msgs = append(msgs, msg)
+	}
+	return msgs, nil
 }

@@ -48,6 +48,7 @@ var quicConfig = &quic.Config{
 		return true
 	},
 	KeepAlive: true,
+	EnableDatagrams: true,
 	Versions:  []quic.VersionNumber{quic.VersionDraft29, quic.Version1},
 }
 
