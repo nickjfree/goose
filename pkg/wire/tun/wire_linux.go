@@ -32,6 +32,10 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 	if out, err := utils.RunCmd("ip", "addr", "add", addr, "dev", name); err != nil {
 		return nil, errors.Wrap(err, string(out))
 	}
+	// set mtu to 1200
+	if out, err := utils.RunCmd("ifconfig", name, "mtu", "1200", "up"); err != nil {
+		return nil, errors.Wrap(err, string(out))
+	}
 	// bring the tunnel interface up
 	if out, err := utils.RunCmd("ip", "link", "set", name, "up"); err != nil {
 		return nil, errors.Wrap(err, string(out))

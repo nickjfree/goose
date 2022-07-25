@@ -77,8 +77,6 @@ func init() {
 // hack. get quic.Connection to send datagram
 func getQuicConn(c network.Conn) quic.Connection {
 	quicConn := reflect.ValueOf(c).Elem().FieldByName("conn").Elem().Elem().FieldByName("quicConn")
-	logger.Printf("%s", quicConn.Type())
-
 	v := reflect.NewAt(quicConn.Type(), unsafe.Pointer(quicConn.UnsafeAddr())).Elem()
 	return v.Interface().(quic.Connection)
 }
@@ -174,7 +172,6 @@ func newIPFSWireManager() *IPFSWireManager {
 	// set server stream hanlder
 	m.SetStreamHandler(protocolName, func(s network.Stream) {
 		host.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
-		logger.Printf("received new stream(%s) peerId (%s)", s.ID(), s.Conn().RemotePeer())
 		// close func
 		close := func() error {
 			// unprotect connecttion
@@ -185,6 +182,14 @@ func newIPFSWireManager() *IPFSWireManager {
 			s.Conn().Close()
 			return nil
 		}
+		// read the hello
+		buf := make([]byte, 32)
+		if _, err := s.Read(buf); err != nil {
+			s.Close()
+			logger.Printf("error reading client hello %s", err)
+			return
+		}
+		logger.Printf("received new stream(%s) peerId (%s) data %s", s.ID(), s.Conn().RemotePeer(), string(buf))
 		// got an inbound wire
 		m.In <- &IPFSWire{
 			s:         s,
@@ -231,6 +236,10 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 			// cancel stream context
 			cancel()
 			return nil
+		}
+		// send hello to make sure there is only one stream bettwen 2 peers
+		if _, err := s.Write([]byte("hello")); err != nil {
+			return errors.WithStack(err)
 		}
 		// got an outbound wire
 		m.Out <- &IPFSWire{
