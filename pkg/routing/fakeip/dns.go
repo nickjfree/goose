@@ -5,6 +5,7 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/pkg/errors"
 	"log"
+	"net"
 	"os"
 
 	"goose/pkg/message"
@@ -36,7 +37,7 @@ func (manager *FakeIPManager) FakeDnsResponse(p *message.Packet) error {
 					return nil
 				}
 				for i, ans := range dns.Answers {
-					if ans.Type == layers.DNSTypeA {
+					if ans.Type == layers.DNSTypeA && !ans.IP.Equal(net.IPv4(8, 8, 8, 8)) {
 						fakeIP, err := manager.Alloc(string(ans.Name), ans.IP)
 						if err != nil {
 							return err
