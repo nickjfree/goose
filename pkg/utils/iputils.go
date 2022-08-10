@@ -77,7 +77,7 @@ func (c *IPMapping) Get(ip net.IP) *net.IP {
 	defer c.mux.Unlock()
 
 	entry, exists := c.data[ipToUint(ip)]
-	if exists && time.Since(entry.expire) < keyExpiration {
+	if exists && time.Since(entry.expire) < 0 {
 		// update expiration time
 		entry.expire = time.Now().Add(keyExpiration)
 		c.data[ipToUint(ip)] = entry
@@ -104,7 +104,7 @@ func (c *IPMapping) refresh() {
 		case <-ticker.C:
 			c.mux.Lock()
 			for k, v := range c.data {
-				if time.Since(v.expire) > keyExpiration {
+				if time.Since(v.expire) > 0 {
 					delete(c.data, k)
 					if c.expireCB != nil {
 						c.expireCB(uintToIP(k))
