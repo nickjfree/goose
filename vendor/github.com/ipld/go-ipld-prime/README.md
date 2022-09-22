@@ -28,10 +28,10 @@ if you want to write your own extensions, whether for new Node implementations
 or new codecs, or new higher-order order functions!)
 
 - `github.com/ipld/go-ipld-prime` -- imported as just `ipld` -- contains the core interfaces for IPLD.  The most important interfaces are `Node`, `NodeBuilder`, `Path`, and `Link`.
-- `github.com/ipld/go-ipld-prime/node/basicnode` -- imported as `basicnode` -- provides concrete implementations of `Node` and `NodeBuilder` which work for any kind of data.
+- `github.com/ipld/go-ipld-prime/node/basic` -- imported as `basicnode` -- provides concrete implementations of `Node` and `NodeBuilder` which work for any kind of data.
 - `github.com/ipld/go-ipld-prime/traversal` -- contains higher-order functions for traversing graphs of data easily.
 - `github.com/ipld/go-ipld-prime/traversal/selector` -- contains selectors, which are sort of like regexps, but for trees and graphs of IPLD data!
-- `github.com/ipld/go-ipld-prime/codec` -- parent package of all the codec implementations!
+- `github.com/ipld/go-ipld-prime/codec -- parent package of all the codec implementations!
 - `github.com/ipld/go-ipld-prime/codec/dagcbor` -- implementations of marshalling and unmarshalling as CBOR (a fast, binary serialization format).
 - `github.com/ipld/go-ipld-prime/codec/dagjson` -- implementations of marshalling and unmarshalling as JSON (a popular human readable format).
 - `github.com/ipld/go-ipld-prime/linking/cid` -- imported as `cidlink` -- provides concrete implementations of `Link` as a CID.  Also, the multicodec registry.
@@ -46,12 +46,8 @@ Other IPLD Libraries
 The IPLD specifications are designed to be language-agnostic.
 Many implementations exist in a variety of languages.
 
-For overall behaviors and specifications, refer to the IPLD website, or its source, in IPLD meta repo:
-- https://ipld.io/
-- https://github.com/ipld/ipld/
-You should find specs in the `specs/` dir there,
-human-friendly docs in the `docs/` dir,
-and information about _why_ things are designed the way they are mostly in the `design/` directories.
+For overall behaviors and specifications, refer to the specs repo:
+  https://github.com/ipld/specs/
 
 
 ### distinctions from go-ipld-interface&go-ipld-cbor
@@ -91,13 +87,6 @@ Projects wishing to migrate can do so smoothly and at their leisure.
 We now consider many of the earlier golang IPLD libraries to be defacto deprecated,
 and you should expect new features *here*, rather than in those libraries.
 (Those libraries still won't be going away anytime soon, but we really don't recomend new construction on them.)
-
-### migrating
-
-**For recommendations on where to start when migrating:**
-see [README_migrationGuide](./README_migrationGuide.md).
-That document will provide examples of which old concepts and API names map to which new APIs,
-and should help set you on the right track.
 
 ### unixfsv1
 

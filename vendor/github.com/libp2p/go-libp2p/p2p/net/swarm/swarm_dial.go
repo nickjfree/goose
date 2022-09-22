@@ -7,13 +7,20 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/transport"
+	"github.com/libp2p/go-libp2p/core/canonicallog"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/core/transport"
 
 	ma "github.com/multiformats/go-multiaddr"
+	madns "github.com/multiformats/go-multiaddr-dns"
 	manet "github.com/multiformats/go-multiaddr/net"
 )
+
+// The maximum number of address resolution steps we'll perform for a single
+// peer (for all addresses).
+const maxAddressResolution = 32
 
 // Diagram of dial sync:
 //
@@ -65,7 +72,7 @@ const ConcurrentFdDials = 160
 
 // DefaultPerPeerRateLimit is the number of concurrent outbound dials to make
 // per peer
-const DefaultPerPeerRateLimit = 8
+var DefaultPerPeerRateLimit = 8
 
 // dialbackoff is a struct used to avoid over-dialing the same, dead peers.
 // Whenever we totally time out on a peer (all three attempts), we add them
@@ -154,7 +161,7 @@ var BackoffMax = time.Minute * 5
 // Backoff is not exponential, it's quadratic and computed according to the
 // following formula:
 //
-//     BackoffBase + BakoffCoef * PriorBackoffs^2
+//	BackoffBase + BakoffCoef * PriorBackoffs^2
 //
 // Where PriorBackoffs is the number of previous backoffs.
 func (db *DialBackoff) AddBackoff(p peer.ID, addr ma.Multiaddr) {
@@ -220,11 +227,6 @@ func (db *DialBackoff) cleanup() {
 // This allows us to use various transport protocols, do NAT traversal/relay,
 // etc. to achieve connection.
 func (s *Swarm) DialPeer(ctx context.Context, p peer.ID) (network.Conn, error) {
-	if s.gater != nil && !s.gater.InterceptPeerDial(p) {
-		log.Debugf("gater disallowed outbound connection to peer %s", p.Pretty())
-		return nil, &DialError{Peer: p, Cause: ErrGaterDisallowedConnection}
-	}
-
 	// Avoid typed nil issues.
 	c, err := s.dialPeer(ctx, p)
 	if err != nil {
@@ -248,10 +250,16 @@ func (s *Swarm) dialPeer(ctx context.Context, p peer.ID) (*Conn, error) {
 		return nil, ErrDialToSelf
 	}
 
-	// check if we already have an open (usable) connection first
-	conn := s.bestAcceptableConnToPeer(ctx, p)
-	if conn != nil {
-		return conn, nil
+	// check if we already have an open (usable) connection first, or can't have a usable
+	// connection.
+	conn, err := s.bestAcceptableConnToPeer(ctx, p)
+	if conn != nil || err != nil {
+		return conn, err
+	}
+
+	if s.gater != nil && !s.gater.InterceptPeerDial(p) {
+		log.Debugf("gater disallowed outbound connection to peer %s", p.Pretty())
+		return nil, &DialError{Peer: p, Cause: ErrGaterDisallowedConnection}
 	}
 
 	// apply the DialPeer timeout
@@ -290,7 +298,32 @@ func (s *Swarm) addrsForDial(ctx context.Context, p peer.ID) ([]ma.Multiaddr, er
 		return nil, ErrNoAddresses
 	}
 
-	goodAddrs := s.filterKnownUndialables(p, peerAddrs)
+	peerAddrsAfterTransportResolved := make([]ma.Multiaddr, 0, len(peerAddrs))
+	for _, a := range peerAddrs {
+		tpt := s.TransportForDialing(a)
+		resolver, ok := tpt.(transport.Resolver)
+		if ok {
+			resolvedAddrs, err := resolver.Resolve(ctx, a)
+			if err != nil {
+				log.Warnf("Failed to resolve multiaddr %s by transport %v: %v", a, tpt, err)
+				continue
+			}
+			peerAddrsAfterTransportResolved = append(peerAddrsAfterTransportResolved, resolvedAddrs...)
+		} else {
+			peerAddrsAfterTransportResolved = append(peerAddrsAfterTransportResolved, a)
+		}
+	}
+
+	// Resolve dns or dnsaddrs
+	resolved, err := s.resolveAddrs(ctx, peer.AddrInfo{
+		ID:    p,
+		Addrs: peerAddrsAfterTransportResolved,
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	goodAddrs := s.filterKnownUndialables(p, resolved)
 	if forceDirect, _ := network.GetForceDirectDial(ctx); forceDirect {
 		goodAddrs = ma.FilterAddrs(goodAddrs, s.nonProxyAddr)
 	}
@@ -299,7 +332,71 @@ func (s *Swarm) addrsForDial(ctx context.Context, p peer.ID) ([]ma.Multiaddr, er
 		return nil, ErrNoGoodAddresses
 	}
 
-	return goodAddrs, nil
+	s.peers.AddAddrs(p, goodAddrs, peerstore.TempAddrTTL)
+
+	return resolved, nil
+}
+
+func (s *Swarm) resolveAddrs(ctx context.Context, pi peer.AddrInfo) ([]ma.Multiaddr, error) {
+	proto := ma.ProtocolWithCode(ma.P_P2P).Name
+	p2paddr, err := ma.NewMultiaddr("/" + proto + "/" + pi.ID.Pretty())
+	if err != nil {
+		return nil, err
+	}
+
+	resolveSteps := 0
+
+	// Recursively resolve all addrs.
+	//
+	// While the toResolve list is non-empty:
+	// * Pop an address off.
+	// * If the address is fully resolved, add it to the resolved list.
+	// * Otherwise, resolve it and add the results to the "to resolve" list.
+	toResolve := append(([]ma.Multiaddr)(nil), pi.Addrs...)
+	resolved := make([]ma.Multiaddr, 0, len(pi.Addrs))
+	for len(toResolve) > 0 {
+		// pop the last addr off.
+		addr := toResolve[len(toResolve)-1]
+		toResolve = toResolve[:len(toResolve)-1]
+
+		// if it's resolved, add it to the resolved list.
+		if !madns.Matches(addr) {
+			resolved = append(resolved, addr)
+			continue
+		}
+
+		resolveSteps++
+
+		// We've resolved too many addresses. We can keep all the fully
+		// resolved addresses but we'll need to skip the rest.
+		if resolveSteps >= maxAddressResolution {
+			log.Warnf(
+				"peer %s asked us to resolve too many addresses: %s/%s",
+				pi.ID,
+				resolveSteps,
+				maxAddressResolution,
+			)
+			continue
+		}
+
+		// otherwise, resolve it
+		reqaddr := addr.Encapsulate(p2paddr)
+		resaddrs, err := s.maResolver.Resolve(ctx, reqaddr)
+		if err != nil {
+			log.Infof("error resolving %s: %s", reqaddr, err)
+		}
+
+		// add the results to the toResolve list.
+		for _, res := range resaddrs {
+			pi, err := peer.AddrInfoFromP2pAddr(res)
+			if err != nil {
+				log.Infof("error parsing %s: %s", res, err)
+			}
+			toResolve = append(toResolve, pi.Addrs...)
+		}
+	}
+
+	return resolved, nil
 }
 
 func (s *Swarm) dialNextAddr(ctx context.Context, p peer.ID, addr ma.Multiaddr, resch chan dialResult) error {
@@ -342,22 +439,15 @@ func (s *Swarm) filterKnownUndialables(p peer.ID, addrs []ma.Multiaddr) []ma.Mul
 		}
 	}
 
-	return ma.FilterAddrs(addrs,
-		func(addr ma.Multiaddr) bool {
-			for _, a := range ourAddrs {
-				if a.Equal(addr) {
-					return false
-				}
-			}
-			return true
-		},
+	return maybeRemoveWebTransportAddrs(ma.FilterAddrs(addrs,
+		func(addr ma.Multiaddr) bool { return !ma.Contains(ourAddrs, addr) },
 		s.canDial,
 		// TODO: Consider allowing link-local addresses
 		func(addr ma.Multiaddr) bool { return !manet.IsIP6LinkLocal(addr) },
 		func(addr ma.Multiaddr) bool {
 			return s.gater == nil || s.gater.InterceptAddrDial(p, addr)
 		},
-	)
+	))
 }
 
 // limitedDial will start a dial to the given peer when
@@ -394,6 +484,7 @@ func (s *Swarm) dialAddr(ctx context.Context, p peer.ID, addr ma.Multiaddr) (tra
 	if err != nil {
 		return nil, err
 	}
+	canonicallog.LogPeerStatus(100, connC.RemotePeer(), connC.RemoteMultiaddr(), "connection_status", "established", "dir", "outbound")
 
 	// Trust the transport? Yeah... right.
 	if connC.RemotePeer() != p {
@@ -407,7 +498,7 @@ func (s *Swarm) dialAddr(ctx context.Context, p peer.ID, addr ma.Multiaddr) (tra
 	return connC, nil
 }
 
-// TODO We should have a `IsFdConsuming() bool` method on the `Transport` interface in go-libp2p-core/transport.
+// TODO We should have a `IsFdConsuming() bool` method on the `Transport` interface in go-libp2p/core/transport.
 // This function checks if any of the transport protocols in the address requires a file descriptor.
 // For now:
 // A Non-circuit address which has the TCP/UNIX protocol is deemed FD consuming.
@@ -429,12 +520,51 @@ func isFdConsumingAddr(addr ma.Multiaddr) bool {
 }
 
 func isExpensiveAddr(addr ma.Multiaddr) bool {
-	_, err1 := addr.ValueForProtocol(ma.P_WS)
-	_, err2 := addr.ValueForProtocol(ma.P_WSS)
-	return err1 == nil || err2 == nil
+	_, wsErr := addr.ValueForProtocol(ma.P_WS)
+	_, wssErr := addr.ValueForProtocol(ma.P_WSS)
+	_, wtErr := addr.ValueForProtocol(ma.P_WEBTRANSPORT)
+	return wsErr == nil || wssErr == nil || wtErr == nil
 }
 
 func isRelayAddr(addr ma.Multiaddr) bool {
 	_, err := addr.ValueForProtocol(ma.P_CIRCUIT)
 	return err == nil
+}
+
+func isWebTransport(addr ma.Multiaddr) bool {
+	_, err := addr.ValueForProtocol(ma.P_WEBTRANSPORT)
+	return err == nil
+}
+
+func isQUIC(addr ma.Multiaddr) bool {
+	_, err := addr.ValueForProtocol(ma.P_QUIC)
+	return err == nil && !isWebTransport(addr)
+}
+
+// If we have QUIC addresses, we don't want to dial WebTransport addresses.
+// It's better to have a native QUIC connection.
+// Note that this is a hack. The correct solution would be a proper
+// Happy-Eyeballs-style dialing.
+func maybeRemoveWebTransportAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
+	var hasQuic, hasWebTransport bool
+	for _, addr := range addrs {
+		if isQUIC(addr) {
+			hasQuic = true
+		}
+		if isWebTransport(addr) {
+			hasWebTransport = true
+		}
+	}
+	if !hasWebTransport || !hasQuic {
+		return addrs
+	}
+	var c int
+	for _, addr := range addrs {
+		if isWebTransport(addr) {
+			continue
+		}
+		addrs[c] = addr
+		c++
+	}
+	return addrs[:c]
 }

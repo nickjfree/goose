@@ -276,8 +276,26 @@ type P2PHost struct {
 func NewP2PHost() (*P2PHost, error) {
 	// crreate peer chan
 	peerChan := make(chan peer.AddrInfo, 100)
+
+	// this is the callback for AutoRelay
+	peerSource := func(ctx context.Context, numPeers int) <-chan peer.AddrInfo {
+		c := make(chan peer.AddrInfo, 100)
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					// AutoRelay is satisfied, close the channel
+					close(c)
+					return
+				case peer := <-peerChan:
+					c <- peer
+				}
+			}
+		} ()
+		return c
+	}
 	// create p2p host
-	host, dht, err := createHost(peerChan)
+	host, dht, err := createHost(peerSource)
 	if err != nil {
 		return nil, err
 	}
@@ -431,7 +449,7 @@ func getPrivKey(path string) (crypto.PrivKey, error) {
 
 // create libp2p node
 // circuit relay need to be enabled to hide the real server ip.
-func createHost(peerChan <-chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error) {
+func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error) {
 
 	folder := fmt.Sprintf("data/%s", strings.ReplaceAll(options.Namespace, "-", "_"))
 	if err := os.MkdirAll(folder, 0644); err != nil {
@@ -450,7 +468,7 @@ func createHost(peerChan <-chan peer.AddrInfo) (host.Host, *dht.IpfsDHT, error) 
 		// enable relay
 		libp2p.EnableRelay(),
 		// enable node to use relay for wire communication
-		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerChan), autorelay.WithNumRelays(4)),
+		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerSource, time.Second * 30), autorelay.WithNumRelays(4)),
 		// force node belive it is behind a NAT firewall to force using relays
 		// libp2p.ForceReachabilityPrivate(),
 		// hole punching

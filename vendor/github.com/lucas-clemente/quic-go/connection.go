@@ -95,7 +95,7 @@ type connRunner interface {
 	GetStatelessResetToken(protocol.ConnectionID) protocol.StatelessResetToken
 	Retire(protocol.ConnectionID)
 	Remove(protocol.ConnectionID)
-	ReplaceWithClosed(protocol.ConnectionID, packetHandler)
+	ReplaceWithClosed([]protocol.ConnectionID, protocol.Perspective, []byte)
 	AddResetToken(protocol.StatelessResetToken, packetHandler)
 	RemoveResetToken(protocol.StatelessResetToken)
 }
@@ -190,6 +190,7 @@ type connection struct {
 	clientHelloWritten    <-chan *wire.TransportParameters
 	earlyConnReadyChan    chan struct{}
 	handshakeCompleteChan chan struct{} // is closed when the handshake completes
+	sentFirstPacket       bool
 	handshakeComplete     bool
 	handshakeConfirmed    bool
 
@@ -241,6 +242,7 @@ var newConnection = func(
 	tlsConf *tls.Config,
 	tokenGenerator *handshake.TokenGenerator,
 	enable0RTT bool,
+	clientAddressValidated bool,
 	tracer logging.ConnectionTracer,
 	tracingID uint64,
 	logger utils.Logger,
@@ -279,6 +281,7 @@ var newConnection = func(
 		runner.Retire,
 		runner.ReplaceWithClosed,
 		s.queueControlFrame,
+		s.config.ConnectionIDGenerator,
 		s.version,
 	)
 	s.preSetup()
@@ -287,6 +290,7 @@ var newConnection = func(
 		0,
 		getMaxPacketSize(s.conn.RemoteAddr()),
 		s.rttStats,
+		clientAddressValidated,
 		s.perspective,
 		s.tracer,
 		s.logger,
@@ -313,6 +317,8 @@ var newConnection = func(
 	}
 	if s.config.EnableDatagrams {
 		params.MaxDatagramFrameSize = protocol.MaxDatagramFrameSize
+	} else {
+		params.MaxDatagramFrameSize = protocol.InvalidByteCount
 	}
 	if s.tracer != nil {
 		s.tracer.SentTransportParameters(params)
@@ -406,6 +412,7 @@ var newClientConnection = func(
 		runner.Retire,
 		runner.ReplaceWithClosed,
 		s.queueControlFrame,
+		s.config.ConnectionIDGenerator,
 		s.version,
 	)
 	s.preSetup()
@@ -414,6 +421,7 @@ var newClientConnection = func(
 		initialPacketNumber,
 		getMaxPacketSize(s.conn.RemoteAddr()),
 		s.rttStats,
+		false, /* has no effect */
 		s.perspective,
 		s.tracer,
 		s.logger,
@@ -437,6 +445,8 @@ var newClientConnection = func(
 	}
 	if s.config.EnableDatagrams {
 		params.MaxDatagramFrameSize = protocol.MaxDatagramFrameSize
+	} else {
+		params.MaxDatagramFrameSize = protocol.InvalidByteCount
 	}
 	if s.tracer != nil {
 		s.tracer.SentTransportParameters(params)
@@ -531,9 +541,7 @@ func (s *connection) preSetup() {
 	s.creationTime = now
 
 	s.windowUpdateQueue = newWindowUpdateQueue(s.streamsMap, s.connFlowController, s.framer.QueueControlFrame)
-	if s.config.EnableDatagrams {
-		s.datagramQueue = newDatagramQueue(s.scheduleSending, s.logger)
-	}
+	s.datagramQueue = newDatagramQueue(s.scheduleSending, s.logger)
 }
 
 // run the connection main loop
@@ -542,7 +550,11 @@ func (s *connection) run() error {
 
 	s.timer = utils.NewTimer()
 
-	go s.cryptoStreamHandler.RunHandshake()
+	handshaking := make(chan struct{})
+	go func() {
+		defer close(handshaking)
+		s.cryptoStreamHandler.RunHandshake()
+	}()
 	go func() {
 		if err := s.sendQueue.Run(); err != nil {
 			s.destroyImpl(err)
@@ -693,12 +705,13 @@ runLoop:
 		}
 	}
 
+	s.cryptoStreamHandler.Close()
+	<-handshaking
 	s.handleCloseError(&closeErr)
 	if e := (&errCloseForRecreating{}); !errors.As(closeErr.err, &e) && s.tracer != nil {
 		s.tracer.Close()
 	}
 	s.logger.Infof("Connection %s closed.", s.logID)
-	s.cryptoStreamHandler.Close()
 	s.sendQueue.Close()
 	s.timer.Stop()
 	return closeErr.err
@@ -718,7 +731,7 @@ func (s *connection) Context() context.Context {
 }
 
 func (s *connection) supportsDatagrams() bool {
-	return s.peerParams.MaxDatagramFrameSize != protocol.InvalidByteCount
+	return s.peerParams.MaxDatagramFrameSize > 0
 }
 
 func (s *connection) ConnectionState() ConnectionState {
@@ -731,7 +744,7 @@ func (s *connection) ConnectionState() ConnectionState {
 // Time when the next keep-alive packet should be sent.
 // It returns a zero time if no keep-alive should be sent.
 func (s *connection) nextKeepAliveTime() time.Time {
-	if !s.config.KeepAlive || s.keepAlivePingSent || !s.firstAckElicitingPacketAfterIdleSentTime.IsZero() {
+	if s.config.KeepAlivePeriod == 0 || s.keepAlivePingSent || !s.firstAckElicitingPacketAfterIdleSentTime.IsZero() {
 		return time.Time{}
 	}
 	return s.lastPacketReceivedTime.Add(s.keepAliveInterval)
@@ -815,7 +828,7 @@ func (s *connection) handleHandshakeConfirmed() {
 		if maxPacketSize == 0 {
 			maxPacketSize = protocol.MaxByteCount
 		}
-		maxPacketSize = utils.MinByteCount(maxPacketSize, protocol.MaxPacketBufferSize)
+		maxPacketSize = utils.Min(maxPacketSize, protocol.MaxPacketBufferSize)
 		s.mtuDiscoverer = newMTUDiscoverer(
 			s.rttStats,
 			getMaxPacketSize(s.conn.RemoteAddr()),
@@ -1512,10 +1525,16 @@ func (s *connection) handleCloseError(closeErr *closeError) {
 
 	// If this is a remote close we're done here
 	if closeErr.remote {
-		s.connIDGenerator.ReplaceWithClosed(newClosedRemoteConn(s.perspective))
+		s.connIDGenerator.ReplaceWithClosed(s.perspective, nil)
 		return
 	}
 	if closeErr.immediate {
+		s.connIDGenerator.RemoveAll()
+		return
+	}
+	// Don't send out any CONNECTION_CLOSE if this is an error that occurred
+	// before we even sent out the first packet.
+	if s.perspective == protocol.PerspectiveClient && !s.sentFirstPacket {
 		s.connIDGenerator.RemoveAll()
 		return
 	}
@@ -1523,8 +1542,7 @@ func (s *connection) handleCloseError(closeErr *closeError) {
 	if err != nil {
 		s.logger.Debugf("Error sending CONNECTION_CLOSE: %s", err)
 	}
-	cs := newClosedLocalConn(s.conn, connClosePacket, s.perspective, s.logger)
-	s.connIDGenerator.ReplaceWithClosed(cs)
+	s.connIDGenerator.ReplaceWithClosed(s.perspective, connClosePacket)
 }
 
 func (s *connection) dropEncryptionLevel(encLevel protocol.EncryptionLevel) {
@@ -1611,7 +1629,7 @@ func (s *connection) applyTransportParameters() {
 	params := s.peerParams
 	// Our local idle timeout will always be > 0.
 	s.idleTimeout = utils.MinNonZeroDuration(s.config.MaxIdleTimeout, params.MaxIdleTimeout)
-	s.keepAliveInterval = utils.MinDuration(s.idleTimeout/2, protocol.MaxKeepAliveInterval)
+	s.keepAliveInterval = utils.Min(s.config.KeepAlivePeriod, utils.Min(s.idleTimeout/2, protocol.MaxKeepAliveInterval))
 	s.streamsMap.UpdateLimits(params)
 	s.packer.HandleTransportParameters(params)
 	s.frameParser.SetAckDelayExponent(params.AckDelayExponent)
@@ -1760,6 +1778,7 @@ func (s *connection) sendPacket() (bool, error) {
 		if err != nil || packet == nil {
 			return false, err
 		}
+		s.sentFirstPacket = true
 		s.logCoalescedPacket(packet)
 		for _, p := range packet.packets {
 			if s.firstAckElicitingPacketAfterIdleSentTime.IsZero() && p.IsAckEliciting() {
@@ -1962,6 +1981,10 @@ func (s *connection) onStreamCompleted(id protocol.StreamID) {
 }
 
 func (s *connection) SendMessage(p []byte) error {
+	if !s.supportsDatagrams() {
+		return errors.New("datagram support disabled")
+	}
+
 	f := &wire.DatagramFrame{DataLenPresent: true}
 	if protocol.ByteCount(len(p)) > f.MaxDataLen(s.peerParams.MaxDatagramFrameSize, s.version) {
 		return errors.New("message too large")
@@ -1972,6 +1995,9 @@ func (s *connection) SendMessage(p []byte) error {
 }
 
 func (s *connection) ReceiveMessage() ([]byte, error) {
+	if !s.config.EnableDatagrams {
+		return nil, errors.New("datagram support disabled")
+	}
 	return s.datagramQueue.Receive()
 }
 

@@ -7,10 +7,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/peerstore"
-	"github.com/libp2p/go-libp2p-core/routing"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/core/routing"
 
 	"github.com/ipfs/go-cid"
 	u "github.com/ipfs/go-ipfs-util"
@@ -251,7 +251,7 @@ func (dht *IpfsDHT) updatePeerValues(ctx context.Context, key string, val []byte
 	fixupRec := record.MakePutRecord(key, val)
 	for _, p := range peers {
 		go func(p peer.ID) {
-			//TODO: Is this possible?
+			// TODO: Is this possible?
 			if p == dht.self {
 				err := dht.putLocal(ctx, key, fixupRec)
 				if err != nil {
@@ -485,11 +485,23 @@ func (dht *IpfsDHT) findProvidersAsyncRoutine(ctx context.Context, key multihash
 	defer close(peerOut)
 
 	findAll := count == 0
-	var ps *peer.Set
-	if findAll {
-		ps = peer.NewSet()
-	} else {
-		ps = peer.NewLimitedSet(count)
+
+	ps := make(map[peer.ID]struct{})
+	psLock := &sync.Mutex{}
+	psTryAdd := func(p peer.ID) bool {
+		psLock.Lock()
+		defer psLock.Unlock()
+		_, ok := ps[p]
+		if !ok && (len(ps) < count || findAll) {
+			ps[p] = struct{}{}
+			return true
+		}
+		return false
+	}
+	psSize := func() int {
+		psLock.Lock()
+		defer psLock.Unlock()
+		return len(ps)
 	}
 
 	provs, err := dht.providerStore.GetProviders(ctx, key)
@@ -498,7 +510,7 @@ func (dht *IpfsDHT) findProvidersAsyncRoutine(ctx context.Context, key multihash
 	}
 	for _, p := range provs {
 		// NOTE: Assuming that this list of peers is unique
-		if ps.TryAdd(p.ID) {
+		if psTryAdd(p.ID) {
 			select {
 			case peerOut <- p:
 			case <-ctx.Done():
@@ -508,7 +520,7 @@ func (dht *IpfsDHT) findProvidersAsyncRoutine(ctx context.Context, key multihash
 
 		// If we have enough peers locally, don't bother with remote RPC
 		// TODO: is this a DOS vector?
-		if !findAll && ps.Size() >= count {
+		if !findAll && len(ps) >= count {
 			return
 		}
 	}
@@ -532,7 +544,7 @@ func (dht *IpfsDHT) findProvidersAsyncRoutine(ctx context.Context, key multihash
 			for _, prov := range provs {
 				dht.maybeAddAddrs(prov.ID, prov.Addrs, peerstore.TempAddrTTL)
 				logger.Debugf("got provider: %s", prov)
-				if ps.TryAdd(prov.ID) {
+				if psTryAdd(prov.ID) {
 					logger.Debugf("using provider: %s", prov)
 					select {
 					case peerOut <- *prov:
@@ -541,8 +553,8 @@ func (dht *IpfsDHT) findProvidersAsyncRoutine(ctx context.Context, key multihash
 						return nil, ctx.Err()
 					}
 				}
-				if !findAll && ps.Size() >= count {
-					logger.Debugf("got enough providers (%d/%d)", ps.Size(), count)
+				if !findAll && psSize() >= count {
+					logger.Debugf("got enough providers (%d/%d)", psSize(), count)
 					return nil, nil
 				}
 			}
@@ -559,7 +571,7 @@ func (dht *IpfsDHT) findProvidersAsyncRoutine(ctx context.Context, key multihash
 			return closest, nil
 		},
 		func() bool {
-			return !findAll && ps.Size() >= count
+			return !findAll && psSize() >= count
 		},
 	)
 

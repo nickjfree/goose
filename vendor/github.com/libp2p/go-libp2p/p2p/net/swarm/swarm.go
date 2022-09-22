@@ -10,15 +10,16 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/libp2p/go-libp2p-core/connmgr"
-	"github.com/libp2p/go-libp2p-core/metrics"
-	"github.com/libp2p/go-libp2p-core/network"
-	"github.com/libp2p/go-libp2p-core/peer"
-	"github.com/libp2p/go-libp2p-core/peerstore"
-	"github.com/libp2p/go-libp2p-core/transport"
+	"github.com/libp2p/go-libp2p/core/connmgr"
+	"github.com/libp2p/go-libp2p/core/metrics"
+	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/peerstore"
+	"github.com/libp2p/go-libp2p/core/transport"
 
 	logging "github.com/ipfs/go-log/v2"
 	ma "github.com/multiformats/go-multiaddr"
+	madns "github.com/multiformats/go-multiaddr-dns"
 )
 
 const (
@@ -50,6 +51,14 @@ type Option func(*Swarm) error
 func WithConnectionGater(gater connmgr.ConnectionGater) Option {
 	return func(s *Swarm) error {
 		s.gater = gater
+		return nil
+	}
+}
+
+// WithMultiaddrResolver sets a custom multiaddress resolver
+func WithMultiaddrResolver(maResolver *madns.Resolver) Option {
+	return func(s *Swarm) error {
+		s.maResolver = maResolver
 		return nil
 	}
 }
@@ -127,6 +136,8 @@ type Swarm struct {
 		m map[int]transport.Transport
 	}
 
+	maResolver *madns.Resolver
+
 	// stream handlers
 	streamh atomic.Value
 
@@ -153,6 +164,7 @@ func NewSwarm(local peer.ID, peers peerstore.Peerstore, opts ...Option) (*Swarm,
 		ctxCancel:        cancel,
 		dialTimeout:      defaultDialTimeout,
 		dialTimeoutLocal: defaultDialTimeoutLocal,
+		maResolver:       madns.DefaultResolver,
 	}
 
 	s.conns.m = make(map[peer.ID][]*Conn)
@@ -350,7 +362,11 @@ func (s *Swarm) NewStream(ctx context.Context, p peer.ID) (network.Stream, error
 	dials := 0
 	for {
 		// will prefer direct connections over relayed connections for opening streams
-		c := s.bestConnToPeer(p)
+		c, err := s.bestAcceptableConnToPeer(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+
 		if c == nil {
 			if nodial, _ := network.GetNoDial(ctx); nodial {
 				return nil, network.ErrNoConn
@@ -447,15 +463,26 @@ func (s *Swarm) bestConnToPeer(p peer.ID) *Conn {
 	return best
 }
 
-func (s *Swarm) bestAcceptableConnToPeer(ctx context.Context, p peer.ID) *Conn {
+// - Returns the best "acceptable" connection, if available.
+// - Returns nothing if no such connection exists, but if we should try dialing anyways.
+// - Returns an error if no such connection exists, but we should not try dialing.
+func (s *Swarm) bestAcceptableConnToPeer(ctx context.Context, p peer.ID) (*Conn, error) {
 	conn := s.bestConnToPeer(p)
-	if conn != nil {
-		forceDirect, _ := network.GetForceDirectDial(ctx)
-		if !forceDirect || isDirectConn(conn) {
-			return conn
-		}
+	if conn == nil {
+		return nil, nil
 	}
-	return nil
+
+	forceDirect, _ := network.GetForceDirectDial(ctx)
+	if forceDirect && !isDirectConn(conn) {
+		return nil, nil
+	}
+
+	useTransient, _ := network.GetUseTransient(ctx)
+	if useTransient || !conn.Stat().Transient {
+		return conn, nil
+	}
+
+	return nil, network.ErrTransientConn
 }
 
 func isDirectConn(c *Conn) bool {
@@ -541,18 +568,10 @@ func (s *Swarm) Backoff() *DialBackoff {
 
 // notifyAll sends a signal to all Notifiees
 func (s *Swarm) notifyAll(notify func(network.Notifiee)) {
-	var wg sync.WaitGroup
-
 	s.notifs.RLock()
-	wg.Add(len(s.notifs.m))
 	for f := range s.notifs.m {
-		go func(f network.Notifiee) {
-			defer wg.Done()
-			notify(f)
-		}(f)
+		notify(f)
 	}
-
-	wg.Wait()
 	s.notifs.RUnlock()
 }
 

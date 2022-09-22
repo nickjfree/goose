@@ -20,6 +20,9 @@ import (
 	"github.com/lucas-clemente/quic-go/logging"
 )
 
+// ErrServerClosed is returned by the Listener or EarlyListener's Accept method after a call to Close.
+var ErrServerClosed = errors.New("quic: Server closed")
+
 // packetHandler handles packets
 type packetHandler interface {
 	handlePacket(*receivedPacket)
@@ -86,6 +89,7 @@ type baseServer struct {
 		*tls.Config,
 		*handshake.TokenGenerator,
 		bool, /* enable 0-RTT */
+		bool, /* client address validated by an address validation token */
 		logging.ConnectionTracer,
 		uint64,
 		utils.Logger,
@@ -187,7 +191,7 @@ func listen(conn net.PacketConn, tlsConf *tls.Config, config *Config, acceptEarl
 		}
 	}
 
-	connHandler, err := getMultiplexer().AddConn(conn, config.ConnectionIDLength, config.StatelessResetKey, config.Tracer)
+	connHandler, err := getMultiplexer().AddConn(conn, config.ConnectionIDGenerator.ConnectionIDLen(), config.StatelessResetKey, config.Tracer)
 	if err != nil {
 		return nil, err
 	}
@@ -238,26 +242,6 @@ func (s *baseServer) run() {
 	}
 }
 
-var defaultAcceptToken = func(clientAddr net.Addr, token *Token) bool {
-	if token == nil {
-		return false
-	}
-	validity := protocol.TokenValidity
-	if token.IsRetryToken {
-		validity = protocol.RetryTokenValidity
-	}
-	if time.Now().After(token.SentTime.Add(validity)) {
-		return false
-	}
-	var sourceAddr string
-	if udpAddr, ok := clientAddr.(*net.UDPAddr); ok {
-		sourceAddr = udpAddr.IP.String()
-	} else {
-		sourceAddr = clientAddr.String()
-	}
-	return sourceAddr == token.RemoteAddr
-}
-
 // Accept returns connections that already completed the handshake.
 // It is only valid if acceptEarlyConns is false.
 func (s *baseServer) Accept(ctx context.Context) (Connection, error) {
@@ -284,7 +268,7 @@ func (s *baseServer) Close() error {
 		return nil
 	}
 	if s.serverError == nil {
-		s.serverError = errors.New("server closed")
+		s.serverError = ErrServerClosed
 	}
 	// If the server was started with ListenAddr, we created the packet conn.
 	// We need to close it in order to make the go routine reading from that conn return.
@@ -338,7 +322,7 @@ func (s *baseServer) handlePacketImpl(p *receivedPacket) bool /* is the buffer s
 	}
 	// If we're creating a new connection, the packet will be passed to the connection.
 	// The header will then be parsed again.
-	hdr, _, _, err := wire.ParsePacket(p.data, s.config.ConnectionIDLength)
+	hdr, _, _, err := wire.ParsePacket(p.data, s.config.ConnectionIDGenerator.ConnectionIDLen())
 	if err != nil && err != wire.ErrUnsupportedVersion {
 		if s.config.Tracer != nil {
 			s.config.Tracer.DroppedPacket(p.remoteAddr, logging.PacketTypeNotDetermined, p.Size(), logging.PacketDropHeaderParseError)
@@ -392,6 +376,26 @@ func (s *baseServer) handlePacketImpl(p *receivedPacket) bool /* is the buffer s
 	return true
 }
 
+// validateToken returns false if:
+//   - address is invalid
+//   - token is expired
+//   - token is null
+func (s *baseServer) validateToken(token *handshake.Token, addr net.Addr) bool {
+	if token == nil {
+		return false
+	}
+	if !token.ValidateRemoteAddr(addr) {
+		return false
+	}
+	if !token.IsRetryToken && time.Since(token.SentTime) > s.config.MaxTokenAge {
+		return false
+	}
+	if token.IsRetryToken && time.Since(token.SentTime) > s.config.MaxRetryTokenAge {
+		return false
+	}
+	return true
+}
+
 func (s *baseServer) handleInitialImpl(p *receivedPacket, hdr *wire.Header) error {
 	if len(hdr.Token) == 0 && hdr.DestConnectionID.Len() < protocol.MinConnectionIDLenInitial {
 		p.buffer.Release()
@@ -402,33 +406,45 @@ func (s *baseServer) handleInitialImpl(p *receivedPacket, hdr *wire.Header) erro
 	}
 
 	var (
-		token          *Token
+		token          *handshake.Token
 		retrySrcConnID *protocol.ConnectionID
 	)
 	origDestConnID := hdr.DestConnectionID
 	if len(hdr.Token) > 0 {
-		c, err := s.tokenGenerator.DecodeToken(hdr.Token)
+		tok, err := s.tokenGenerator.DecodeToken(hdr.Token)
 		if err == nil {
-			token = &Token{
-				IsRetryToken: c.IsRetryToken,
-				RemoteAddr:   c.RemoteAddr,
-				SentTime:     c.SentTime,
+			if tok.IsRetryToken {
+				origDestConnID = tok.OriginalDestConnectionID
+				retrySrcConnID = &tok.RetrySrcConnectionID
 			}
-			if token.IsRetryToken {
-				origDestConnID = c.OriginalDestConnectionID
-				retrySrcConnID = &c.RetrySrcConnectionID
-			}
+			token = tok
 		}
 	}
-	if !s.config.AcceptToken(p.remoteAddr, token) {
-		go func() {
-			defer p.buffer.Release()
-			if token != nil && token.IsRetryToken {
+
+	clientAddrIsValid := s.validateToken(token, p.remoteAddr)
+
+	if token != nil && !clientAddrIsValid {
+		// For invalid and expired non-retry tokens, we don't send an INVALID_TOKEN error.
+		// We just ignore them, and act as if there was no token on this packet at all.
+		// This also means we might send a Retry later.
+		if !token.IsRetryToken {
+			token = nil
+		} else {
+			// For Retry tokens, we send an INVALID_ERROR if
+			// * the token is too old, or
+			// * the token is invalid, in case of a retry token.
+			go func() {
+				defer p.buffer.Release()
 				if err := s.maybeSendInvalidToken(p, hdr); err != nil {
 					s.logger.Debugf("Error sending INVALID_TOKEN error: %s", err)
 				}
-				return
-			}
+			}()
+			return nil
+		}
+	}
+	if token == nil && s.config.RequireAddressValidation(p.remoteAddr) {
+		go func() {
+			defer p.buffer.Release()
 			if err := s.sendRetry(p.remoteAddr, hdr, p.info); err != nil {
 				s.logger.Debugf("Error sending Retry: %s", err)
 			}
@@ -447,11 +463,11 @@ func (s *baseServer) handleInitialImpl(p *receivedPacket, hdr *wire.Header) erro
 		return nil
 	}
 
-	connID, err := protocol.GenerateConnectionID(s.config.ConnectionIDLength)
+	connID, err := s.config.ConnectionIDGenerator.GenerateConnectionID()
 	if err != nil {
 		return err
 	}
-	s.logger.Debugf("Changing connection ID to %s.", connID)
+	s.logger.Debugf("Changing connection ID to %s.", protocol.ConnectionID(connID))
 	var conn quicConn
 	tracingID := nextConnTracingID()
 	if added := s.connHandler.AddWithConnID(hdr.DestConnectionID, connID, func() packetHandler {
@@ -481,6 +497,7 @@ func (s *baseServer) handleInitialImpl(p *receivedPacket, hdr *wire.Header) erro
 			s.tlsConf,
 			s.tokenGenerator,
 			s.acceptEarlyConns,
+			clientAddrIsValid,
 			tracer,
 			tracingID,
 			s.logger,
@@ -532,7 +549,7 @@ func (s *baseServer) sendRetry(remoteAddr net.Addr, hdr *wire.Header, info *pack
 	// Log the Initial packet now.
 	// If no Retry is sent, the packet will be logged by the connection.
 	(&wire.ExtendedHeader{Header: *hdr}).Log(s.logger)
-	srcConnID, err := protocol.GenerateConnectionID(s.config.ConnectionIDLength)
+	srcConnID, err := s.config.ConnectionIDGenerator.GenerateConnectionID()
 	if err != nil {
 		return err
 	}
@@ -548,7 +565,7 @@ func (s *baseServer) sendRetry(remoteAddr net.Addr, hdr *wire.Header, info *pack
 	replyHdr.DestConnectionID = hdr.SrcConnectionID
 	replyHdr.Token = token
 	if s.logger.Debug() {
-		s.logger.Debugf("Changing connection ID to %s.", srcConnID)
+		s.logger.Debugf("Changing connection ID to %s.", protocol.ConnectionID(srcConnID))
 		s.logger.Debugf("-> Sending Retry")
 		replyHdr.Log(s.logger)
 	}
@@ -648,11 +665,7 @@ func (s *baseServer) sendError(remoteAddr net.Addr, hdr *wire.Header, sealer han
 
 func (s *baseServer) sendVersionNegotiationPacket(p *receivedPacket, hdr *wire.Header) {
 	s.logger.Debugf("Client offered version %s, sending Version Negotiation", hdr.Version)
-	data, err := wire.ComposeVersionNegotiation(hdr.SrcConnectionID, hdr.DestConnectionID, s.config.Versions)
-	if err != nil {
-		s.logger.Debugf("Error composing Version Negotiation: %s", err)
-		return
-	}
+	data := wire.ComposeVersionNegotiation(hdr.SrcConnectionID, hdr.DestConnectionID, s.config.Versions)
 	if s.config.Tracer != nil {
 		s.config.Tracer.SentPacket(
 			p.remoteAddr,
