@@ -4,10 +4,10 @@ go 1.19
 
 require (
 	github.com/google/gopacket v1.1.19
-	github.com/libp2p/go-libp2p v0.23.1
+	github.com/libp2p/go-libp2p v0.23.2
 	github.com/libp2p/go-libp2p-core v0.20.1
 	github.com/libp2p/go-libp2p-kad-dht v0.18.0
-	github.com/lucas-clemente/quic-go v0.29.0
+	github.com/lucas-clemente/quic-go v0.29.1
 	github.com/multiformats/go-multiaddr v0.7.0
 	github.com/pkg/errors v0.9.1
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
