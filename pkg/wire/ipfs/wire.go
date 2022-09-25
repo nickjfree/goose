@@ -291,7 +291,7 @@ func NewP2PHost() (*P2PHost, error) {
 					c <- peer
 				}
 			}
-		} ()
+		}()
 		return c
 	}
 	// create p2p host
@@ -468,7 +468,7 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		// enable relay
 		libp2p.EnableRelay(),
 		// enable node to use relay for wire communication
-		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerSource, time.Second * 30), autorelay.WithNumRelays(4)),
+		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerSource, time.Second*30), autorelay.WithNumRelays(4)),
 		// force node belive it is behind a NAT firewall to force using relays
 		// libp2p.ForceReachabilityPrivate(),
 		// hole punching
