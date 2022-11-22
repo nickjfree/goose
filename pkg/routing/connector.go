@@ -202,7 +202,7 @@ func (c *BaseConnector) newPort(w wire.Wire, reconnect bool) *Port {
 		announce:  make(chan message.Routing),
 		closeFunc: closeFunc,
 		ctx:       ctx,
-		rtt:       999999,
+		rtt:       0,
 	}
 	go func() {
 		logger.Printf("handle port(%s) output: %+v", p, p.handleOutput())
