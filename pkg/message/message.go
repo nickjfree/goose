@@ -91,11 +91,16 @@ func (m *Message) Split() ([]Message, error) {
 	if m.Type != MessageTypeRouting {
 		return nil, errors.Errorf("can only split routing messages")
 	}
+
 	msgs := []Message{}
 
 	routingMessage, ok := m.Payload.(Routing)
 	if !ok {
 		return nil, errors.Errorf("bad message %+v", m)
+	}
+
+	if routingMessage.Type == RoutingRegisterAck || routingMessage.Type == RoutingRegisterFailed {
+		return []Message{*m}, nil
 	}
 
 	fragment := []RoutingEntry{}
