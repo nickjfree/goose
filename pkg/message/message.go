@@ -15,9 +15,8 @@ const (
 	// routing info
 	MessageTypeRouting = 1
 	// routing
-	RoutingRegister       = 0
-	RoutingRegisterOK     = 1
 	RoutingRegisterFailed = 2
+	RoutingRegisterAck    = 3
 	// ttl
 	PacketTTL = 32
 )

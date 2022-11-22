@@ -63,6 +63,10 @@ type BaseConnector struct {
 type Port struct {
 	// wire
 	w wire.Wire
+	// rtt
+	rtt int
+	// last announce
+	lastAnnounce time.Time
 	// router
 	router *Router
 	// output queue
@@ -198,6 +202,7 @@ func (c *BaseConnector) newPort(w wire.Wire, reconnect bool) *Port {
 		announce:  make(chan message.Routing),
 		closeFunc: closeFunc,
 		ctx:       ctx,
+		rtt:       999999,
 	}
 	go func() {
 		logger.Printf("handle port(%s) output: %+v", p, p.handleOutput())

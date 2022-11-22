@@ -73,6 +73,9 @@ func (w *TunWire) Encode(msg *message.Message) error {
 		}
 	case message.MessageTypeRouting:
 		if routing, ok := msg.Payload.(message.Routing); ok {
+			if routing.Type == message.RoutingRegisterAck {
+				return nil
+			}
 			if routing.Type == message.RoutingRegisterFailed {
 				return errors.Errorf("register routing failed %s", routing.Message)
 			}

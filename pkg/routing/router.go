@@ -43,7 +43,7 @@ func (entry *routingEntry) Network() net.IPNet {
 }
 
 func (entry *routingEntry) String() string {
-	return fmt.Sprintf("%s -> %s metric %d", entry.network.String(), entry.port, entry.metric)
+	return fmt.Sprintf("%s -> %s metric %d rtt %dms", entry.network.String(), entry.port, entry.metric%10, entry.port.rtt)
 }
 
 type portState struct {
@@ -123,6 +123,12 @@ func (r *Router) RegisterPort(p *Port) error {
 
 // update routing tables for this port
 func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
+
+	// handle routing ack. to get the peer rtt
+	if routing.Type == message.RoutingRegisterAck {
+		p.rtt = int(time.Now().Sub(p.lastAnnounce).Milliseconds())
+		return nil
+	}
 	// log the peer provided networks
 	err := func() error {
 		r.lock.Lock()
@@ -133,11 +139,11 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 				network: entry.Network,
 				port:    p,
 				// inc distance
-				metric:    entry.Metric + 1,
+				metric:    p.rtt*10 + entry.Metric + 1,
 				updatedAt: time.Now(),
 			}
 			// routings reach max hops
-			if peerEntry.metric >= r.maxMetric {
+			if peerEntry.metric%10 >= r.maxMetric {
 				continue
 			}
 			// find the same network
@@ -192,8 +198,19 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 			return err
 		}
 		return err
+	} else {
+		msg := message.Routing{
+			Type:     message.RoutingRegisterAck,
+			Routings: []message.RoutingEntry{},
+			Message:  "",
+		}
+		// send ack message
+		p.lastAnnounce = time.Now()
+		if err := p.AnnouceRouting(&msg); err != nil {
+			return err
+		}
+		return nil
 	}
-	return nil
 }
 
 // find dest port
@@ -363,7 +380,7 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			if !strings.HasPrefix(p.String(), "tun") {
 				routings = append(routings, message.RoutingEntry{
 					Network: entry.network,
-					Metric:  entry.metric,
+					Metric:  entry.metric % 10,
 				})
 				continue
 			}
@@ -372,14 +389,14 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			if entry.network.String() != defaultRouting {
 				routings = append(routings, message.RoutingEntry{
 					Network: entry.network,
-					Metric:  entry.metric,
+					Metric:  entry.metric % 10,
 				})
 			} else if r.fakeIP != nil {
 				// if fakeip is enabled, route dns traffics to the tunnel
 				for _, network := range r.fakeIP.DNSRoutings() {
 					routings = append(routings, message.RoutingEntry{
 						Network: network,
-						Metric:  entry.metric,
+						Metric:  entry.metric % 10,
 					})
 				}
 			}

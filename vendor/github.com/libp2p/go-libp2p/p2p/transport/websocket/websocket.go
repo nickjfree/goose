@@ -4,6 +4,7 @@ package websocket
 import (
 	"context"
 	"crypto/tls"
+	"net"
 	"net/http"
 	"time"
 
@@ -186,6 +187,17 @@ func (t *WebsocketTransport) maDial(ctx context.Context, raddr ma.Multiaddr) (ma
 			copytlsClientConf := t.tlsClientConf.Clone()
 			copytlsClientConf.ServerName = sni
 			dialer.TLSClientConfig = copytlsClientConf
+			ipAddr := wsurl.Host
+			// Setting the NetDial because we already have the resolved IP address, so we don't want to do another resolution.
+			// We set the `.Host` to the sni field so that the host header gets properly set.
+			dialer.NetDial = func(network, address string) (net.Conn, error) {
+				tcpAddr, err := net.ResolveTCPAddr(network, ipAddr)
+				if err != nil {
+					return nil, err
+				}
+				return net.DialTCP("tcp", nil, tcpAddr)
+			}
+			wsurl.Host = sni + ":" + wsurl.Port()
 		} else {
 			dialer.TLSClientConfig = t.tlsClientConf
 		}
