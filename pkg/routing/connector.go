@@ -30,6 +30,10 @@ const (
 	statusConnected  = 1
 	statusConnecting = 2
 	statusFailed     = 3
+
+	// rtt stats
+	rttAlphaMean     = 0.15
+	rttAlphaVariance = 0.15
 )
 
 // Connector interface
@@ -59,14 +63,22 @@ type BaseConnector struct {
 	router *Router
 }
 
+// rtt stats of port
+type rttStats struct {
+	// start
+	start time.Time
+	// mean rtt in ms
+	mean float32
+	// variance
+	variance float32
+}
+
 // port is a connect session with a node
 type Port struct {
 	// wire
 	w wire.Wire
 	// rtt
-	rtt int
-	// last announce
-	lastAnnounce time.Time
+	rttStats rttStats
 	// router
 	router *Router
 	// output queue
@@ -138,9 +150,9 @@ func (c *BaseConnector) setFailed(endpoint string) error {
 	if ok && state.status == statusConnecting || state.status == statusConnected {
 		state.status = statusFailed
 		state.failed += 1
-		// remove endpoint failed to many times
+		// remove endpoint failed too many times
 		if state.failed >= connMaxRetries {
-			logger.Printf("endpoint %s failed to many times, remove it", endpoint)
+			logger.Printf("endpoint %s failed too many times, remove it", endpoint)
 			delete(c.epStats, endpoint)
 		} else {
 			c.epStats[endpoint] = state
@@ -196,14 +208,15 @@ func (c *BaseConnector) newPort(w wire.Wire, reconnect bool) *Port {
 	}
 
 	p := &Port{
-		w:            w,
-		router:       c.router,
-		output:       make(chan message.Packet, portBufferSize),
-		announce:     make(chan message.Routing),
-		closeFunc:    closeFunc,
-		ctx:          ctx,
-		rtt:          0,
-		lastAnnounce: time.Now(),
+		w:         w,
+		router:    c.router,
+		output:    make(chan message.Packet, portBufferSize),
+		announce:  make(chan message.Routing),
+		closeFunc: closeFunc,
+		ctx:       ctx,
+		rttStats: rttStats{
+			start: time.Now(),
+		},
 	}
 	go func() {
 		logger.Printf("handle port(%s) output: %+v", p, p.handleOutput())
@@ -374,6 +387,30 @@ func (p *Port) Close() error {
 
 func (p *Port) String() string {
 	return fmt.Sprintf("%s@%s", p.w.Endpoint(), p.w.Address().String())
+}
+
+func (p *Port) BeginRttTiming() {
+	p.rttStats.start = time.Now()
+}
+
+func (p *Port) EndRttTiming() {
+	rtt := float32(time.Now().Sub(p.rttStats.start).Milliseconds())
+	rttVariance := (rtt - p.rttStats.mean) * (rtt - p.rttStats.mean)
+	p.rttStats.mean = p.rttStats.mean*(1-rttAlphaMean) + rtt*rttAlphaMean
+	p.rttStats.variance = rttVariance*(1-rttAlphaVariance) + rttVariance*rttAlphaVariance
+}
+
+// return true, if port has smaller rtt. law of large number
+func (p *Port) Faster(base int) bool {
+	delta := float32(base) - p.rttStats.mean
+	if delta > 0 && delta*delta > 9*p.rttStats.variance {
+		return true
+	}
+	return false
+}
+
+func (p *Port) Rtt() int {
+	return int(p.rttStats.mean)
 }
 
 // close port

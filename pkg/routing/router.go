@@ -123,12 +123,34 @@ func (r *Router) RegisterPort(p *Port) error {
 	return nil
 }
 
+// update single routing entry
+func (r *Router) updateEntry(myEntry, peerEntry *routingEntry) {
+	// update routings for entries with smaller metric
+	if myEntry.metric > peerEntry.metric {
+		myEntry.port = peerEntry.port
+		myEntry.metric = peerEntry.metric
+		myEntry.rtt = peerEntry.rtt
+		myEntry.updatedAt = time.Now()
+		return
+	}
+	// same metric, select the one with smaller rtt
+	if myEntry.metric == peerEntry.metric {
+		if myEntry.port != peerEntry.port && peerEntry.port.Faster(myEntry.rtt-peerEntry.port.Rtt()) {
+			myEntry.port = peerEntry.port
+			myEntry.metric = peerEntry.metric
+		}
+		myEntry.rtt = peerEntry.rtt
+		myEntry.updatedAt = time.Now()
+	}
+	// TODO: metric + rtt
+}
+
 // update routing tables for this port
 func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 
 	// handle routing ack. to get the peer rtt
 	if routing.Type == message.RoutingRegisterAck {
-		p.rtt = int(float64(p.rtt)*0.75 + float64(time.Now().Sub(p.lastAnnounce).Milliseconds())*0.25)
+		p.EndRttTiming()
 		return nil
 	}
 	// log the peer provided networks
@@ -142,7 +164,7 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 				port:    p,
 				// inc distance
 				metric:    entry.Metric + 1,
-				rtt:       p.rtt + entry.Rtt,
+				rtt:       p.Rtt() + entry.Rtt,
 				updatedAt: time.Now(),
 			}
 			// routings reach max hops
@@ -162,20 +184,7 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 					if n.String() == peerEntry.network.String() {
 						matched = true
 						// only update routings for entries with smaller metric
-						if myEntry.metric > peerEntry.metric {
-							myEntry.port = peerEntry.port
-							myEntry.metric = peerEntry.metric
-							myEntry.rtt = peerEntry.rtt
-							myEntry.updatedAt = time.Now()
-						} else if myEntry.metric == peerEntry.metric && myEntry.port != peerEntry.port && myEntry.rtt > peerEntry.rtt {
-							myEntry.port = peerEntry.port
-							myEntry.metric = peerEntry.metric
-							myEntry.rtt = peerEntry.rtt
-							myEntry.updatedAt = time.Now()
-						} else if myEntry.metric == peerEntry.metric && myEntry.port == peerEntry.port {
-							myEntry.rtt = peerEntry.rtt
-							myEntry.updatedAt = time.Now()
-						}
+						r.updateEntry(myEntry, &peerEntry)
 						break
 					}
 				}
@@ -342,7 +351,7 @@ func (r *Router) handleRouting(p *Port) error {
 			}
 			msg := message.Routing{Routings: routings}
 			// send routings
-			p.lastAnnounce = time.Now()
+			p.BeginRttTiming()
 			if err := p.AnnouceRouting(&msg); err != nil {
 				return err
 			}
