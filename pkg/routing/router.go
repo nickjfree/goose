@@ -214,7 +214,6 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 			Message:  "",
 		}
 		// send ack message
-		p.lastAnnounce = time.Now()
 		if err := p.AnnouceRouting(&msg); err != nil {
 			return err
 		}
@@ -343,6 +342,7 @@ func (r *Router) handleRouting(p *Port) error {
 			}
 			msg := message.Routing{Routings: routings}
 			// send routings
+			p.lastAnnounce = time.Now()
 			if err := p.AnnouceRouting(&msg); err != nil {
 				return err
 			}
