@@ -196,13 +196,14 @@ func (c *BaseConnector) newPort(w wire.Wire, reconnect bool) *Port {
 	}
 
 	p := &Port{
-		w:         w,
-		router:    c.router,
-		output:    make(chan message.Packet, portBufferSize),
-		announce:  make(chan message.Routing),
-		closeFunc: closeFunc,
-		ctx:       ctx,
-		rtt:       0,
+		w:            w,
+		router:       c.router,
+		output:       make(chan message.Packet, portBufferSize),
+		announce:     make(chan message.Routing),
+		closeFunc:    closeFunc,
+		ctx:          ctx,
+		rtt:          0,
+		lastAnnounce: time.Now(),
 	}
 	go func() {
 		logger.Printf("handle port(%s) output: %+v", p, p.handleOutput())

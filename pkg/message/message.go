@@ -45,6 +45,8 @@ type RoutingEntry struct {
 	Network net.IPNet
 	// metric
 	Metric int
+	// Rtt
+	Rtt int
 }
 
 // routing register msg

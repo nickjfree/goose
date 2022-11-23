@@ -34,6 +34,8 @@ type routingEntry struct {
 	port *Port
 	// metric
 	metric int
+	// rtt
+	rtt int
 	// last updated
 	updatedAt time.Time
 }
@@ -43,7 +45,7 @@ func (entry *routingEntry) Network() net.IPNet {
 }
 
 func (entry *routingEntry) String() string {
-	return fmt.Sprintf("%s -> %s metric %d rtt %dms", entry.network.String(), entry.port, entry.metric%10, entry.port.rtt)
+	return fmt.Sprintf("%s -> %s metric %d rtt %dms", entry.network.String(), entry.port, entry.metric%10, entry.rtt)
 }
 
 type portState struct {
@@ -126,7 +128,7 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 
 	// handle routing ack. to get the peer rtt
 	if routing.Type == message.RoutingRegisterAck {
-		p.rtt = int(time.Now().Sub(p.lastAnnounce).Milliseconds())
+		p.rtt = int(float64(p.rtt)*0.75 + float64(time.Now().Sub(p.lastAnnounce).Milliseconds())*0.25)
 		return nil
 	}
 	// log the peer provided networks
@@ -139,11 +141,12 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 				network: entry.Network,
 				port:    p,
 				// inc distance
-				metric:    p.rtt*10 + entry.Metric + 1,
+				metric:    entry.Metric + 1,
+				rtt:       p.rtt + entry.Rtt,
 				updatedAt: time.Now(),
 			}
 			// routings reach max hops
-			if peerEntry.metric%10 >= r.maxMetric {
+			if peerEntry.metric >= r.maxMetric {
 				continue
 			}
 			// find the same network
@@ -162,9 +165,15 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 						if myEntry.metric > peerEntry.metric {
 							myEntry.port = peerEntry.port
 							myEntry.metric = peerEntry.metric
+							myEntry.rtt = peerEntry.rtt
 							myEntry.updatedAt = time.Now()
-						}
-						if myEntry.metric == peerEntry.metric && myEntry.port == peerEntry.port {
+						} else if myEntry.metric == peerEntry.metric && myEntry.port != peerEntry.port && myEntry.rtt > peerEntry.rtt {
+							myEntry.port = peerEntry.port
+							myEntry.metric = peerEntry.metric
+							myEntry.rtt = peerEntry.rtt
+							myEntry.updatedAt = time.Now()
+						} else if myEntry.metric == peerEntry.metric && myEntry.port == peerEntry.port {
+							myEntry.rtt = peerEntry.rtt
 							myEntry.updatedAt = time.Now()
 						}
 						break
@@ -350,6 +359,7 @@ func (r *Router) handleRouting(p *Port) error {
 						Network: network,
 						// local net, metric is always
 						Metric: 0,
+						Rtt:    0,
 					})
 				}
 				r.UpdateRouting(p, routing)
@@ -380,7 +390,8 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			if !strings.HasPrefix(p.String(), "tun") {
 				routings = append(routings, message.RoutingEntry{
 					Network: entry.network,
-					Metric:  entry.metric % 10,
+					Metric:  entry.metric,
+					Rtt:     entry.rtt,
 				})
 				continue
 			}
@@ -389,14 +400,16 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			if entry.network.String() != defaultRouting {
 				routings = append(routings, message.RoutingEntry{
 					Network: entry.network,
-					Metric:  entry.metric % 10,
+					Metric:  entry.metric,
+					Rtt:     entry.rtt,
 				})
 			} else if r.fakeIP != nil {
 				// if fakeip is enabled, route dns traffics to the tunnel
 				for _, network := range r.fakeIP.DNSRoutings() {
 					routings = append(routings, message.RoutingEntry{
 						Network: network,
-						Metric:  entry.metric % 10,
+						Metric:  entry.metric,
+						Rtt:     entry.rtt,
 					})
 				}
 			}
