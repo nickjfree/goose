@@ -135,12 +135,13 @@ func (r *Router) updateEntry(myEntry, peerEntry *routingEntry) {
 	}
 	// same metric, select the one with smaller rtt
 	if myEntry.metric == peerEntry.metric {
-		if myEntry.port != peerEntry.port && peerEntry.port.Faster(myEntry.rtt-peerEntry.port.Rtt()) {
+		if myEntry.port == peerEntry.port ||
+			(myEntry.port != peerEntry.port && peerEntry.port.Faster(myEntry.rtt-peerEntry.port.Rtt())) {
 			myEntry.port = peerEntry.port
 			myEntry.metric = peerEntry.metric
+			myEntry.rtt = peerEntry.rtt
+			myEntry.updatedAt = time.Now()
 		}
-		myEntry.rtt = peerEntry.rtt
-		myEntry.updatedAt = time.Now()
 	}
 	// TODO: metric + rtt
 }
