@@ -29,6 +29,7 @@ import (
 	dht "github.com/libp2p/go-libp2p-kad-dht"
 	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
+	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	"github.com/lucas-clemente/quic-go"
 	ma "github.com/multiformats/go-multiaddr"
 
@@ -271,6 +272,8 @@ type P2PHost struct {
 	cancel context.CancelFunc
 	// advertise namespace
 	namespace string
+	// allowedlist of peers
+	allowedPeers map[string]ma.Multiaddr
 }
 
 func NewP2PHost() (*P2PHost, error) {
@@ -308,6 +311,7 @@ func NewP2PHost() (*P2PHost, error) {
 		ctx:              ctx,
 		peerChan:         peerChan,
 		cancel:           cancel,
+		allowedPeers:     make(map[string]ma.Multiaddr),
 	}
 	if h.Bootstrap(bootstraps); err != nil {
 		return nil, err
@@ -407,6 +411,21 @@ func (h *P2PHost) Background() error {
 			}
 		}
 	}
+}
+
+// add peer to allowlist of resource manager
+func (h *P2PHost) AllowPeer(peer string) error {
+	addr := fmt.Sprintf("/ip4/0.0.0.0/ipcidr/0/p2p/%s", peer)
+	if _, ok := h.allowedPeers[addr]; ok {
+		return nil
+	} else {
+		al := rcmgr.GetAllowlist(h.Host.Network().ResourceManager())
+		maAddr := ma.StringCast(addr)
+		if err := al.Add(maAddr); err != nil {
+			return errors.WithStack(err)
+		}
+	}
+	return nil
 }
 
 // get privkey, save it to local path
