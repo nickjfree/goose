@@ -47,7 +47,6 @@ var quicConfig = &quic.Config{
 		// TODO(#1535): require source address validation when under load
 		return false
 	},
-	EnableDatagrams: true,
 	KeepAlivePeriod: 15 * time.Second,
 	Versions:        []quic.VersionNumber{quic.VersionDraft29, quic.Version1},
 }
