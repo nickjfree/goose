@@ -10,7 +10,9 @@ import (
 	"net"
 
 	ci "github.com/libp2p/go-libp2p/core/crypto"
+	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/core/sec"
 	pb "github.com/libp2p/go-libp2p/core/sec/insecure/pb"
 
@@ -27,18 +29,22 @@ const ID = "/plaintext/2.0.0"
 // peer presents as their ID and public key.
 // No authentication of the remote identity is performed.
 type Transport struct {
-	id  peer.ID
-	key ci.PrivKey
+	id         peer.ID
+	key        ci.PrivKey
+	protocolID protocol.ID
 }
+
+var _ sec.SecureTransport = &Transport{}
 
 // NewWithIdentity constructs a new insecure transport. The provided private key
 // is stored and returned from LocalPrivateKey to satisfy the
 // SecureTransport interface, and the public key is sent to
 // remote peers. No security is provided.
-func NewWithIdentity(id peer.ID, key ci.PrivKey) *Transport {
+func NewWithIdentity(protocolID protocol.ID, id peer.ID, key ci.PrivKey) *Transport {
 	return &Transport{
-		id:  id,
-		key: key,
+		protocolID: protocolID,
+		id:         id,
+		key:        key,
 	}
 }
 
@@ -105,6 +111,10 @@ func (t *Transport) SecureOutbound(ctx context.Context, insecure net.Conn, p pee
 	}
 
 	return conn, nil
+}
+
+func (t *Transport) ID() protocol.ID {
+	return t.protocolID
 }
 
 // Conn is the connection type returned by the insecure transport.
@@ -228,6 +238,11 @@ func (ic *Conn) RemotePublicKey() ci.PubKey {
 // LocalPrivateKey returns the private key for the local peer.
 func (ic *Conn) LocalPrivateKey() ci.PrivKey {
 	return ic.localPrivKey
+}
+
+// ConnState returns the security connection's state information.
+func (ic *Conn) ConnState() network.ConnectionState {
+	return network.ConnectionState{}
 }
 
 var _ sec.SecureTransport = (*Transport)(nil)

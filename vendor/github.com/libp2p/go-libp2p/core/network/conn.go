@@ -34,6 +34,16 @@ type Conn interface {
 	GetStreams() []Stream
 }
 
+// ConnectionState holds information about the connection.
+type ConnectionState struct {
+	// The stream multiplexer used on this connection (if any). For example: /yamux/1.0.0
+	StreamMultiplexer string
+	// The security protocol used on this connection (if any). For example: /tls/1.0.0
+	Security string
+	// the transport used on this connection. For example: tcp
+	Transport string
+}
+
 // ConnSecurity is the interface that one can mix into a connection interface to
 // give it the security methods.
 type ConnSecurity interface {
@@ -48,6 +58,9 @@ type ConnSecurity interface {
 
 	// RemotePublicKey returns the public key of the remote peer.
 	RemotePublicKey() ic.PubKey
+
+	// ConnState returns information about the connection state.
+	ConnState() ConnectionState
 }
 
 // ConnMultiaddrs is an interface mixin for connection types that provide multiaddr

@@ -231,7 +231,7 @@ func (r *PeerRecord) ToProtobuf() (*pb.PeerRecord, error) {
 }
 
 func addrsFromProtobuf(addrs []*pb.PeerRecord_AddressInfo) []ma.Multiaddr {
-	var out []ma.Multiaddr
+	out := make([]ma.Multiaddr, 0, len(addrs))
 	for _, addr := range addrs {
 		a, err := ma.NewMultiaddrBytes(addr.Multiaddr)
 		if err != nil {
@@ -243,7 +243,7 @@ func addrsFromProtobuf(addrs []*pb.PeerRecord_AddressInfo) []ma.Multiaddr {
 }
 
 func addrsToProtobuf(addrs []ma.Multiaddr) []*pb.PeerRecord_AddressInfo {
-	var out []*pb.PeerRecord_AddressInfo
+	out := make([]*pb.PeerRecord_AddressInfo, 0, len(addrs))
 	for _, addr := range addrs {
 		out = append(out, &pb.PeerRecord_AddressInfo{Multiaddr: addr.Bytes()})
 	}

@@ -413,7 +413,7 @@ func (h *BasicHost) newStreamHandler(s network.Stream) {
 		return
 	}
 
-	log.Debugf("protocol negotiation took %s", took)
+	log.Debugf("negotiated: %s (took %s)", protoID, took)
 
 	go handle(protoID, s)
 }

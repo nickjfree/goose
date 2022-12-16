@@ -12,6 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/transport"
+	"github.com/lucas-clemente/quic-go"
 
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
@@ -268,6 +269,13 @@ func (s *Swarm) dialPeer(ctx context.Context, p peer.ID) (*Conn, error) {
 
 	conn, err = s.dsync.Dial(ctx, p)
 	if err == nil {
+		// Ensure we connected to the correct peer.
+		// This was most likely already checked by the security protocol, but it doesn't hurt do it again here.
+		if conn.RemotePeer() != p {
+			conn.Close()
+			log.Errorw("Handshake failed to properly authenticate peer", "authenticated", conn.RemotePeer(), "expected", p)
+			return nil, fmt.Errorf("unexpected peer")
+		}
 		return conn, nil
 	}
 
@@ -439,15 +447,17 @@ func (s *Swarm) filterKnownUndialables(p peer.ID, addrs []ma.Multiaddr) []ma.Mul
 		}
 	}
 
-	return maybeRemoveWebTransportAddrs(ma.FilterAddrs(addrs,
-		func(addr ma.Multiaddr) bool { return !ma.Contains(ourAddrs, addr) },
-		s.canDial,
-		// TODO: Consider allowing link-local addresses
-		func(addr ma.Multiaddr) bool { return !manet.IsIP6LinkLocal(addr) },
-		func(addr ma.Multiaddr) bool {
-			return s.gater == nil || s.gater.InterceptAddrDial(p, addr)
-		},
-	))
+	return maybeRemoveWebTransportAddrs(
+		maybeRemoveQUICDraft29(
+			ma.FilterAddrs(addrs,
+				func(addr ma.Multiaddr) bool { return !ma.Contains(ourAddrs, addr) },
+				s.canDial,
+				// TODO: Consider allowing link-local addresses
+				func(addr ma.Multiaddr) bool { return !manet.IsIP6LinkLocal(addr) },
+				func(addr ma.Multiaddr) bool {
+					return s.gater == nil || s.gater.InterceptAddrDial(p, addr)
+				},
+			)))
 }
 
 // limitedDial will start a dial to the given peer when
@@ -536,9 +546,32 @@ func isWebTransport(addr ma.Multiaddr) bool {
 	return err == nil
 }
 
-func isQUIC(addr ma.Multiaddr) bool {
-	_, err := addr.ValueForProtocol(ma.P_QUIC)
-	return err == nil && !isWebTransport(addr)
+func quicVersion(addr ma.Multiaddr) (quic.VersionNumber, bool) {
+	found := false
+	foundWebTransport := false
+	var version quic.VersionNumber
+	ma.ForEach(addr, func(c ma.Component) bool {
+		switch c.Protocol().Code {
+		case ma.P_QUIC:
+			version = quic.VersionDraft29
+			found = true
+			return true
+		case ma.P_QUIC_V1:
+			version = quic.Version1
+			found = true
+			return true
+		case ma.P_WEBTRANSPORT:
+			version = quic.Version1
+			foundWebTransport = true
+			return false
+		default:
+			return true
+		}
+	})
+	if foundWebTransport {
+		return 0, false
+	}
+	return version, found
 }
 
 // If we have QUIC addresses, we don't want to dial WebTransport addresses.
@@ -548,7 +581,7 @@ func isQUIC(addr ma.Multiaddr) bool {
 func maybeRemoveWebTransportAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
 	var hasQuic, hasWebTransport bool
 	for _, addr := range addrs {
-		if isQUIC(addr) {
+		if _, isQuic := quicVersion(addr); isQuic {
 			hasQuic = true
 		}
 		if isWebTransport(addr) {
@@ -561,6 +594,41 @@ func maybeRemoveWebTransportAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
 	var c int
 	for _, addr := range addrs {
 		if isWebTransport(addr) {
+			continue
+		}
+		addrs[c] = addr
+		c++
+	}
+	return addrs[:c]
+}
+
+// If we have QUIC V1 addresses, we don't want to dial QUIC draft29 addresses.
+// This is a similar hack to the above. If we add one more hack like this, let's
+// define a `Filterer` interface like the `Resolver` interface that transports
+// can optionally implement if they want to filter the multiaddrs.
+//
+// This mutates the input
+func maybeRemoveQUICDraft29(addrs []ma.Multiaddr) []ma.Multiaddr {
+	var hasQuicV1, hasQuicDraft29 bool
+	for _, addr := range addrs {
+		v, isQuic := quicVersion(addr)
+		if !isQuic {
+			continue
+		}
+
+		if v == quic.Version1 {
+			hasQuicV1 = true
+		}
+		if v == quic.VersionDraft29 {
+			hasQuicDraft29 = true
+		}
+	}
+	if !hasQuicDraft29 || !hasQuicV1 {
+		return addrs
+	}
+	var c int
+	for _, addr := range addrs {
+		if v, isQuic := quicVersion(addr); isQuic && v == quic.VersionDraft29 {
 			continue
 		}
 		addrs[c] = addr

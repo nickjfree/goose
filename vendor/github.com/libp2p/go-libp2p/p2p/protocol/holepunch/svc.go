@@ -53,6 +53,7 @@ type Service struct {
 	hasPublicAddrsChan chan struct{}
 
 	tracer *tracer
+	filter AddrFilter
 
 	refCount sync.WaitGroup
 }
@@ -140,7 +141,7 @@ func (s *Service) watchForPublicAddr() {
 				continue
 			}
 			s.holePuncherMx.Lock()
-			s.holePuncher = newHolePuncher(s.host, s.ids, s.tracer)
+			s.holePuncher = newHolePuncher(s.host, s.ids, s.tracer, s.filter)
 			s.holePuncherMx.Unlock()
 			close(s.hasPublicAddrsChan)
 			return
@@ -169,6 +170,10 @@ func (s *Service) incomingHolePunch(str network.Stream) (rtt time.Duration, addr
 		return 0, nil, fmt.Errorf("received hole punch stream: %s", str.Conn().RemoteMultiaddr())
 	}
 	ownAddrs := removeRelayAddrs(s.ids.OwnObservedAddrs())
+	if s.filter != nil {
+		ownAddrs = s.filter.FilterLocal(str.Conn().RemotePeer(), ownAddrs)
+	}
+
 	// If we can't tell the peer where to dial us, there's no point in starting the hole punching.
 	if len(ownAddrs) == 0 {
 		return 0, nil, errors.New("rejecting hole punch request, as we don't have any public addresses")
@@ -194,7 +199,12 @@ func (s *Service) incomingHolePunch(str network.Stream) (rtt time.Duration, addr
 	if t := msg.GetType(); t != pb.HolePunch_CONNECT {
 		return 0, nil, fmt.Errorf("expected CONNECT message from initiator but got %d", t)
 	}
+
 	obsDial := removeRelayAddrs(addrsFromBytes(msg.ObsAddrs))
+	if s.filter != nil {
+		obsDial = s.filter.FilterRemote(str.Conn().RemotePeer(), obsDial)
+	}
+
 	log.Debugw("received hole punch request", "peer", str.Conn().RemotePeer(), "addrs", obsDial)
 	if len(obsDial) == 0 {
 		return 0, nil, errors.New("expected CONNECT message to contain at least one address")

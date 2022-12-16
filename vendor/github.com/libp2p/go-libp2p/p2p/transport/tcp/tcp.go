@@ -136,7 +136,7 @@ var _ transport.Transport = &TcpTransport{}
 // created. It represents an entire TCP stack (though it might not necessarily be).
 func NewTCPTransport(upgrader transport.Upgrader, rcmgr network.ResourceManager, opts ...Option) (*TcpTransport, error) {
 	if rcmgr == nil {
-		rcmgr = network.NullResourceManager
+		rcmgr = &network.NullResourceManager{}
 	}
 	tr := &TcpTransport{
 		upgrader:       upgrader,

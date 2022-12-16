@@ -4,8 +4,11 @@ package libp2p
 // those are in defaults.go).
 
 import (
+	"crypto/rand"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"reflect"
 	"time"
 
 	"github.com/libp2p/go-libp2p/config"
@@ -13,16 +16,20 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/metrics"
 	"github.com/libp2p/go-libp2p/core/network"
-	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/pnet"
+	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-libp2p/core/transport"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	bhost "github.com/libp2p/go-libp2p/p2p/host/basic"
+	tptu "github.com/libp2p/go-libp2p/p2p/net/upgrader"
 	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
+	"github.com/libp2p/go-libp2p/p2p/transport/quicreuse"
 
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
+	"go.uber.org/fx"
 )
 
 // ListenAddrStrings configures libp2p to listen on the given (unparsed)
@@ -61,17 +68,12 @@ func ListenAddrs(addrs ...ma.Multiaddr) Option {
 // * Host
 // * Network
 // * Peerstore
-func Security(name string, tpt interface{}) Option {
-	stpt, err := config.SecurityConstructor(tpt)
-	err = traceError(err, 1)
+func Security(name string, constructor interface{}) Option {
 	return func(cfg *Config) error {
-		if err != nil {
-			return err
-		}
 		if cfg.Insecure {
 			return fmt.Errorf("cannot use security transports with an insecure libp2p configuration")
 		}
-		cfg.SecurityTransports = append(cfg.SecurityTransports, config.MsSecC{SecC: stpt, ID: name})
+		cfg.SecurityTransports = append(cfg.SecurityTransports, config.Security{ID: protocol.ID(name), Constructor: constructor})
 		return nil
 	}
 }
@@ -86,25 +88,38 @@ var NoSecurity Option = func(cfg *Config) error {
 	return nil
 }
 
-// Muxer configures libp2p to use the given stream multiplexer (or stream
-// multiplexer constructor).
-//
-// Name is the protocol name.
-//
-// The transport can be a constructed mux.Transport or a function taking any
-// subset of this libp2p node's:
-// * Peer ID
-// * Host
-// * Network
-// * Peerstore
-func Muxer(name string, tpt interface{}) Option {
-	mtpt, err := config.MuxerConstructor(tpt)
-	err = traceError(err, 1)
+// Muxer configures libp2p to use the given stream multiplexer.
+// name is the protocol name.
+func Muxer(name string, muxer network.Multiplexer) Option {
 	return func(cfg *Config) error {
-		if err != nil {
-			return err
+		cfg.Muxers = append(cfg.Muxers, tptu.StreamMuxer{Muxer: muxer, ID: protocol.ID(name)})
+		return nil
+	}
+}
+
+func QUICReuse(constructor interface{}, opts ...quicreuse.Option) Option {
+	return func(cfg *Config) error {
+		tag := `group:"quicreuseopts"`
+		typ := reflect.ValueOf(constructor).Type()
+		numParams := typ.NumIn()
+		isVariadic := typ.IsVariadic()
+
+		if !isVariadic && len(opts) > 0 {
+			return errors.New("QUICReuse constructor doesn't take any options")
 		}
-		cfg.Muxers = append(cfg.Muxers, config.MsMuxC{MuxC: mtpt, ID: name})
+
+		var params []string
+		if isVariadic && len(opts) > 0 {
+			// If there are options, apply the tag.
+			// Since options are variadic, they have to be the last argument of the constructor.
+			params = make([]string, numParams)
+			params[len(params)-1] = tag
+		}
+
+		cfg.QUICReuse = append(cfg.QUICReuse, fx.Provide(fx.Annotate(constructor, fx.ParamTags(params...))))
+		for _, opt := range opts {
+			cfg.QUICReuse = append(cfg.QUICReuse, fx.Supply(fx.Annotate(opt, fx.ResultTags(tag))))
+		}
 		return nil
 	}
 }
@@ -124,14 +139,55 @@ func Muxer(name string, tpt interface{}) Option {
 // * Public Key
 // * Address filter (filter.Filter)
 // * Peerstore
-func Transport(tpt interface{}, opts ...interface{}) Option {
-	tptc, err := config.TransportConstructor(tpt, opts...)
-	err = traceError(err, 1)
+func Transport(constructor interface{}, opts ...interface{}) Option {
 	return func(cfg *Config) error {
-		if err != nil {
-			return err
+		// generate a random identifier, so that fx can associate the constructor with its options
+		b := make([]byte, 8)
+		rand.Read(b)
+		id := binary.BigEndian.Uint64(b)
+
+		tag := fmt.Sprintf(`group:"transportopt_%d"`, id)
+
+		typ := reflect.ValueOf(constructor).Type()
+		numParams := typ.NumIn()
+		isVariadic := typ.IsVariadic()
+
+		if !isVariadic && len(opts) > 0 {
+			return errors.New("transport constructor doesn't take any options")
 		}
-		cfg.Transports = append(cfg.Transports, tptc)
+		if isVariadic && numParams >= 1 {
+			paramType := typ.In(numParams - 1).Elem()
+			for _, opt := range opts {
+				if typ := reflect.TypeOf(opt); !typ.AssignableTo(paramType) {
+					return fmt.Errorf("transport option of type %s not assignable to %s", typ, paramType)
+				}
+			}
+		}
+
+		var params []string
+		if isVariadic && len(opts) > 0 {
+			// If there are transport options, apply the tag.
+			// Since options are variadic, they have to be the last argument of the constructor.
+			params = make([]string, numParams)
+			params[len(params)-1] = tag
+		}
+
+		cfg.Transports = append(cfg.Transports, fx.Provide(
+			fx.Annotate(
+				constructor,
+				fx.ParamTags(params...),
+				fx.As(new(transport.Transport)),
+				fx.ResultTags(`group:"transport"`),
+			),
+		))
+		for _, opt := range opts {
+			cfg.Transports = append(cfg.Transports, fx.Supply(
+				fx.Annotate(
+					opt,
+					fx.ResultTags(tag),
+				),
+			))
+		}
 		return nil
 	}
 }
@@ -257,31 +313,6 @@ func EnableAutoRelay(opts ...autorelay.Option) Option {
 		cfg.AutoRelayOpts = opts
 		return nil
 	}
-}
-
-// StaticRelays configures known relays for autorelay; when this option is enabled
-// then the system will use the configured relays instead of querying the DHT to
-// discover relays.
-// Deprecated: pass an autorelay.WithStaticRelays option to EnableAutoRelay.
-func StaticRelays(relays []peer.AddrInfo) Option {
-	return func(cfg *Config) error {
-		cfg.AutoRelayOpts = append(cfg.AutoRelayOpts, autorelay.WithStaticRelays(relays))
-		return nil
-	}
-}
-
-// DefaultStaticRelays configures the static relays to use the known PL-operated relays.
-// Deprecated: pass autorelay.WithDefaultStaticRelays to EnableAutoRelay.
-func DefaultStaticRelays() Option {
-	relays := make([]peer.AddrInfo, 0, len(autorelay.DefaultRelays))
-	for _, addr := range autorelay.DefaultRelays {
-		pi, err := peer.AddrInfoFromString(addr)
-		if err != nil {
-			panic(fmt.Sprintf("failed to initialize default static relays: %s", err))
-		}
-		relays = append(relays, *pi)
-	}
-	return StaticRelays(relays)
 }
 
 // ForceReachabilityPublic overrides automatic reachability detection in the AutoNAT subsystem,
@@ -412,7 +443,7 @@ var NoListenAddrs = func(cfg *Config) error {
 // This will both clear any configured transports (specified in prior libp2p
 // options) and prevent libp2p from applying the default transports.
 var NoTransports = func(cfg *Config) error {
-	cfg.Transports = []config.TptC{}
+	cfg.Transports = []fx.Option{}
 	return nil
 }
 

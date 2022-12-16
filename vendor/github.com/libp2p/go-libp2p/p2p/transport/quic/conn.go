@@ -2,7 +2,6 @@ package libp2pquic
 
 import (
 	"context"
-	"net"
 
 	ic "github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
@@ -13,17 +12,8 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 )
 
-type pConn interface {
-	net.PacketConn
-
-	// count conn reference
-	DecreaseCount()
-	IncreaseCount()
-}
-
 type conn struct {
 	quicConn  quic.Connection
-	pconn     pConn
 	transport *transport
 	scope     network.ConnManagementScope
 
@@ -44,7 +34,6 @@ var _ tpt.CapableConn = &conn{}
 func (c *conn) Close() error {
 	c.transport.removeConn(c.quicConn)
 	err := c.quicConn.CloseWithError(0, "")
-	c.pconn.DecreaseCount()
 	c.scope.Done()
 	return err
 }
@@ -71,39 +60,32 @@ func (c *conn) AcceptStream() (network.MuxedStream, error) {
 }
 
 // LocalPeer returns our peer ID
-func (c *conn) LocalPeer() peer.ID {
-	return c.localPeer
-}
+func (c *conn) LocalPeer() peer.ID { return c.localPeer }
 
 // LocalPrivateKey returns our private key
-func (c *conn) LocalPrivateKey() ic.PrivKey {
-	return c.privKey
-}
+func (c *conn) LocalPrivateKey() ic.PrivKey { return c.privKey }
 
 // RemotePeer returns the peer ID of the remote peer.
-func (c *conn) RemotePeer() peer.ID {
-	return c.remotePeerID
-}
+func (c *conn) RemotePeer() peer.ID { return c.remotePeerID }
 
 // RemotePublicKey returns the public key of the remote peer.
-func (c *conn) RemotePublicKey() ic.PubKey {
-	return c.remotePubKey
-}
+func (c *conn) RemotePublicKey() ic.PubKey { return c.remotePubKey }
 
 // LocalMultiaddr returns the local Multiaddr associated
-func (c *conn) LocalMultiaddr() ma.Multiaddr {
-	return c.localMultiaddr
-}
+func (c *conn) LocalMultiaddr() ma.Multiaddr { return c.localMultiaddr }
 
 // RemoteMultiaddr returns the remote Multiaddr associated
-func (c *conn) RemoteMultiaddr() ma.Multiaddr {
-	return c.remoteMultiaddr
-}
+func (c *conn) RemoteMultiaddr() ma.Multiaddr { return c.remoteMultiaddr }
 
-func (c *conn) Transport() tpt.Transport {
-	return c.transport
-}
+func (c *conn) Transport() tpt.Transport { return c.transport }
 
-func (c *conn) Scope() network.ConnScope {
-	return c.scope
+func (c *conn) Scope() network.ConnScope { return c.scope }
+
+// ConnState is the state of security connection.
+func (c *conn) ConnState() network.ConnectionState {
+	t := "quic-v1"
+	if _, err := c.LocalMultiaddr().ValueForProtocol(ma.P_QUIC); err == nil {
+		t = "quic"
+	}
+	return network.ConnectionState{Transport: t}
 }

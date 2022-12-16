@@ -160,6 +160,7 @@ func (cfg *LimitConfig) Apply(c LimitConfig) {
 	cfg.AllowlistedSystem.Apply(c.AllowlistedSystem)
 	cfg.AllowlistedTransient.Apply(c.AllowlistedTransient)
 	cfg.ServiceDefault.Apply(c.ServiceDefault)
+	cfg.ServicePeerDefault.Apply(c.ServicePeerDefault)
 	cfg.ProtocolDefault.Apply(c.ProtocolDefault)
 	cfg.ProtocolPeerDefault.Apply(c.ProtocolPeerDefault)
 	cfg.PeerDefault.Apply(c.PeerDefault)
@@ -491,7 +492,10 @@ var DefaultLimits = ScalingLimitConfig{
 	},
 
 	PeerBaseLimit: BaseLimit{
-		ConnsInbound:    4,
+		// 8 for now so that it matches the number of concurrent dials we may do
+		// in swarm_dial.go. With future smart dialing work we should bring this
+		// down
+		ConnsInbound:    8,
 		ConnsOutbound:   8,
 		Conns:           8,
 		StreamsInbound:  256,
