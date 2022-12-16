@@ -85,7 +85,7 @@ func (r *Rule) Run() error {
 			logger.Println(err)
 			return otto.Value{}
 		}
-		country := record.Country.Names["en"]
+		country := record.Country.IsoCode
 
 		ret, err := vm.ToValue(country)
 		if err != nil {
