@@ -35,7 +35,7 @@ func New(path string, geoip string) *Rule {
 
 	scripts, err := ioutil.ReadFile(path)
 	if err != nil {
-		logger.Println("read rule file error: ", err)
+		logger.Fatalln("read rule file error: ", err)
 		return nil
 	}
 
@@ -47,7 +47,7 @@ func New(path string, geoip string) *Rule {
 	if geoip != "" {
 		db, err = geoip2.Open(geoip)
 		if err != nil {
-			log.Fatal(err)
+			logger.Fatal(err)
 			return nil
 		}
 	}
@@ -166,13 +166,13 @@ func checkValid(ipaddr string) bool {
 }
 
 // match ip or domain
-func (r *Rule) MatchDomin(domain string) bool {
+func (r *Rule) MatchDomain(domain string) bool {
 	if !checkValid(domain) {
 		logger.Println("domain not valid")
 		return false
 	}
 
-	val_bool, err := r.vm.Run("MatchDomain('" + domain + "')")
+	val_bool, err := r.vm.Run("matchDomain('" + domain + "')")
 	if err != nil {
 		logger.Println("run matchDomain error: ", err)
 		return false

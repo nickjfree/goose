@@ -38,6 +38,15 @@ func (manager *FakeIPManager) FakeDnsResponse(p *message.Packet) error {
 				}
 				for i, ans := range dns.Answers {
 					if ans.Type == layers.DNSTypeA && !ans.IP.Equal(net.IPv4(8, 8, 8, 8)) {
+						// skip matched name or ip
+						if manager.rule != nil {
+							if manager.rule.MatchDomain(string(ans.Name)) {
+								return nil
+							}
+							if manager.rule.MatchDomain(ans.IP.String()) {
+								return nil
+							}
+						}
 						fakeIP, err := manager.Alloc(string(ans.Name), ans.IP)
 						if err != nil {
 							return err

@@ -31,7 +31,7 @@ func main() {
 	}
 
 	if options.FakeRange != "" {
-		opts = append(opts, routing.WithFakeIP(options.FakeRange))
+		opts = append(opts, routing.WithFakeIP(options.FakeRange, options.RuleScript, options.GeoipDbFile))
 	}
 
 	r := routing.NewRouter(options.LocalAddr, opts...)

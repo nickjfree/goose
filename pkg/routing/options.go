@@ -68,9 +68,9 @@ func WithDiscovery(namespace string) Option {
 }
 
 // dns fake ip
-func WithFakeIP(network string) Option {
+func WithFakeIP(network, script, db string) Option {
 	return func(r *Router) error {
-		r.fakeIP = fakeip.NewFakeIPManager(network)
+		r.fakeIP = fakeip.NewFakeIPManager(network, script, db)
 		return nil
 	}
 }

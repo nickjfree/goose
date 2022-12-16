@@ -4,6 +4,7 @@ import (
 	"net"
 	"sync"
 
+	"goose/pkg/routing/rule"
 	"goose/pkg/utils"
 )
 
@@ -17,13 +18,13 @@ type FakeIPManager struct {
 	f2r *utils.IPMapping
 	// real to fake ip mapping
 	r2f *utils.IPMapping
-	// hosts to skip
-	skipHosts map[string]struct{}
+	// fakeip rule
+	rule *rule.Rule
 	// lock
 	mu sync.Mutex
 }
 
-func NewFakeIPManager(network string) *FakeIPManager {
+func NewFakeIPManager(network, script, db string) *FakeIPManager {
 	_, ipNet, err := net.ParseCIDR(network)
 	if err != nil {
 		logger.Fatal(err)
@@ -38,8 +39,13 @@ func NewFakeIPManager(network string) *FakeIPManager {
 			pool.Free(ip)
 			return nil
 		}),
-		r2f:       utils.NewIPMapping(nil),
-		skipHosts: make(map[string]struct{}),
+		r2f: utils.NewIPMapping(nil),
+	}
+	if script != "" && db != "" {
+		m.rule = rule.New(script, db)
+		if err := m.rule.Run(); err != nil {
+			logger.Fatal(err)
+		}
 	}
 	return m
 }
