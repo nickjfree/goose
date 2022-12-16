@@ -9,7 +9,9 @@ require (
 	github.com/libp2p/go-libp2p-kad-dht v0.18.0
 	github.com/lucas-clemente/quic-go v0.29.1
 	github.com/multiformats/go-multiaddr v0.8.0
+	github.com/oschwald/geoip2-golang v1.8.0
 	github.com/pkg/errors v0.9.1
+	github.com/robertkrimen/otto v0.2.1
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/yl2chen/cidranger v1.0.2
 )
@@ -88,6 +90,7 @@ require (
 	github.com/onsi/gomega v1.20.1 // indirect
 	github.com/opencontainers/runtime-spec v1.0.2 // indirect
 	github.com/opentracing/opentracing-go v1.2.0 // indirect
+	github.com/oschwald/maxminddb-golang v1.10.0 // indirect
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58 // indirect
 	github.com/polydawn/refmt v0.0.0-20190807091052-3d65705ee9f1 // indirect
 	github.com/prometheus/client_golang v1.13.0 // indirect
@@ -108,8 +111,10 @@ require (
 	golang.org/x/net v0.0.0-20220920183852-bf014ff85ad5 // indirect
 	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4 // indirect
 	golang.org/x/sys v0.1.1-0.20221102194838-fc697a31fa06 // indirect
+	golang.org/x/text v0.4.0 // indirect
 	golang.org/x/tools v0.1.12 // indirect
 	google.golang.org/protobuf v1.28.1 // indirect
+	gopkg.in/sourcemap.v1 v1.0.5 // indirect
 	gopkg.in/tomb.v1 v1.0.0-20141024135613-dd632973f1e7 // indirect
 	lukechampine.com/blake3 v1.1.7 // indirect
 )

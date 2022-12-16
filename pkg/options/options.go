@@ -27,6 +27,9 @@ var (
 	Namespace = ""
 	// fake ip range
 	FakeRange = ""
+	// rule script path
+	RuleScript  = ""
+	GeoipDbFile = ""
 )
 
 func init() {
@@ -35,5 +38,7 @@ func init() {
 	flag.StringVar(&Forward, "f", "", "forward networks, comma separated CIDRs")
 	flag.StringVar(&Namespace, "n", "", "namespace")
 	flag.StringVar(&FakeRange, "p", "", "fake ip range")
+	flag.StringVar(&RuleScript, "r", "", "rule script")
+	flag.StringVar(&GeoipDbFile, "g", "", "geoip db file")
 	flag.Parse()
 }
