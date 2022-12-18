@@ -122,7 +122,7 @@ func (c *BaseConnector) setConnected(endpoint string, w wire.Wire) error {
 	defer c.lock.Unlock()
 
 	state, ok := c.epStats[endpoint]
-	if ok && state.status == statusConnecting {
+	if ok && (state.status == statusConnecting || state.status == statusFailed) {
 		state.status = statusConnected
 		state.wire = w
 		state.failed = 0
