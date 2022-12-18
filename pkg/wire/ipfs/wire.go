@@ -489,7 +489,7 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 
 	var idht *dht.IpfsDHT
 	opts := []libp2p.Option{
-		libp2p.ListenAddrStrings("/ip4/0.0.0.0/udp/4001/quic", "/ip4/0.0.0.0/udp/4001/quic-v1"),
+		libp2p.ListenAddrStrings("/ip4/0.0.0.0/udp/4001/quic"),
 		libp2p.Identity(priv),
 		// enable relay
 		libp2p.EnableRelay(),
