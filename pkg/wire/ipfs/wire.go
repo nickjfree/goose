@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"io/ioutil"
 	"log"
-	"math"
 	"net"
 	"os"
 	"reflect"
@@ -59,8 +58,6 @@ const (
 	transientErrorString = "transient connection"
 	// key size
 	keyBits = 2048
-	//
-	bigEnough = math.MaxInt / 2
 )
 
 var (
@@ -484,15 +481,8 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 	}
 
 	// resource manager
-	limits := rcmgr.DefaultLimits
-
-	limits.SystemBaseLimit.Conns = bigEnough
-	limits.SystemBaseLimit.ConnsOutbound = bigEnough
-	limits.TransientBaseLimit.Conns = bigEnough
-	limits.TransientBaseLimit.ConnsOutbound = bigEnough
-
-	libp2p.SetDefaultServiceLimits(&limits)
-	mgr, err := rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(limits.AutoScale()))
+	limits := getResourceLimits()
+	mgr, err := rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(limits))
 	if err != nil {
 		return nil, nil, errors.WithStack(err)
 	}
