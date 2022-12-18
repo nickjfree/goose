@@ -1,4 +1,4 @@
-var filters = ['baidu', 'shifen', 'csdn', 'qq'];
+var filters = ['baidu', 'shifen', 'csdn', 'qq', 'libp2p'];
 var filterRegions = ['CN'];
 
 function isIPv4(str) {

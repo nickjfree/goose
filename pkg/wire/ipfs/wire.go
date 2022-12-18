@@ -2,22 +2,20 @@
 package ipfs
 
 import (
-	// "bytes"
 	"context"
-	"fmt"
-	"net"
-	// "io"
 	"crypto/rand"
 	"encoding/json"
+	"fmt"
 	"io/ioutil"
 	"log"
+	"math"
+	"net"
+	"os"
 	"reflect"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
-	// "path/filepath"
-	"os"
-	"sync"
 
 	"github.com/libp2p/go-libp2p"
 
@@ -61,6 +59,8 @@ const (
 	transientErrorString = "transient connection"
 	// key size
 	keyBits = 2048
+	//
+	bigEnough = math.MaxInt / 2
 )
 
 var (
@@ -397,6 +397,8 @@ func (h *P2PHost) Background() error {
 				case h.peerChan <- peer:
 				case <-h.ctx.Done():
 					return nil
+				default:
+					continue
 				}
 			}
 			logger.Printf("%d peers(ipfs)", len(peerList))
@@ -481,9 +483,23 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		return nil, nil, err
 	}
 
+	// resource manager
+	limits := rcmgr.DefaultLimits
+
+	limits.SystemBaseLimit.Conns = bigEnough
+	limits.SystemBaseLimit.ConnsOutbound = bigEnough
+	limits.TransientBaseLimit.Conns = bigEnough
+	limits.TransientBaseLimit.ConnsOutbound = bigEnough
+
+	libp2p.SetDefaultServiceLimits(&limits)
+	mgr, err := rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(limits.AutoScale()))
+	if err != nil {
+		return nil, nil, errors.WithStack(err)
+	}
+
 	var idht *dht.IpfsDHT
 	opts := []libp2p.Option{
-		libp2p.ListenAddrStrings("/ip4/0.0.0.0/udp/4001/quic"),
+		libp2p.ListenAddrStrings("/ip4/0.0.0.0/udp/4001/quic", "/ip4/0.0.0.0/udp/4001/quic-v1"),
 		libp2p.Identity(priv),
 		// enable relay
 		libp2p.EnableRelay(),
@@ -494,12 +510,18 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		// hole punching
 		libp2p.EnableHolePunching(),
 
+		libp2p.ResourceManager(mgr),
+
 		libp2p.DefaultTransports,
 		libp2p.DefaultMuxers,
 		libp2p.DefaultSecurity,
 		// enable routing
 		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
-			idht, err = dht.New(context.Background(), h)
+			ctx := context.Background()
+			idht, err = dht.New(ctx, h)
+			if err = idht.Bootstrap(ctx); err != nil {
+				logger.Fatal(err)
+			}
 			return idht, err
 		}),
 	}
