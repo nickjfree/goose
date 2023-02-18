@@ -56,8 +56,8 @@ func (t *transportConn) Close() error {
 
 func (t *transportConn) ConnState() network.ConnectionState {
 	return network.ConnectionState{
-		StreamMultiplexer: string(t.muxer),
-		Security:          string(t.security),
+		StreamMultiplexer: t.muxer,
+		Security:          t.security,
 		Transport:         "tcp",
 	}
 }

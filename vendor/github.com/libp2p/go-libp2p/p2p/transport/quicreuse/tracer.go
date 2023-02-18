@@ -9,8 +9,8 @@ import (
 
 	golog "github.com/ipfs/go-log/v2"
 	"github.com/klauspost/compress/zstd"
-	"github.com/lucas-clemente/quic-go/logging"
-	"github.com/lucas-clemente/quic-go/qlog"
+	"github.com/quic-go/quic-go/logging"
+	"github.com/quic-go/quic-go/qlog"
 )
 
 var log = golog.Logger("quic-utils")

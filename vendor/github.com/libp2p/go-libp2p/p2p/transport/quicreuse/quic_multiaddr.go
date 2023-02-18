@@ -4,9 +4,9 @@ import (
 	"errors"
 	"net"
 
-	"github.com/lucas-clemente/quic-go"
 	ma "github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
+	"github.com/quic-go/quic-go"
 )
 
 var (

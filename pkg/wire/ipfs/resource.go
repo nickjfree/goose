@@ -32,7 +32,7 @@ var noLimitIncrease = rcmgr.BaseLimitIncrease{
 	FDFraction:      0,
 }
 
-func getResourceLimits() rcmgr.LimitConfig {
+func getResourceLimits() rcmgr.ConcreteLimitConfig {
 
 	maxMemory := memory.TotalMemory()
 

@@ -14,6 +14,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	basic "github.com/libp2p/go-libp2p/p2p/host/basic"
+	"github.com/libp2p/go-libp2p/p2p/host/eventbus"
 	relayv1 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv1/relay"
 	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	circuitv2_proto "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/proto"
@@ -23,8 +24,8 @@ import (
 )
 
 const (
-	protoIDv1 = string(relayv1.ProtoID)
-	protoIDv2 = string(circuitv2_proto.ProtoIDv2Hop)
+	protoIDv1 = relayv1.ProtoID
+	protoIDv2 = circuitv2_proto.ProtoIDv2Hop
 )
 
 // Terminology:
@@ -59,7 +60,7 @@ type relayFinder struct {
 	ctxCancel   context.CancelFunc
 	ctxCancelMx sync.Mutex
 
-	peerSource func(context.Context, int) <-chan peer.AddrInfo
+	peerSource PeerSource
 
 	candidateFound             chan struct{} // receives every time we find a new relay candidate
 	candidateMx                sync.Mutex
@@ -82,7 +83,7 @@ type relayFinder struct {
 	cachedAddrsExpiry time.Time
 }
 
-func newRelayFinder(host *basic.BasicHost, peerSource func(context.Context, int) <-chan peer.AddrInfo, conf *config) *relayFinder {
+func newRelayFinder(host *basic.BasicHost, peerSource PeerSource, conf *config) *relayFinder {
 	if peerSource == nil {
 		panic("Can not create a new relayFinder. Need a Peer Source fn or a list of static relays. Refer to the documentation around `libp2p.EnableAutoRelay`")
 	}
@@ -115,7 +116,7 @@ func (rf *relayFinder) background(ctx context.Context) {
 		rf.handleNewCandidates(ctx)
 	}()
 
-	subConnectedness, err := rf.host.EventBus().Subscribe(new(event.EvtPeerConnectednessChanged))
+	subConnectedness, err := rf.host.EventBus().Subscribe(new(event.EvtPeerConnectednessChanged), eventbus.Name("autorelay (relay finder)"))
 	if err != nil {
 		log.Error("failed to subscribe to the EvtPeerConnectednessChanged")
 		return

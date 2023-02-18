@@ -71,6 +71,13 @@ func WithMetrics(reporter metrics.Reporter) Option {
 	}
 }
 
+func WithMetricsTracer(t MetricsTracer) Option {
+	return func(s *Swarm) error {
+		s.metricsTracer = t
+		return nil
+	}
+}
+
 func WithDialTimeout(t time.Duration) Option {
 	return func(s *Swarm) error {
 		s.dialTimeout = t
@@ -151,7 +158,8 @@ type Swarm struct {
 	ctx       context.Context // is canceled when Close is called
 	ctxCancel context.CancelFunc
 
-	bwc metrics.Reporter
+	bwc           metrics.Reporter
+	metricsTracer MetricsTracer
 }
 
 // NewSwarm constructs a Swarm.

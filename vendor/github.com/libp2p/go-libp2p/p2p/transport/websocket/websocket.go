@@ -4,8 +4,10 @@ package websocket
 import (
 	"context"
 	"crypto/tls"
+	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
@@ -16,7 +18,7 @@ import (
 	mafmt "github.com/multiformats/go-multiaddr-fmt"
 	manet "github.com/multiformats/go-multiaddr/net"
 
-	ws "github.com/gorilla/websocket"
+	ws "nhooyr.io/websocket"
 )
 
 // WsFmt is multiaddr formatter for WsProtocol
@@ -48,14 +50,6 @@ func init() {
 	manet.RegisterFromNetAddr(ParseWebsocketNetAddr, "websocket")
 	manet.RegisterToNetAddr(ConvertWebsocketMultiaddrToNetAddr, "ws")
 	manet.RegisterToNetAddr(ConvertWebsocketMultiaddrToNetAddr, "wss")
-}
-
-// Default gorilla upgrader
-var upgrader = ws.Upgrader{
-	// Allow requests from *all* origins.
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
 }
 
 type Option func(*WebsocketTransport) error
@@ -161,9 +155,17 @@ func (t *WebsocketTransport) Dial(ctx context.Context, raddr ma.Multiaddr, p pee
 	if err != nil {
 		return nil, err
 	}
-	macon, err := t.maDial(ctx, raddr)
+	c, err := t.dialWithScope(ctx, raddr, p, connScope)
 	if err != nil {
 		connScope.Done()
+		return nil, err
+	}
+	return c, nil
+}
+
+func (t *WebsocketTransport) dialWithScope(ctx context.Context, raddr ma.Multiaddr, p peer.ID, connScope network.ConnManagementScope) (transport.CapableConn, error) {
+	macon, err := t.maDial(ctx, raddr)
+	if err != nil {
 		return nil, err
 	}
 	conn, err := t.upgrader.Upgrade(ctx, t, macon, network.DirOutbound, p, connScope)
@@ -179,7 +181,26 @@ func (t *WebsocketTransport) maDial(ctx context.Context, raddr ma.Multiaddr) (ma
 		return nil, err
 	}
 	isWss := wsurl.Scheme == "wss"
-	dialer := ws.Dialer{HandshakeTimeout: 30 * time.Second}
+	wsurlCopy := *wsurl
+	remoteAddr := addrWrapper{URL: &wsurlCopy}
+	localAddrChan := make(chan addrWrapper, 1)
+
+	transport := &http.Transport{
+		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := net.Dial(network, addr)
+			if err != nil {
+				close(localAddrChan)
+				return nil, err
+			}
+			localAddrChan <- addrWrapper{URL: &url.URL{Host: conn.LocalAddr().String(), Scheme: wsurl.Scheme}}
+			return conn, nil
+		},
+	}
+	dialer := http.Client{
+		Timeout:   30 * time.Second,
+		Transport: transport,
+	}
+
 	if isWss {
 		sni := ""
 		sni, err = raddr.ValueForProtocol(ma.P_SNI)
@@ -190,31 +211,53 @@ func (t *WebsocketTransport) maDial(ctx context.Context, raddr ma.Multiaddr) (ma
 		if sni != "" {
 			copytlsClientConf := t.tlsClientConf.Clone()
 			copytlsClientConf.ServerName = sni
-			dialer.TLSClientConfig = copytlsClientConf
+			transport.TLSClientConfig = copytlsClientConf
 			ipAddr := wsurl.Host
-			// Setting the NetDial because we already have the resolved IP address, so we don't want to do another resolution.
+			// Setting the Dial because we already have the resolved IP address, so we don't want to do another resolution.
 			// We set the `.Host` to the sni field so that the host header gets properly set.
-			dialer.NetDial = func(network, address string) (net.Conn, error) {
+			transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
 				tcpAddr, err := net.ResolveTCPAddr(network, ipAddr)
 				if err != nil {
+					close(localAddrChan)
 					return nil, err
 				}
-				return net.DialTCP("tcp", nil, tcpAddr)
+				conn, err := net.DialTCP("tcp", nil, tcpAddr)
+				if err != nil {
+					close(localAddrChan)
+					return nil, err
+				}
+				localAddrChan <- addrWrapper{URL: &url.URL{Host: conn.LocalAddr().String(), Scheme: wsurl.Scheme}}
+				return conn, nil
 			}
 			wsurl.Host = sni + ":" + wsurl.Port()
 		} else {
-			dialer.TLSClientConfig = t.tlsClientConf
+			transport.TLSClientConfig = t.tlsClientConf
 		}
 	}
 
-	wscon, _, err := dialer.DialContext(ctx, wsurl.String(), nil)
+	wscon, _, err := ws.Dial(ctx, wsurl.String(), &ws.DialOptions{
+		HTTPClient: &dialer,
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	mnc, err := manet.WrapNetConn(NewConn(wscon, isWss))
+	// We need the local address of this connection, and afaict there's no other
+	// way of getting it besides hooking into the dial context func.
+	localAdddr, ok := <-localAddrChan
+	if !ok {
+		wscon.Close(ws.StatusNormalClosure, "closed. no local address")
+		return nil, fmt.Errorf("failed to get local address")
+	}
+
+	mnc, err := manet.WrapNetConn(
+		conn{
+			Conn:       ws.NetConn(context.Background(), wscon, ws.MessageBinary),
+			localAddr:  localAdddr,
+			remoteAddr: remoteAddr,
+		})
 	if err != nil {
-		wscon.Close()
+		wscon.Close(ws.StatusNormalClosure, "closed. err")
 		return nil, err
 	}
 	return mnc, nil

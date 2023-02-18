@@ -119,7 +119,7 @@ type Config struct {
 	HolePunchingOptions []holepunch.Option
 }
 
-func (cfg *Config) makeSwarm() (*swarm.Swarm, error) {
+func (cfg *Config) makeSwarm(enableMetrics bool) (*swarm.Swarm, error) {
 	if cfg.Peerstore == nil {
 		return nil, fmt.Errorf("no peerstore specified")
 	}
@@ -151,7 +151,7 @@ func (cfg *Config) makeSwarm() (*swarm.Swarm, error) {
 		return nil, err
 	}
 
-	opts := make([]swarm.Option, 0, 3)
+	opts := make([]swarm.Option, 0, 6)
 	if cfg.Reporter != nil {
 		opts = append(opts, swarm.WithMetrics(cfg.Reporter))
 	}
@@ -166,6 +166,9 @@ func (cfg *Config) makeSwarm() (*swarm.Swarm, error) {
 	}
 	if cfg.MultiaddrResolver != nil {
 		opts = append(opts, swarm.WithMultiaddrResolver(cfg.MultiaddrResolver))
+	}
+	if enableMetrics {
+		opts = append(opts, swarm.WithMetricsTracer(swarm.NewMetricsTracer()))
 	}
 	// TODO: Make the swarm implementation configurable.
 	return swarm.NewSwarm(pid, cfg.Peerstore, opts...)
@@ -276,7 +279,7 @@ func (cfg *Config) addTransports(h host.Host) error {
 //
 // This function consumes the config. Do not reuse it (really!).
 func (cfg *Config) NewNode() (host.Host, error) {
-	swrm, err := cfg.makeSwarm()
+	swrm, err := cfg.makeSwarm(true)
 	if err != nil {
 		return nil, err
 	}
@@ -382,7 +385,7 @@ func (cfg *Config) NewNode() (host.Host, error) {
 			Peerstore:          ps,
 		}
 
-		dialer, err := autoNatCfg.makeSwarm()
+		dialer, err := autoNatCfg.makeSwarm(false)
 		if err != nil {
 			h.Close()
 			return nil, err

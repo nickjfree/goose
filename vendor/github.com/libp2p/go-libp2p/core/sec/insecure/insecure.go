@@ -14,10 +14,14 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/core/sec"
-	pb "github.com/libp2p/go-libp2p/core/sec/insecure/pb"
+	"github.com/libp2p/go-libp2p/core/sec/insecure/pb"
 
 	"github.com/libp2p/go-msgio"
+
+	"google.golang.org/protobuf/proto"
 )
+
+//go:generate protoc --proto_path=$PWD:$PWD/../../.. --go_out=. --go_opt=Mpb/plaintext.proto=./pb pb/plaintext.proto
 
 // ID is the multistream-select protocol ID that should be used when identifying
 // this security transport.
@@ -190,7 +194,7 @@ func (ic *Conn) runHandshakeSync() error {
 func readWriteMsg(rw io.ReadWriter, out *pb.Exchange) (*pb.Exchange, error) {
 	const maxMessageSize = 1 << 16
 
-	outBytes, err := out.Marshal()
+	outBytes, err := proto.Marshal(out)
 	if err != nil {
 		return nil, err
 	}
@@ -201,7 +205,7 @@ func readWriteMsg(rw io.ReadWriter, out *pb.Exchange) (*pb.Exchange, error) {
 	}()
 
 	r := msgio.NewVarintReaderSize(rw, maxMessageSize)
-	msg, err1 := r.ReadMsg()
+	b, err1 := r.ReadMsg()
 
 	// Always wait for the read to finish.
 	err2 := <-wresult
@@ -210,11 +214,11 @@ func readWriteMsg(rw io.ReadWriter, out *pb.Exchange) (*pb.Exchange, error) {
 		return nil, err1
 	}
 	if err2 != nil {
-		r.ReleaseMsg(msg)
+		r.ReleaseMsg(b)
 		return nil, err2
 	}
 	inMsg := new(pb.Exchange)
-	err = inMsg.Unmarshal(msg)
+	err = proto.Unmarshal(b, inMsg)
 	return inMsg, err
 }
 

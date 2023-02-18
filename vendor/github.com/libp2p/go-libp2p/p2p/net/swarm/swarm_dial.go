@@ -12,11 +12,10 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/transport"
-	"github.com/lucas-clemente/quic-go"
-
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	manet "github.com/multiformats/go-multiaddr/net"
+	"github.com/quic-go/quic-go"
 )
 
 // The maximum number of address resolution steps we'll perform for a single
@@ -490,11 +489,20 @@ func (s *Swarm) dialAddr(ctx context.Context, p peer.ID, addr ma.Multiaddr) (tra
 		return nil, ErrNoTransport
 	}
 
+	start := time.Now()
 	connC, err := tpt.Dial(ctx, addr, p)
 	if err != nil {
+		if s.metricsTracer != nil {
+			s.metricsTracer.FailedDialing(addr, err)
+		}
 		return nil, err
 	}
 	canonicallog.LogPeerStatus(100, connC.RemotePeer(), connC.RemoteMultiaddr(), "connection_status", "established", "dir", "outbound")
+	if s.metricsTracer != nil {
+		connState := connC.ConnState()
+		s.metricsTracer.OpenedConnection(network.DirOutbound, connC.RemotePublicKey(), connState)
+		s.metricsTracer.CompletedHandshake(time.Since(start), connState)
+	}
 
 	// Trust the transport? Yeah... right.
 	if connC.RemotePeer() != p {

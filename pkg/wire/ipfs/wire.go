@@ -28,7 +28,7 @@ import (
 	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
-	"github.com/lucas-clemente/quic-go"
+	"github.com/quic-go/quic-go"
 	ma "github.com/multiformats/go-multiaddr"
 
 	"github.com/pkg/errors"
@@ -494,7 +494,7 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		// enable relay
 		libp2p.EnableRelay(),
 		// enable node to use relay for wire communication
-		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerSource, time.Second*30), autorelay.WithNumRelays(4)),
+		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerSource), autorelay.WithNumRelays(4)),
 		// force node belive it is behind a NAT firewall to force using relays
 		// libp2p.ForceReachabilityPrivate(),
 		// hole punching

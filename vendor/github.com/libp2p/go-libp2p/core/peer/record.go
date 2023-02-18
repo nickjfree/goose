@@ -6,13 +6,15 @@ import (
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/internal/catch"
-	pb "github.com/libp2p/go-libp2p/core/peer/pb"
+	"github.com/libp2p/go-libp2p/core/peer/pb"
 	"github.com/libp2p/go-libp2p/core/record"
 
 	ma "github.com/multiformats/go-multiaddr"
 
-	"github.com/gogo/protobuf/proto"
+	"google.golang.org/protobuf/proto"
 )
+
+//go:generate protoc --proto_path=$PWD:$PWD/../.. --go_out=. --go_opt=Mpb/peer_record.proto=./pb pb/peer_record.proto
 
 var _ record.Record = (*PeerRecord)(nil)
 

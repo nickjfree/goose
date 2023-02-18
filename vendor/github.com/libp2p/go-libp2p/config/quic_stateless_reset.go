@@ -8,7 +8,7 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/crypto"
 
-	"github.com/lucas-clemente/quic-go"
+	"github.com/quic-go/quic-go"
 )
 
 const statelessResetKeyInfo = "libp2p quic stateless reset key"

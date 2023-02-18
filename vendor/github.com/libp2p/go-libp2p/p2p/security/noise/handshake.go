@@ -15,10 +15,12 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/security/noise/pb"
 
 	"github.com/flynn/noise"
-	"github.com/gogo/protobuf/proto"
 	pool "github.com/libp2p/go-buffer-pool"
 	"github.com/minio/sha256-simd"
+	"google.golang.org/protobuf/proto"
 )
+
+//go:generate protoc --go_out=. --go_opt=Mpb/payload.proto=./pb pb/payload.proto
 
 // payloadSigPrefix is prepended to our Noise static key before signing with
 // our libp2p identity key.

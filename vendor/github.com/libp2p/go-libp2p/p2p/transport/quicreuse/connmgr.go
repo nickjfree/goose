@@ -7,10 +7,10 @@ import (
 	"net"
 	"sync"
 
-	"github.com/lucas-clemente/quic-go"
-	quiclogging "github.com/lucas-clemente/quic-go/logging"
 	ma "github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
+	"github.com/quic-go/quic-go"
+	quiclogging "github.com/quic-go/quic-go/logging"
 )
 
 var quicDialContext = quic.DialContext // so we can mock it in tests
@@ -54,7 +54,7 @@ func NewConnManager(statelessResetKey quic.StatelessResetKey, opts ...Option) (*
 		tracers = append(tracers, qlogTracer)
 	}
 	if cm.enableMetrics {
-		tracers = append(tracers, &metricsTracer{})
+		tracers = append(tracers, newMetricsTracer())
 	}
 	if len(tracers) > 0 {
 		quicConf.Tracer = quiclogging.NewMultiplexedTracer(tracers...)

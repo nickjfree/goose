@@ -8,8 +8,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	tpt "github.com/libp2p/go-libp2p/core/transport"
 
-	"github.com/lucas-clemente/quic-go"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/quic-go/quic-go"
 )
 
 type conn struct {
@@ -32,8 +32,12 @@ var _ tpt.CapableConn = &conn{}
 // It must be called even if the peer closed the connection in order for
 // garbage collection to properly work in this package.
 func (c *conn) Close() error {
+	return c.closeWithError(0, "")
+}
+
+func (c *conn) closeWithError(errCode quic.ApplicationErrorCode, errString string) error {
 	c.transport.removeConn(c.quicConn)
-	err := c.quicConn.CloseWithError(0, "")
+	err := c.quicConn.CloseWithError(errCode, errString)
 	c.scope.Done()
 	return err
 }

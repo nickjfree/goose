@@ -10,14 +10,14 @@ import (
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
-	pb "github.com/libp2p/go-libp2p/p2p/protocol/holepunch/pb"
+	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch/pb"
 	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
-
-	"github.com/libp2p/go-msgio/protoio"
-
+	"github.com/libp2p/go-msgio/pbio"
 	ma "github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
 )
+
+//go:generate protoc --proto_path=$PWD:$PWD/../../.. --go_out=. --go_opt=Mpb/holepunch.proto=./pb pb/holepunch.proto
 
 // ErrHolePunchActive is returned from DirectConnect when another hole punching attempt is currently running
 var ErrHolePunchActive = errors.New("another hole punching attempt to this peer is active")
@@ -200,8 +200,8 @@ func (hp *holePuncher) initiateHolePunchImpl(str network.Stream) ([]ma.Multiaddr
 	}
 	defer str.Scope().ReleaseMemory(maxMsgSize)
 
-	w := protoio.NewDelimitedWriter(str)
-	rd := protoio.NewDelimitedReader(str, maxMsgSize)
+	w := pbio.NewDelimitedWriter(str)
+	rd := pbio.NewDelimitedReader(str, maxMsgSize)
 
 	str.SetDeadline(time.Now().Add(StreamTimeout))
 

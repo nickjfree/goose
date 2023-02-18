@@ -60,6 +60,10 @@ func (c *Conn) Close() error {
 }
 
 func (c *Conn) doClose() {
+	if c.swarm.metricsTracer != nil {
+		c.swarm.metricsTracer.ClosedConnection(c.stat.Direction, time.Since(c.stat.Stats.Opened), c.ConnState())
+	}
+
 	c.swarm.removeConn(c)
 
 	// Prevent new streams from opening.
@@ -203,9 +207,18 @@ func (c *Conn) NewStream(ctx context.Context) (network.Stream, error) {
 	if err != nil {
 		return nil, err
 	}
-	ts, err := c.conn.OpenStream(ctx)
+
+	s, err := c.openAndAddStream(ctx, scope)
 	if err != nil {
 		scope.Done()
+		return nil, err
+	}
+	return s, nil
+}
+
+func (c *Conn) openAndAddStream(ctx context.Context, scope network.StreamManagementScope) (network.Stream, error) {
+	ts, err := c.conn.OpenStream(ctx)
+	if err != nil {
 		return nil, err
 	}
 	return c.addStream(ts, network.DirOutbound, scope)
@@ -216,7 +229,6 @@ func (c *Conn) addStream(ts network.MuxedStream, dir network.Direction, scope ne
 	// Are we still online?
 	if c.streams.m == nil {
 		c.streams.Unlock()
-		scope.Done()
 		ts.Reset()
 		return nil, ErrConnClosed
 	}

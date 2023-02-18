@@ -12,6 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	"github.com/libp2p/go-libp2p/core/protocol"
 )
 
 type secureSession struct {
@@ -134,7 +135,7 @@ func (s *secureSession) Close() error {
 	return s.insecureConn.Close()
 }
 
-func SessionWithConnState(s *secureSession, muxer string) *secureSession {
+func SessionWithConnState(s *secureSession, muxer protocol.ID) *secureSession {
 	if s != nil {
 		s.connectionState.StreamMultiplexer = muxer
 	}

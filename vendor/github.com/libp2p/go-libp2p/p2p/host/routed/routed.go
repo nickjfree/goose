@@ -188,7 +188,7 @@ func (rh *RoutedHost) SetStreamHandler(pid protocol.ID, handler network.StreamHa
 	rh.host.SetStreamHandler(pid, handler)
 }
 
-func (rh *RoutedHost) SetStreamHandlerMatch(pid protocol.ID, m func(string) bool, handler network.StreamHandler) {
+func (rh *RoutedHost) SetStreamHandlerMatch(pid protocol.ID, m func(protocol.ID) bool, handler network.StreamHandler) {
 	rh.host.SetStreamHandlerMatch(pid, m, handler)
 }
 

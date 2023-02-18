@@ -23,7 +23,7 @@ type Transport struct {
 	protocolID protocol.ID
 	localID    peer.ID
 	privateKey crypto.PrivKey
-	muxers     []string
+	muxers     []protocol.ID
 }
 
 var _ sec.SecureTransport = &Transport{}
@@ -36,16 +36,16 @@ func New(id protocol.ID, privkey crypto.PrivKey, muxers []tptu.StreamMuxer) (*Tr
 		return nil, err
 	}
 
-	smuxers := make([]string, 0, len(muxers))
+	muxerIDs := make([]protocol.ID, 0, len(muxers))
 	for _, m := range muxers {
-		smuxers = append(smuxers, string(m.ID))
+		muxerIDs = append(muxerIDs, m.ID)
 	}
 
 	return &Transport{
 		protocolID: id,
 		localID:    localID,
 		privateKey: privkey,
-		muxers:     smuxers,
+		muxers:     muxerIDs,
 	}, nil
 }
 
@@ -87,7 +87,7 @@ func (t *Transport) ID() protocol.ID {
 	return t.protocolID
 }
 
-func matchMuxers(initiatorMuxers, responderMuxers []string) string {
+func matchMuxers(initiatorMuxers, responderMuxers []protocol.ID) protocol.ID {
 	for _, initMuxer := range initiatorMuxers {
 		for _, respMuxer := range responderMuxers {
 			if initMuxer == respMuxer {
@@ -100,7 +100,7 @@ func matchMuxers(initiatorMuxers, responderMuxers []string) string {
 
 type transportEarlyDataHandler struct {
 	transport      *Transport
-	receivedMuxers []string
+	receivedMuxers []protocol.ID
 }
 
 var _ EarlyDataHandler = &transportEarlyDataHandler{}
@@ -111,19 +111,19 @@ func newTransportEDH(t *Transport) *transportEarlyDataHandler {
 
 func (i *transportEarlyDataHandler) Send(context.Context, net.Conn, peer.ID) *pb.NoiseExtensions {
 	return &pb.NoiseExtensions{
-		StreamMuxers: i.transport.muxers,
+		StreamMuxers: protocol.ConvertToStrings(i.transport.muxers),
 	}
 }
 
 func (i *transportEarlyDataHandler) Received(_ context.Context, _ net.Conn, extension *pb.NoiseExtensions) error {
 	// Discard messages with size or the number of protocols exceeding extension limit for security.
 	if extension != nil && len(extension.StreamMuxers) <= maxProtoNum {
-		i.receivedMuxers = extension.GetStreamMuxers()
+		i.receivedMuxers = protocol.ConvertFromStrings(extension.GetStreamMuxers())
 	}
 	return nil
 }
 
-func (i *transportEarlyDataHandler) MatchMuxers(isInitiator bool) string {
+func (i *transportEarlyDataHandler) MatchMuxers(isInitiator bool) protocol.ID {
 	if isInitiator {
 		return matchMuxers(i.transport.muxers, i.receivedMuxers)
 	}

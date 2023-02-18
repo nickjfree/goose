@@ -7,16 +7,17 @@ import (
 	"sync"
 	"time"
 
+	logging "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
-	pb "github.com/libp2p/go-libp2p/p2p/protocol/holepunch/pb"
+	"github.com/libp2p/go-libp2p/p2p/host/eventbus"
+	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch/pb"
 	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
+	"github.com/libp2p/go-msgio/pbio"
 
-	logging "github.com/ipfs/go-log/v2"
-	"github.com/libp2p/go-msgio/protoio"
 	ma "github.com/multiformats/go-multiaddr"
 )
 
@@ -123,7 +124,7 @@ func (s *Service) watchForPublicAddr() {
 	}
 
 	// Only start the holePuncher if we're behind a NAT / firewall.
-	sub, err := s.host.EventBus().Subscribe(&event.EvtLocalReachabilityChanged{})
+	sub, err := s.host.EventBus().Subscribe(&event.EvtLocalReachabilityChanged{}, eventbus.Name("holepunch"))
 	if err != nil {
 		log.Debugf("failed to subscripe to Reachability event: %s", err)
 		return
@@ -185,8 +186,8 @@ func (s *Service) incomingHolePunch(str network.Stream) (rtt time.Duration, addr
 	}
 	defer str.Scope().ReleaseMemory(maxMsgSize)
 
-	wr := protoio.NewDelimitedWriter(str)
-	rd := protoio.NewDelimitedReader(str, maxMsgSize)
+	wr := pbio.NewDelimitedWriter(str)
+	rd := pbio.NewDelimitedReader(str, maxMsgSize)
 
 	// Read Connect message
 	msg := new(pb.HolePunch)
