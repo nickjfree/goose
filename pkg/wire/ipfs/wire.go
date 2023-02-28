@@ -28,8 +28,8 @@ import (
 	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
-	"github.com/quic-go/quic-go"
 	ma "github.com/multiformats/go-multiaddr"
+	"github.com/quic-go/quic-go"
 
 	"github.com/pkg/errors"
 	"goose/pkg/message"
@@ -75,6 +75,14 @@ func init() {
 
 // hack. get quic.Connection to send datagram
 func getQuicConn(c network.Conn) quic.Connection {
+
+	// wrappedCapableConn := reflect.ValueOf(c).Elem().FieldByName("conn").Elem()
+	// capableConn := wrappedCapableConn.FieldByName("CapableConn").Elem()
+
+	// capableConn = capableConn.Elem()
+
+	// quicConn := capableConn.FieldByName("quicConn")
+
 	quicConn := reflect.ValueOf(c).Elem().FieldByName("conn").Elem().Elem().FieldByName("quicConn")
 	v := reflect.NewAt(quicConn.Type(), unsafe.Pointer(quicConn.UnsafeAddr())).Elem()
 	return v.Interface().(quic.Connection)
@@ -238,7 +246,14 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 		}
 		// send hello to make sure there is only one stream bettwen 2 peers
 		if _, err := s.Write([]byte("hello")); err != nil {
+			close()
 			return errors.WithStack(err)
+		}
+		// test code
+		logger.Printf("aaaa the protocol is %s %+v\n", s.Protocol(), s.Conn().Stat())
+		if t := getQuicConn(s.Conn()); t == nil {
+			close()
+			return errors.Errorf("funcking strange error")
 		}
 		// got an outbound wire
 		m.Out <- &IPFSWire{
@@ -499,8 +514,9 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		// libp2p.ForceReachabilityPrivate(),
 		// hole punching
 		libp2p.EnableHolePunching(),
-
 		libp2p.ResourceManager(mgr),
+		// must disable metrics, because metrics is buggy
+		libp2p.DisableMetrics(),
 
 		libp2p.DefaultTransports,
 		libp2p.DefaultMuxers,

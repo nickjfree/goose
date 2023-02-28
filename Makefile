@@ -1,4 +1,4 @@
-VERSION ?= v0.1.7
+VERSION ?= v0.1.8
 REGISTRY ?= nickjfree
 REPO ?= goose
 

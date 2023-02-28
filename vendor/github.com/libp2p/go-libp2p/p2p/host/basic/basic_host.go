@@ -27,11 +27,11 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
 	"github.com/libp2p/go-libp2p/p2p/protocol/ping"
+	"github.com/prometheus/client_golang/prometheus"
 
 	"github.com/libp2p/go-netroute"
 
 	logging "github.com/ipfs/go-log/v2"
-
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 	manet "github.com/multiformats/go-multiaddr/net"
@@ -107,6 +107,9 @@ var _ host.Host = (*BasicHost)(nil)
 // HostOpts holds options that can be passed to NewHost in order to
 // customize construction of the *BasicHost.
 type HostOpts struct {
+	// EventBus sets the event bus. Will construct a new event bus if omitted.
+	EventBus event.Bus
+
 	// MultistreamMuxer is essential for the *BasicHost and will use a sensible default value if omitted.
 	MultistreamMuxer *msmux.MultistreamMuxer[protocol.ID]
 
@@ -151,19 +154,27 @@ type HostOpts struct {
 	EnableHolePunching bool
 	// HolePunchingOptions are options for the hole punching service
 	HolePunchingOptions []holepunch.Option
+
+	// EnableMetrics enables the metrics subsystems
+	EnableMetrics bool
+	// PrometheusRegisterer is the PrometheusRegisterer used for metrics
+	PrometheusRegisterer prometheus.Registerer
 }
 
 // NewHost constructs a new *BasicHost and activates it by attaching its stream and connection handlers to the given inet.Network.
 func NewHost(n network.Network, opts *HostOpts) (*BasicHost, error) {
-	eventBus := eventbus.NewBus(eventbus.WithMetricsTracer(eventbus.NewMetricsTracer()))
-	psManager, err := pstoremanager.NewPeerstoreManager(n.Peerstore(), eventBus)
+	if opts == nil {
+		opts = &HostOpts{}
+	}
+	if opts.EventBus == nil {
+		opts.EventBus = eventbus.NewBus()
+	}
+
+	psManager, err := pstoremanager.NewPeerstoreManager(n.Peerstore(), opts.EventBus)
 	if err != nil {
 		return nil, err
 	}
 	hostCtx, cancel := context.WithCancel(context.Background())
-	if opts == nil {
-		opts = &HostOpts{}
-	}
 
 	h := &BasicHost{
 		network:                 n,
@@ -172,7 +183,7 @@ func NewHost(n network.Network, opts *HostOpts) (*BasicHost, error) {
 		negtimeout:              DefaultNegotiationTimeout,
 		AddrsFactory:            DefaultAddrsFactory,
 		maResolver:              madns.DefaultResolver,
-		eventbus:                eventBus,
+		eventbus:                opts.EventBus,
 		addrChangeChan:          make(chan struct{}, 1),
 		ctx:                     hostCtx,
 		ctxCancel:               cancel,
@@ -187,11 +198,6 @@ func NewHost(n network.Network, opts *HostOpts) (*BasicHost, error) {
 	if h.emitters.evtLocalAddrsUpdated, err = h.eventbus.Emitter(&event.EvtLocalAddressesUpdated{}, eventbus.Stateful); err != nil {
 		return nil, err
 	}
-	evtPeerConnectednessChanged, err := h.eventbus.Emitter(&event.EvtPeerConnectednessChanged{})
-	if err != nil {
-		return nil, err
-	}
-	h.Network().Notify(newPeerConnectWatcher(evtPeerConnectednessChanged))
 
 	if !h.disableSignedPeerRecord {
 		cab, ok := peerstore.GetCertifiedAddrBook(n.Peerstore())
@@ -223,23 +229,22 @@ func NewHost(n network.Network, opts *HostOpts) (*BasicHost, error) {
 		h.mux = opts.MultistreamMuxer
 	}
 
+	idOpts := []identify.Option{
+		identify.UserAgent(opts.UserAgent),
+		identify.ProtocolVersion(opts.ProtocolVersion),
+	}
+
 	// we can't set this as a default above because it depends on the *BasicHost.
 	if h.disableSignedPeerRecord {
-		h.ids, err = identify.NewIDService(
-			h,
-			identify.UserAgent(opts.UserAgent),
-			identify.ProtocolVersion(opts.ProtocolVersion),
-			identify.DisableSignedPeerRecord(),
-			identify.WithMetricsTracer(identify.NewMetricsTracer()),
-		)
-	} else {
-		h.ids, err = identify.NewIDService(
-			h,
-			identify.UserAgent(opts.UserAgent),
-			identify.ProtocolVersion(opts.ProtocolVersion),
-			identify.WithMetricsTracer(identify.NewMetricsTracer()),
-		)
+		idOpts = append(idOpts, identify.DisableSignedPeerRecord())
 	}
+	if opts.EnableMetrics {
+		idOpts = append(idOpts,
+			identify.WithMetricsTracer(
+				identify.NewMetricsTracer(identify.WithRegisterer(opts.PrometheusRegisterer))))
+	}
+
+	h.ids, err = identify.NewIDService(h, idOpts...)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create Identify service: %s", err)
 	}
@@ -771,7 +776,6 @@ func (h *BasicHost) AllAddrs() []ma.Multiaddr {
 	h.addrMu.RLock()
 	filteredIfaceAddrs := h.filteredInterfaceAddrs
 	allIfaceAddrs := h.allInterfaceAddrs
-	autonat := h.autoNat
 	h.addrMu.RUnlock()
 
 	// Iterate over all _unresolved_ listen addresses, resolving our primary
@@ -783,19 +787,6 @@ func (h *BasicHost) AllAddrs() []ma.Multiaddr {
 		log.Debugw("failed to resolve listen addrs", "error", err)
 	} else {
 		finalAddrs = append(finalAddrs, resolved...)
-	}
-
-	// add autonat PublicAddr Consider the following scenario
-	// For example, it is deployed on a cloud server,
-	// it provides an elastic ip accessible to the public network,
-	// but not have an external network card,
-	// so net.InterfaceAddrs() not has the public ip
-	// The host can indeed be dialed ！！！
-	if autonat != nil {
-		publicAddr, _ := autonat.PublicAddr()
-		if publicAddr != nil {
-			finalAddrs = append(finalAddrs, publicAddr)
-		}
 	}
 
 	finalAddrs = dedupAddrs(finalAddrs)
