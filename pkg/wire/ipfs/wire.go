@@ -249,12 +249,6 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 			close()
 			return errors.WithStack(err)
 		}
-		// test code
-		logger.Printf("aaaa the protocol is %s %+v\n", s.Protocol(), s.Conn().Stat())
-		if t := getQuicConn(s.Conn()); t == nil {
-			close()
-			return errors.Errorf("funcking strange error")
-		}
 		// got an outbound wire
 		m.Out <- &IPFSWire{
 			s:         s,
