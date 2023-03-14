@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"runtime"
-	"strings"
 	"sync"
 	"time"
 
@@ -12,6 +11,7 @@ import (
 	"github.com/yl2chen/cidranger"
 
 	"goose/pkg/message"
+	"goose/pkg/routing/discovery"
 	"goose/pkg/routing/fakeip"
 )
 
@@ -64,7 +64,7 @@ type Router struct {
 	portStats map[*Port]portState
 	// forward networks
 	forwardCIDRs []string
-	// provided networks form local networks
+	// provided networks from local networks
 	localNets []net.IPNet
 	// route table
 	routeTable cidranger.Ranger
@@ -72,6 +72,8 @@ type Router struct {
 	maxMetric int
 	// fake ip manager
 	fakeIP *fakeip.FakeIPManager
+	// rating system
+	rating *discovery.RatingSystem
 	// closed
 	closed chan struct{}
 }
@@ -79,7 +81,7 @@ type Router struct {
 func NewRouter(localcidr string, opts ...Option) *Router {
 	localNets := []net.IPNet{}
 	// ipaddress
-	address, _, err := net.ParseCIDR(localcidr)
+	address, localPool, err := net.ParseCIDR(localcidr)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -99,6 +101,8 @@ func NewRouter(localcidr string, opts ...Option) *Router {
 			logger.Fatal(err)
 		}
 	}
+	// create rating monitor
+	r.rating = discovery.NewRatingSystem(*localPool, address)
 	go r.background()
 	return r
 }
@@ -112,12 +116,12 @@ func (r *Router) RegisterPort(p *Port) error {
 	}
 
 	go func() {
-		logger.Printf("traffic quite for port(%s) %+v", p, r.handleTraffic(p))
+		logger.Printf("traffic quite for port(%s) %s", p, r.handleTraffic(p))
 		r.clearRouting(p)
 	}()
 
 	go func() {
-		logger.Printf("routing quite for port(%s) %+v", p, r.handleRouting(p))
+		logger.Printf("routing quite for port(%s) %s", p, r.handleRouting(p))
 		r.clearRouting(p)
 	}()
 	return nil
@@ -284,8 +288,8 @@ func (r *Router) handleTraffic(p *Port) error {
 			if packet.TTL <= 0 {
 				continue
 			}
-			// replace fake ip to src ip
-			if r.fakeIP != nil && strings.HasPrefix(p.String(), "tun") {
+			// replace fake ip to src ip for ingress traffic from tunnel
+			if r.fakeIP != nil && p.IsTunnel() {
 				if err := r.fakeIP.DNAT(&packet); err != nil {
 					return err
 				}
@@ -296,8 +300,8 @@ func (r *Router) handleTraffic(p *Port) error {
 				return err
 			}
 			if target != nil {
-				// fake ip enabled
-				if r.fakeIP != nil && strings.HasPrefix(target.String(), "tun") {
+				// fake ip enabled, should do some modifying for egress traffic from tunnel
+				if r.fakeIP != nil && target.IsTunnel() {
 					// modify dns response
 					if err := r.fakeIP.FakeDnsResponse(&packet); err != nil {
 						return err
@@ -309,13 +313,13 @@ func (r *Router) handleTraffic(p *Port) error {
 				}
 				if err := target.WritePacket(&packet); err != nil {
 					// target port too slow or dead. we should close it. or it will slowdown everyone
-					logger.Printf("error relaying packet to port(%s). it is too slow. close port: %+v", target, err)
+					logger.Printf("error relaying packet to port(%s). it is too slow. close port: %s", target, err)
 					target.Close()
 				}
 			} else {
 				// TODO: record not routed dst ip
 				// TODO: dst ip as peer discovery keys
-				// logger.Printf("Send packet %+v, no destination\n", packet)
+				// logger.Printf("Send packet %s, no destination\n", packet)
 			}
 		}
 	}
@@ -358,8 +362,7 @@ func (r *Router) handleRouting(p *Port) error {
 			}
 			// tunnel port is not a real node
 			// fake it, make it looks like the message is from the tunnel port
-			if strings.HasPrefix(p.String(), "tun") {
-
+			if p.IsTunnel() {
 				routing := message.Routing{
 					Type:     message.MessageTypeRouting,
 					Routings: []message.RoutingEntry{},
@@ -397,7 +400,7 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 				continue
 			}
 			// not tunnel
-			if !strings.HasPrefix(p.String(), "tun") {
+			if !p.IsTunnel() {
 				routings = append(routings, message.RoutingEntry{
 					Network: entry.network,
 					Metric:  entry.metric,
@@ -469,6 +472,11 @@ func (r *Router) refreshRoutings() error {
 				if _, err := r.routeTable.Remove(entry.Network()); err != nil {
 					return errors.WithStack(err)
 				}
+			} else {
+				// rate the peers
+				if peerID := entry.port.PeerID(); peerID != "" {
+					r.rating.Rate(peerID, entry.network, entry.metric)
+				}
 			}
 		}
 	}
@@ -489,7 +497,7 @@ func (r *Router) background() {
 			logger.Println("goroutines:", runtime.NumGoroutine())
 			// refresh
 			if err := r.refreshRoutings(); err != nil {
-				logger.Printf("refresh routing failed with: %+v", err)
+				logger.Printf("refresh routing failed with: %s", err)
 			}
 		case <-r.closed:
 			logger.Println("router closed")

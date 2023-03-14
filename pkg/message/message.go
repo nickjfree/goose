@@ -98,7 +98,7 @@ func (m *Message) Split() ([]Message, error) {
 
 	routingMessage, ok := m.Payload.(Routing)
 	if !ok {
-		return nil, errors.Errorf("bad message %+v", m)
+		return nil, errors.Errorf("bad message %s", m)
 	}
 
 	if routingMessage.Type == RoutingRegisterAck || routingMessage.Type == RoutingRegisterFailed {

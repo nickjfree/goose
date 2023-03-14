@@ -81,7 +81,7 @@ func (w *TunWire) Encode(msg *message.Message) error {
 			}
 			return w.setupHostRouting(routing.Routings)
 		} else {
-			return errors.Errorf("invalid routing message %+v", msg)
+			return errors.Errorf("invalid routing message %s", msg)
 		}
 	}
 	return nil
@@ -100,7 +100,7 @@ func (w *TunWire) Close() error {
 	w.ifTun.Close()
 	// clear all routings
 	if err := w.setupHostRouting([]message.RoutingEntry{}); err != nil {
-		logger.Printf("clear routings failed: %+v", err)
+		logger.Printf("clear routings failed: %s", err)
 		return err
 	}
 	return nil
@@ -132,7 +132,7 @@ func (w *TunWire) readPacket(msg *message.Message) error {
 func (w *TunWire) writePacket(msg *message.Message) error {
 	packet, ok := msg.Payload.(message.Packet)
 	if !ok {
-		return errors.Errorf("got invalid packet struct %+v", msg.Payload)
+		return errors.Errorf("got invalid packet struct %s", msg.Payload)
 	}
 	if !waterutil.IsIPv4(packet.Data) {
 		logger.Printf("sent: not ipv4 packet len %d", len(packet.Data))

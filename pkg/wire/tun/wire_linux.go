@@ -21,7 +21,7 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 	config.Name = name
 	ifTun, err := water.New(config)
 	if err != nil {
-		logger.Fatalf("%+v", errors.WithStack(err))
+		logger.Fatalf("%s", errors.WithStack(err))
 	}
 	// check addr is cidr format
 	address, network, err := net.ParseCIDR(addr)

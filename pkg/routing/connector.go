@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"sync"
 	"time"
 
@@ -91,6 +92,10 @@ type Port struct {
 	close sync.Once
 	// context
 	ctx context.Context
+	// packete in
+	pktIn int64
+	// packet out
+	pktOut int64
 }
 
 func NewBaseConnector(r *Router) (Connector, error) {
@@ -138,7 +143,7 @@ func (c *BaseConnector) setConnected(endpoint string, w wire.Wire) error {
 		c.epStats[endpoint] = state
 		return nil
 	}
-	return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
+	return errors.Errorf("invalid endpoint status %s %s", endpoint, state)
 }
 
 // mark endpint as failed
@@ -159,7 +164,7 @@ func (c *BaseConnector) setFailed(endpoint string) error {
 		}
 		return nil
 	}
-	return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
+	return errors.Errorf("invalid endpoint status %s %s", endpoint, state)
 }
 
 // mark endpint as connecting
@@ -173,7 +178,7 @@ func (c *BaseConnector) setConnecting(endpoint string) error {
 		c.epStats[endpoint] = state
 		return nil
 	} else if ok {
-		return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
+		return errors.Errorf("invalid endpoint status %s %s", endpoint, state)
 	}
 	// first connection
 	state = epState{
@@ -193,7 +198,7 @@ func (c *BaseConnector) setUnknow(endpoint string) error {
 	if ok && state.status == statusConnected {
 		delete(c.epStats, endpoint)
 	}
-	return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
+	return errors.Errorf("invalid endpoint status %s %s", endpoint, state)
 }
 
 // connect to endpoint
@@ -219,7 +224,7 @@ func (c *BaseConnector) newPort(w wire.Wire, reconnect bool) *Port {
 		},
 	}
 	go func() {
-		logger.Printf("handle port(%s) output: %+v", p, p.handleOutput())
+		logger.Printf("handle port(%s) output: %s", p, p.handleOutput())
 	}()
 	return p
 }
@@ -235,11 +240,11 @@ func (c *BaseConnector) start() error {
 				select {
 				case endpoint := <-c.requests:
 					if err := c.setConnecting(endpoint); err != nil {
-						logger.Printf("%+v", err)
+						logger.Printf("%s", err)
 						continue
 					}
 					if err := c.connect(endpoint); err != nil {
-						logger.Printf("connection failed %+v", err)
+						logger.Printf("connection failed %s", err)
 						c.setFailed(endpoint)
 					}
 				case <-c.router.Done():
@@ -288,7 +293,7 @@ func (c *BaseConnector) handleNewWire(w wire.Wire, reconnect bool) error {
 
 	if err := c.setConnected(endpoint, w); err != nil {
 		w.Close()
-		return errors.Errorf("ignore already connected wire %s %+v", endpoint, err)
+		return errors.Errorf("ignore already connected wire %s %s", endpoint, err)
 	}
 
 	// add wire to router
@@ -315,7 +320,7 @@ func (c *BaseConnector) handleConnection() error {
 			return nil
 		}
 		if err != nil {
-			logger.Printf("handle connection %+v", err)
+			logger.Printf("handle connection %s", err)
 		}
 	}
 }
@@ -329,18 +334,19 @@ func (p *Port) ReadPacket(packet *message.Packet) error {
 		}
 		switch msg.Type {
 		case message.MessageTypePacket:
-			if p, ok := msg.Payload.(message.Packet); ok {
-				*packet = p
+			if pkt, ok := msg.Payload.(message.Packet); ok {
+				*packet = pkt
+				p.pktIn = p.pktIn + 1
 				return nil
 			} else {
-				return errors.Errorf("invalid packet %+v", msg)
+				return errors.Errorf("invalid packet %s", msg)
 			}
 		case message.MessageTypeRouting:
 			if routing, ok := msg.Payload.(message.Routing); ok {
 				// handle routiong info
 				p.router.UpdateRouting(p, routing)
 			} else {
-				return errors.Errorf("invalid routing message %+v", msg)
+				return errors.Errorf("invalid routing message %s", msg)
 			}
 		}
 	}
@@ -389,6 +395,20 @@ func (p *Port) String() string {
 	return fmt.Sprintf("%s@%s", p.w.Endpoint(), p.w.Address().String())
 }
 
+func (p *Port) PeerID() string {
+	peer := p.w.Endpoint()
+	if strings.HasPrefix(peer, "ipfs") {
+		peer = strings.Split(peer, "@")[0]
+		peer = strings.Split(peer, "/")[1]
+		return peer
+	}
+	return ""
+}
+
+func (p *Port) IsTunnel() bool {
+	return strings.HasPrefix(p.String(), "tun")
+}
+
 func (p *Port) BeginRttTiming() {
 	p.rttStats.start = time.Now()
 }
@@ -427,6 +447,7 @@ func (p *Port) handleOutput() error {
 			if err := p.w.Encode(&msg); err != nil {
 				return err
 			}
+			p.pktOut = p.pktOut + 1
 		case routings := <-p.announce:
 			msg := message.Message{
 				Type:    message.MessageTypeRouting,

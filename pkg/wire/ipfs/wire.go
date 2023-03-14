@@ -168,7 +168,7 @@ func GetP2PHost() *P2PHost {
 func newIPFSWireManager() *IPFSWireManager {
 	host, err := NewP2PHost()
 	if err != nil {
-		logger.Fatalf("Error: %+v", err)
+		logger.Fatalf("Error: %s", err)
 	}
 	// do backgroud relay refresh jobs
 	go host.Background()
@@ -221,7 +221,7 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 	retries := 30
 	for {
 		s, err := m.NewStream(ctx, p.ID, protocolName)
-		msg := fmt.Sprintf("%+v", err)
+		msg := fmt.Sprintf("%s", err)
 		if err != nil && retries > 0 && strings.Contains(msg, transientErrorString) {
 			logger.Printf("transient connection, try again for %s", p.ID)
 			time.Sleep(time.Second * 15)
@@ -351,11 +351,11 @@ func (h *P2PHost) Bootstrap(peers []string) error {
 
 			h.Peerstore().AddAddrs(p.ID, p.Addrs, peerstore.PermanentAddrTTL)
 			if err := h.Connect(ctx, p); err != nil {
-				logger.Printf("failed to bootstrap with %v: %s", p.ID, err)
+				logger.Printf("failed to bootstrap with %s: %s", p.ID, err)
 				errs <- err
 				return
 			}
-			logger.Printf("bootstrapped with %v", p.ID)
+			logger.Printf("bootstrapped with %s", p.ID)
 		}(*p)
 	}
 	wg.Wait()
@@ -416,7 +416,7 @@ func (h *P2PHost) Background() error {
 		case <-bootstrapTicker.C:
 			// bootstrap refesh
 			if err := h.Bootstrap(bootstraps); err != nil {
-				logger.Printf("bootstrap error %+v", err)
+				logger.Printf("bootstrap error %s", err)
 			}
 		}
 	}
@@ -435,6 +435,14 @@ func (h *P2PHost) AllowPeer(peer string) error {
 		}
 	}
 	return nil
+}
+
+func (h *P2PHost) PutValue(ctx context.Context, key string, value []byte, opts ...routing.Option) (err error) {
+	return h.dht.PutValue(ctx, key, value, opts...)
+}
+
+func (h *P2PHost) GetValue(ctx context.Context, key string, opts ...routing.Option) ([]byte, error) {
+	return h.dht.GetValue(ctx, key, opts...)
 }
 
 // get privkey, save it to local path

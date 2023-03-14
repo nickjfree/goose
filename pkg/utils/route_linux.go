@@ -16,7 +16,7 @@ var (
 func init() {
 	var err error
 	if defaultGateway, err = getDefaultGateway(); err != nil {
-		logger.Fatalf("get default gateway error: %+v", err)
+		logger.Fatalf("get default gateway error: %s", err)
 	}
 	logger.Printf("system gateway is %s, at interface %s", defaultGateway, defaultInterface)
 }
@@ -46,7 +46,7 @@ func SetRoute(network string, gateway string) error {
 
 func RemoveRoute(network string, gateway string) error {
 	if out, err := RunCmd("ip", "route", "delete", network, "via", gateway); err != nil {
-		logger.Printf("error remove route %s %+v", string(out), err)
+		logger.Printf("error remove route %s %s", string(out), err)
 		return nil
 	}
 	return nil

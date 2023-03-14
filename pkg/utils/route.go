@@ -92,13 +92,13 @@ func (h *HostRoute) Start() error {
 				// delete route
 				logger.Printf("delete host route %s -> %s", r.target, r.gateway)
 				if err := RemoveRoute(r.target, r.gateway); err != nil {
-					logger.Printf("error set route %+v", err)
+					logger.Printf("error set route %s", err)
 				}
 			} else {
 				// update route
 				logger.Printf("update host route %s -> %s", r.target, r.gateway)
 				if err := SetRoute(r.target, r.gateway); err != nil {
-					logger.Printf("error set route %+v", err)
+					logger.Printf("error set route %s", err)
 				}
 			}
 		// refresh
@@ -107,7 +107,7 @@ func (h *HostRoute) Start() error {
 			for _, r := range h.rules {
 				logger.Printf("update host route %s -> %s", r.target, r.gateway)
 				if err := SetRoute(r.target, r.gateway); err != nil {
-					logger.Printf("error set route %+v", err)
+					logger.Printf("error set route %s", err)
 				}
 			}
 			h.mu.Unlock()

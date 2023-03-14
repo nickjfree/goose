@@ -31,13 +31,13 @@ type (
 func init() {
 	iphlp, err := syscall.LoadLibrary("iphlpapi.dll")
 	if err != nil {
-		logger.Fatalf("looadlibrary iphlpapi.dll error: %+v", err)
+		logger.Fatalf("looadlibrary iphlpapi.dll error: %s", err)
 	}
 	defer syscall.FreeLibrary(iphlp)
 	nGetBestRoute = getProcAddr(iphlp, "GetBestRoute")
 
 	if defaultGateway, err = getDefaultGateway(); err != nil {
-		logger.Fatalf("get default gateway error: %+v", err)
+		logger.Fatalf("get default gateway error: %s", err)
 	}
 	logger.Printf("system gateway is %s, at interface %d", defaultGateway, defaultIfIndex)
 }
