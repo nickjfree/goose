@@ -2,6 +2,8 @@ package options
 
 import (
 	"flag"
+	"fmt"
+	"math/rand"
 )
 
 const (
@@ -33,8 +35,11 @@ var (
 )
 
 func init() {
+
+	defaultLocalAddr := fmt.Sprintf("192.168.%d.%d/24", rand.Intn(255), rand.Intn(255))
+
 	flag.StringVar(&Endpoints, "e", "", ENDPOINT_HELP)
-	flag.StringVar(&LocalAddr, "l", "192.168.100.2/24", LOCAL_HELP)
+	flag.StringVar(&LocalAddr, "l", defaultLocalAddr, LOCAL_HELP)
 	flag.StringVar(&Forward, "f", "", "forward networks, comma separated CIDRs")
 	flag.StringVar(&Namespace, "n", "", "namespace")
 	flag.StringVar(&FakeRange, "p", "", "fake ip range")
