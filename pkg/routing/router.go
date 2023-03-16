@@ -133,7 +133,9 @@ func (r *Router) updateEntry(myEntry, peerEntry *routingEntry) error {
 
 	// if a address with same ip but diffrent origin is detected
 	mask, _ := peerEntry.network.Mask.Size()
-	if myEntry.port != peerEntry.port && myEntry.origin != peerEntry.origin && mask == 32 {
+	if myEntry.origin != "" && peerEntry.origin != "" &&
+		myEntry.port != peerEntry.port &&
+		myEntry.origin != peerEntry.origin && mask == 32 {
 		return errors.Errorf("conflicting address %s", peerEntry.network.String())
 	}
 
