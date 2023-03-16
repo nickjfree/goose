@@ -74,8 +74,8 @@ func (w *TunWire) Encode(msg *message.Message) error {
 	case message.MessageTypeRouting:
 		if routing, ok := msg.Payload.(message.Routing); ok {
 			if routing.Type == message.RoutingRegisterAck {
-				// TODO: solve ip conflict
-				return nil
+				// solve ip conflict
+				return w.resolveConflict(routing.Routings)
 			}
 			if routing.Type == message.RoutingRegisterFailed {
 				return errors.Errorf("register routing failed %s", routing.Message)
@@ -192,6 +192,58 @@ func (w *TunWire) setupHostRouting(routings []message.RoutingEntry) error {
 	}
 	// update routings
 	w.routings = newRoutings
+	return nil
+}
+
+func (w *TunWire) resolveConflict(routings []message.RoutingEntry) error {
+
+	pool := utils.NewIPPool(w.network)
+
+	for _, entry := range routings {
+		n, _ := entry.Network.Mask.Size()
+		if n == 32 && !entry.Network.IP.Equal(w.address) {
+			continue
+		}
+		// handle conflict ip
+
+		// find a new ip
+		for {
+			newAddress, err := pool.Alloc()
+			if err != nil {
+				return err
+			}
+			// new ip should not be reserved gateway ip
+			if newAddress.Equal(w.gateway) {
+				continue
+			}
+			// new ip should not be the already conflicing one
+			if newAddress.Equal(entry.Network.IP) {
+				continue
+			}
+			// new ip should not be in the existing in routings
+			again := false
+			for _, exists := range w.routings {
+				n, _ := exists.Mask.Size()
+				if n == 32 && exists.IP.Equal(newAddress) {
+					again = true
+					break
+				}
+			}
+			// if yes, we alloc ip again
+			if again {
+				continue
+			}
+			// use this address
+			address := net.IPNet{
+				IP:   newAddress,
+				Mask: w.network.Mask,
+			}
+			if err := w.ChangeAddress(address.String()); err != nil {
+				return err
+			}
+			break
+		}
+	}
 	return nil
 }
 

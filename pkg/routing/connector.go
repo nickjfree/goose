@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"net"
 	"os"
 	"strings"
 	"sync"
@@ -393,6 +394,10 @@ func (p *Port) Close() error {
 
 func (p *Port) String() string {
 	return fmt.Sprintf("%s@%s", p.w.Endpoint(), p.w.Address().String())
+}
+
+func (p *Port) Address() net.IP {
+	return p.w.Address()
 }
 
 func (p *Port) PeerID() string {

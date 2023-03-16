@@ -185,7 +185,7 @@ func (r *Router) handleConflict(p *Port, routing message.Routing) error {
 			Routings: []message.RoutingEntry{entry},
 			Message:  "conflict",
 		}
-		logger.Printf("get a conflict message %+v", entry)
+		logger.Printf("got conflict message %+v", entry)
 		if err := target.AnnouceRouting(&msg); err != nil {
 			target.Close()
 		}
@@ -421,6 +421,10 @@ func (r *Router) handleRouting(p *Port) error {
 				}
 				// the first localnet is the tunnel address
 				origin := r.id
+				r.localNets[0] = net.IPNet{
+					IP:   p.Address(),
+					Mask: net.CIDRMask(32, 32),
+				}
 				for _, network := range r.localNets {
 					routing.Routings = append(routing.Routings, message.RoutingEntry{
 						Network: network,

@@ -51,6 +51,25 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 	}, nil
 }
 
+func (w *TunWire) ChangeAddress(addr string) error {
+	// check addr is cidr format
+	localIP, ipNet, err := net.ParseCIDR(addr)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	args := fmt.Sprintf("interface ip set address name=\"%s\" static %s %s none",
+		w.ifTun.Name(),
+		localIP.String(),
+		maskString(ipNet.Mask),
+	)
+	if out, err := utils.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	logger.Printf("set tunnel ip address to %s", addr)
+	w.address = localIP
+	return nil
+}
+
 func maskString(mask net.IPMask) string {
 	var s []string
 	for _, i := range mask {
