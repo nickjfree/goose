@@ -88,12 +88,12 @@ func NewBaseWireManager() BaseWireManager {
 }
 
 func (m *BaseWireManager) Connect(endpoint string) error {
-	logger.Fatalf("Connect() not implemented %s", m)
+	logger.Fatalf("Connect() not implemented %+v", m)
 	return nil
 }
 
 func (m *BaseWireManager) Protocol() string {
-	logger.Fatalf("Protocol() not implemented %s", m)
+	logger.Fatalf("Protocol() not implemented %+v", m)
 	return "none"
 }
 

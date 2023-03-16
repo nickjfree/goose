@@ -91,7 +91,7 @@ func TestTraffic(t *testing.T) {
 						t.Logf("%s", err)
 						t.Fail()
 					}
-					t.Logf("got one packet %s", msg)
+					t.Logf("got one packet %+v", msg)
 					if msg.Type == message.MessageTypePacket {
 						packet := msg.Payload.(message.Packet)
 						if packet.Dst.Equal(dst) {

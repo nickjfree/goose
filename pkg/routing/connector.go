@@ -143,7 +143,7 @@ func (c *BaseConnector) setConnected(endpoint string, w wire.Wire) error {
 		c.epStats[endpoint] = state
 		return nil
 	}
-	return errors.Errorf("invalid endpoint status %s %s", endpoint, state)
+	return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
 }
 
 // mark endpint as failed
@@ -164,7 +164,7 @@ func (c *BaseConnector) setFailed(endpoint string) error {
 		}
 		return nil
 	}
-	return errors.Errorf("invalid endpoint status %s %s", endpoint, state)
+	return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
 }
 
 // mark endpint as connecting
@@ -178,7 +178,7 @@ func (c *BaseConnector) setConnecting(endpoint string) error {
 		c.epStats[endpoint] = state
 		return nil
 	} else if ok {
-		return errors.Errorf("invalid endpoint status %s %s", endpoint, state)
+		return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
 	}
 	// first connection
 	state = epState{
@@ -198,7 +198,7 @@ func (c *BaseConnector) setUnknow(endpoint string) error {
 	if ok && state.status == statusConnected {
 		delete(c.epStats, endpoint)
 	}
-	return errors.Errorf("invalid endpoint status %s %s", endpoint, state)
+	return errors.Errorf("invalid endpoint status %s %+v", endpoint, state)
 }
 
 // connect to endpoint
@@ -339,14 +339,14 @@ func (p *Port) ReadPacket(packet *message.Packet) error {
 				p.pktIn = p.pktIn + 1
 				return nil
 			} else {
-				return errors.Errorf("invalid packet %s", msg)
+				return errors.Errorf("invalid packet %+v", msg)
 			}
 		case message.MessageTypeRouting:
 			if routing, ok := msg.Payload.(message.Routing); ok {
 				// handle routiong info
 				p.router.UpdateRouting(p, routing)
 			} else {
-				return errors.Errorf("invalid routing message %s", msg)
+				return errors.Errorf("invalid routing message %+v", msg)
 			}
 		}
 	}

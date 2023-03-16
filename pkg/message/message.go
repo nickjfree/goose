@@ -47,6 +47,8 @@ type RoutingEntry struct {
 	Metric int
 	// Rtt
 	Rtt int
+	// origin
+	Origin string
 }
 
 // routing register msg
@@ -98,7 +100,7 @@ func (m *Message) Split() ([]Message, error) {
 
 	routingMessage, ok := m.Payload.(Routing)
 	if !ok {
-		return nil, errors.Errorf("bad message %s", m)
+		return nil, errors.Errorf("bad message %+v", m)
 	}
 
 	if routingMessage.Type == RoutingRegisterAck || routingMessage.Type == RoutingRegisterFailed {

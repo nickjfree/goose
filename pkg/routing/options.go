@@ -57,8 +57,10 @@ func WithForward(forwardCIDRs ...string) Option {
 // discovery
 func WithDiscovery(namespace string) Option {
 	return func(r *Router) error {
+		pf := discovery.NewPeerFinder(namespace)
+		// relace id with the peerID
+		r.id = pf.ID().String()
 		go func() {
-			pf := discovery.NewPeerFinder(namespace)
 			for peer := range pf.Peers() {
 				r.Dial(peer)
 			}

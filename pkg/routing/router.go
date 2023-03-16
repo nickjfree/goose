@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pkg/errors"
 	"github.com/yl2chen/cidranger"
 
 	"goose/pkg/message"
-	"goose/pkg/routing/discovery"
 	"goose/pkg/routing/fakeip"
 )
 
@@ -36,6 +36,8 @@ type routingEntry struct {
 	metric int
 	// rtt
 	rtt int
+	// origin
+	origin string
 	// last updated
 	updatedAt time.Time
 }
@@ -45,7 +47,7 @@ func (entry *routingEntry) Network() net.IPNet {
 }
 
 func (entry *routingEntry) String() string {
-	return fmt.Sprintf("%s -> %s metric %d rtt %dms", entry.network.String(), entry.port, entry.metric%10, entry.rtt)
+	return fmt.Sprintf("%s -> %s metric %d %s rtt %dms", entry.network.String(), entry.port, entry.metric%10, entry.origin, entry.rtt)
 }
 
 type portState struct {
@@ -58,6 +60,8 @@ type portState struct {
 type Router struct {
 	// connector
 	Connector
+	// id
+	id string
 	// lock
 	lock sync.Mutex
 	// port routing infos
@@ -72,8 +76,6 @@ type Router struct {
 	maxMetric int
 	// fake ip manager
 	fakeIP *fakeip.FakeIPManager
-	// rating system
-	rating *discovery.RatingSystem
 	// closed
 	closed chan struct{}
 }
@@ -81,7 +83,7 @@ type Router struct {
 func NewRouter(localcidr string, opts ...Option) *Router {
 	localNets := []net.IPNet{}
 	// ipaddress
-	address, localPool, err := net.ParseCIDR(localcidr)
+	address, _, err := net.ParseCIDR(localcidr)
 	if err != nil {
 		logger.Fatal(err)
 	}
@@ -91,6 +93,7 @@ func NewRouter(localcidr string, opts ...Option) *Router {
 		Mask: net.CIDRMask(32, 32),
 	})
 	r := &Router{
+		id:         uuid.New().String(),
 		portStats:  make(map[*Port]portState),
 		routeTable: cidranger.NewPCTrieRanger(),
 		localNets:  localNets,
@@ -101,8 +104,6 @@ func NewRouter(localcidr string, opts ...Option) *Router {
 			logger.Fatal(err)
 		}
 	}
-	// create rating monitor
-	r.rating = discovery.NewRatingSystem(*localPool, address)
 	go r.background()
 	return r
 }
@@ -128,26 +129,66 @@ func (r *Router) RegisterPort(p *Port) error {
 }
 
 // update single routing entry
-func (r *Router) updateEntry(myEntry, peerEntry *routingEntry) {
+func (r *Router) updateEntry(myEntry, peerEntry *routingEntry) error {
+
+	// if a address with same ip but diffrent origin is detected
+	mask, _ := peerEntry.network.Mask.Size()
+	if myEntry.port != peerEntry.port && myEntry.origin != peerEntry.origin && mask == 32 {
+		return errors.Errorf("conflicting address %s", peerEntry.network.String())
+	}
+
 	// update routings for entries with smaller metric
 	if myEntry.metric > peerEntry.metric {
 		myEntry.port = peerEntry.port
 		myEntry.metric = peerEntry.metric
 		myEntry.rtt = peerEntry.rtt
+		myEntry.origin = peerEntry.origin
 		myEntry.updatedAt = time.Now()
-		return
+		return nil
 	}
 	// same metric, select the one with smaller rtt
 	if myEntry.metric == peerEntry.metric {
+
 		if myEntry.port == peerEntry.port ||
 			(myEntry.port != peerEntry.port && peerEntry.port.Faster(myEntry.rtt-peerEntry.port.Rtt())) {
 			myEntry.port = peerEntry.port
 			myEntry.metric = peerEntry.metric
 			myEntry.rtt = peerEntry.rtt
+			myEntry.origin = peerEntry.origin
 			myEntry.updatedAt = time.Now()
 		}
 	}
+
 	// TODO: metric + rtt
+
+	return nil
+}
+
+// handle conflict routing response
+func (r *Router) handleConflict(p *Port, routing message.Routing) error {
+	// just redirect the message to target port
+
+	for _, entry := range routing.Routings {
+
+		target, err := r.FindDestPort(entry.Network.IP)
+		if err != nil {
+			return err
+		}
+		if entry.Metric < 0 {
+			continue
+		}
+		entry.Metric = entry.Metric - 1
+		msg := message.Routing{
+			Type:     message.RoutingRegisterAck,
+			Routings: []message.RoutingEntry{entry},
+			Message:  "conflict",
+		}
+		logger.Printf("get a conflict message %+v", entry)
+		if err := target.AnnouceRouting(&msg); err != nil {
+			target.Close()
+		}
+	}
+	return nil
 }
 
 // update routing tables for this port
@@ -156,13 +197,18 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 	// handle routing ack. to get the peer rtt
 	if routing.Type == message.RoutingRegisterAck {
 		p.EndRttTiming()
+		// handle conflict routing message if needed
+		if err := r.handleConflict(p, routing); err != nil {
+			return err
+		}
 		return nil
 	}
+	// conflict entries to reply to peers
+	conflictEntries := []message.RoutingEntry{}
 	// log the peer provided networks
 	err := func() error {
 		r.lock.Lock()
 		defer r.lock.Unlock()
-
 		for _, entry := range routing.Routings {
 			peerEntry := routingEntry{
 				network: entry.Network,
@@ -170,6 +216,7 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 				// inc distance
 				metric:    entry.Metric + 1,
 				rtt:       p.Rtt() + entry.Rtt,
+				origin:    entry.Origin,
 				updatedAt: time.Now(),
 			}
 			// routings reach max hops
@@ -182,14 +229,16 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 				return errors.WithStack(err)
 			}
 			matched := false
-			for _, entry := range containing {
-				if myEntry, ok := entry.(*routingEntry); ok {
+			for _, e := range containing {
+				if myEntry, ok := e.(*routingEntry); ok {
 					n := myEntry.Network()
 					// duplicated network
 					if n.String() == peerEntry.network.String() {
 						matched = true
 						// only update routings for entries with smaller metric
-						r.updateEntry(myEntry, &peerEntry)
+						if err := r.updateEntry(myEntry, &peerEntry); err != nil {
+							conflictEntries = append(conflictEntries, entry)
+						}
 						break
 					}
 				}
@@ -222,22 +271,23 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 		}
 		return err
 	} else {
+		// ack peers
 		msg := message.Routing{
 			Type:     message.RoutingRegisterAck,
-			Routings: []message.RoutingEntry{},
-			Message:  "",
+			Routings: conflictEntries,
+			Message:  "ack",
 		}
 		// send ack message
 		if err := p.AnnouceRouting(&msg); err != nil {
+			p.Close()
 			return err
 		}
-		return nil
 	}
+	return nil
 }
 
 // find dest port
-func (r *Router) FindDestPort(packet message.Packet) (*Port, error) {
-	dst := packet.Dst
+func (r *Router) FindDestPort(dst net.IP) (*Port, error) {
 	r.lock.Lock()
 	defer r.lock.Unlock()
 
@@ -295,7 +345,7 @@ func (r *Router) handleTraffic(p *Port) error {
 				}
 			}
 			// routing
-			target, err := r.FindDestPort(packet)
+			target, err := r.FindDestPort(packet.Dst)
 			if err != nil {
 				return err
 			}
@@ -367,13 +417,17 @@ func (r *Router) handleRouting(p *Port) error {
 					Type:     message.MessageTypeRouting,
 					Routings: []message.RoutingEntry{},
 				}
+				// the first localnet is the tunnel address
+				origin := r.id
 				for _, network := range r.localNets {
 					routing.Routings = append(routing.Routings, message.RoutingEntry{
 						Network: network,
 						// local net, metric is always
 						Metric: 0,
 						Rtt:    0,
+						Origin: origin,
 					})
+					origin = ""
 				}
 				r.UpdateRouting(p, routing)
 			}
@@ -405,6 +459,7 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 					Network: entry.network,
 					Metric:  entry.metric,
 					Rtt:     entry.rtt,
+					Origin:  entry.origin,
 				})
 				continue
 			}
@@ -473,10 +528,7 @@ func (r *Router) refreshRoutings() error {
 					return errors.WithStack(err)
 				}
 			} else {
-				// rate the peers
-				if peerID := entry.port.PeerID(); peerID != "" {
-					r.rating.Rate(peerID, entry.network, entry.metric)
-				}
+				// todo
 			}
 		}
 	}

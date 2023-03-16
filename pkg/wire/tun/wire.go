@@ -74,6 +74,7 @@ func (w *TunWire) Encode(msg *message.Message) error {
 	case message.MessageTypeRouting:
 		if routing, ok := msg.Payload.(message.Routing); ok {
 			if routing.Type == message.RoutingRegisterAck {
+				// TODO: solve ip conflict
 				return nil
 			}
 			if routing.Type == message.RoutingRegisterFailed {
@@ -81,7 +82,7 @@ func (w *TunWire) Encode(msg *message.Message) error {
 			}
 			return w.setupHostRouting(routing.Routings)
 		} else {
-			return errors.Errorf("invalid routing message %s", msg)
+			return errors.Errorf("invalid routing message %+v", msg)
 		}
 	}
 	return nil
