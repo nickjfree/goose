@@ -197,8 +197,6 @@ func (w *TunWire) setupHostRouting(routings []message.RoutingEntry) error {
 
 func (w *TunWire) resolveConflict(routings []message.RoutingEntry) error {
 
-	pool := utils.NewIPPool(w.network)
-
 	for _, entry := range routings {
 		n, _ := entry.Network.Mask.Size()
 		if n == 32 && !entry.Network.IP.Equal(w.address) {
@@ -208,10 +206,7 @@ func (w *TunWire) resolveConflict(routings []message.RoutingEntry) error {
 
 		// find a new ip
 		for {
-			newAddress, err := pool.Alloc()
-			if err != nil {
-				return err
-			}
+			newAddress := utils.RandomIP(w.network)
 			// new ip should not be reserved gateway ip
 			if newAddress.Equal(w.gateway) {
 				continue
@@ -233,11 +228,16 @@ func (w *TunWire) resolveConflict(routings []message.RoutingEntry) error {
 			if again {
 				continue
 			}
+			// clear old routings
+			if err := w.setupHostRouting([]message.RoutingEntry{}); err != nil {
+				return err
+			}
 			// use this address
 			address := net.IPNet{
 				IP:   newAddress,
 				Mask: w.network.Mask,
 			}
+
 			if err := w.ChangeAddress(address.String()); err != nil {
 				return err
 			}

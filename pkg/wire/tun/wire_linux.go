@@ -72,5 +72,6 @@ func (w *TunWire) ChangeAddress(addr string) error {
 		return errors.Wrap(err, string(out))
 	}
 	w.address = address
+	logger.Printf("set tunnel ip address to %s", addr)
 	return nil
 }

@@ -1,6 +1,7 @@
 package utils
 
 import (
+	"math/rand"
 	"net"
 	"sync"
 	"time"
@@ -23,6 +24,17 @@ func ipToUint(ip net.IP) uint32 {
 
 func uintToIP(v uint32) net.IP {
 	return net.IP{byte(v >> 24), byte(v >> 16), byte(v >> 8), byte(v)}
+}
+
+// Generate a random IP address within the network
+func RandomIP(network net.IPNet) net.IP {
+	ip := make(net.IP, len(network.IP))
+	rand.Read(ip)
+	for i := 0; i < len(ip); i++ {
+		ip[i] &= ^network.Mask[i]
+		ip[i] |= network.IP[i]
+	}
+	return ip
 }
 
 // inc ip

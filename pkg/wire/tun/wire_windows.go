@@ -8,11 +8,18 @@ import (
 	"github.com/pkg/errors"
 	"github.com/songgao/water"
 	"net"
+	"reflect"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"goose/pkg/utils"
 	"goose/pkg/wire"
+)
+
+var (
+	file_device_unknown  = uint32(0x00000022)
+	tap_ioctl_config_tun = (file_device_unknown << 16) | (0 << 14) | (10 << 2) | 0
 )
 
 // create tun device on windows
@@ -52,20 +59,18 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 }
 
 func (w *TunWire) ChangeAddress(addr string) error {
-	// check addr is cidr format
-	localIP, ipNet, err := net.ParseCIDR(addr)
+	localIP, _, err := net.ParseCIDR(addr)
 	if err != nil {
 		return errors.WithStack(err)
 	}
-	args := fmt.Sprintf("interface ip set address name=\"%s\" static %s %s none",
-		w.ifTun.Name(),
-		localIP.String(),
-		maskString(ipNet.Mask),
-	)
-	if out, err := utils.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
-		return errors.Wrap(err, string(out))
+	// reconfig the tap-windows driver with the new address
+	if err := setTUN(getFd(w.ifTun), addr); err != nil {
+		return errors.WithStack(err)
 	}
-	logger.Printf("set tunnel ip address to %s", addr)
+	// check addr is cidr format
+	if err := setIPAddress(w.ifTun, addr); err != nil {
+		return err
+	}
 	w.address = localIP
 	return nil
 }
@@ -114,5 +119,43 @@ func setIPAddress(iface *water.Interface, addr string) error {
 		return errors.Wrap(err, string(out))
 	}
 	logger.Printf("set tunnel metric to 9")
+	return nil
+}
+
+func getFd(iface *water.Interface) syscall.Handle {
+	value := reflect.ValueOf(iface.ReadWriteCloser)
+	if value.Kind() != reflect.Ptr {
+		panic("Expected a pointer to a struct")
+	}
+
+	field := value.Elem().FieldByName("fd")
+	if !field.IsValid() {
+		panic("Field not found")
+	}
+	return syscall.Handle(field.Uint())
+}
+
+// setTUN is used to configure the IP address in the underlying driver when using TUN
+func setTUN(fd syscall.Handle, network string) error {
+	var bytesReturned uint32
+	rdbbuf := make([]byte, syscall.MAXIMUM_REPARSE_DATA_BUFFER_SIZE)
+
+	localIP, remoteNet, err := net.ParseCIDR(network)
+	if err != nil {
+		return fmt.Errorf("Failed to parse network CIDR in config, %v", err)
+	}
+	if localIP.To4() == nil {
+		return fmt.Errorf("Provided network(%s) is not a valid IPv4 address", network)
+	}
+	code2 := make([]byte, 0, 12)
+	code2 = append(code2, localIP.To4()[:4]...)
+	code2 = append(code2, remoteNet.IP.To4()[:4]...)
+	code2 = append(code2, remoteNet.Mask[:4]...)
+	if len(code2) != 12 {
+		return fmt.Errorf("Provided network(%s) is not valid", network)
+	}
+	if err := syscall.DeviceIoControl(fd, tap_ioctl_config_tun, &code2[0], uint32(12), &rdbbuf[0], uint32(len(rdbbuf)), &bytesReturned, nil); err != nil {
+		return err
+	}
 	return nil
 }
