@@ -9,8 +9,8 @@ import (
 	"github.com/songgao/water"
 	"net"
 
-	"goose/pkg/utils"
-	"goose/pkg/wire"
+	"github.com/nickjfree/goose/pkg/utils"
+	"github.com/nickjfree/goose/pkg/wire"
 )
 
 // create tun device on linux

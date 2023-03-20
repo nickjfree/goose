@@ -10,7 +10,7 @@ import (
 	"github.com/ipfs/go-ipns"
 	"github.com/pkg/errors"
 
-	"goose/pkg/wire/ipfs"
+	"github.com/nickjfree/goose/pkg/wire/ipfs"
 )
 
 // monitoring the goose network and get current infomation

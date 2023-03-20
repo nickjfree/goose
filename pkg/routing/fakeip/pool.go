@@ -4,8 +4,8 @@ import (
 	"net"
 	"sync"
 
-	"goose/pkg/routing/rule"
-	"goose/pkg/utils"
+	"github.com/nickjfree/goose/pkg/routing/rule"
+	"github.com/nickjfree/goose/pkg/utils"
 )
 
 // fake ip manager

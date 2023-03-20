@@ -4,9 +4,9 @@ import (
 	"github.com/pkg/errors"
 	"net"
 
-	"goose/pkg/routing/discovery"
-	"goose/pkg/routing/fakeip"
-	"goose/pkg/utils"
+	"github.com/nickjfree/goose/pkg/routing/discovery"
+	"github.com/nickjfree/goose/pkg/routing/fakeip"
+	"github.com/nickjfree/goose/pkg/utils"
 )
 
 // router option

@@ -8,7 +8,7 @@ import (
 	"net"
 	"os"
 
-	"goose/pkg/message"
+	"github.com/nickjfree/goose/pkg/message"
 )
 
 var (

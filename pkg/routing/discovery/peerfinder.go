@@ -10,7 +10,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/discovery"
 	"github.com/pkg/errors"
 
-	"goose/pkg/wire/ipfs"
+	"github.com/nickjfree/goose/pkg/wire/ipfs"
 )
 
 const (

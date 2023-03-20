@@ -1,4 +1,4 @@
-module goose
+module github.com/nickjfree/goose
 
 go 1.20
 

@@ -3,12 +3,13 @@ package main
 import (
 	// "context"
 	"fmt"
-	"goose/pkg/options"
-	"goose/pkg/routing"
 	"log"
 	"os"
 	"os/signal"
 	"strings"
+
+	"github.com/nickjfree/goose/pkg/options"
+	"github.com/nickjfree/goose/pkg/routing"
 )
 
 var (

@@ -10,9 +10,9 @@ import (
 	"sync"
 	"time"
 
+	"github.com/nickjfree/goose/pkg/message"
+	"github.com/nickjfree/goose/pkg/wire"
 	"github.com/pkg/errors"
-	"goose/pkg/message"
-	"goose/pkg/wire"
 )
 
 var (

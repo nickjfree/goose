@@ -2,9 +2,9 @@ package tun
 
 import (
 	"context"
-	"goose/pkg/message"
-	"goose/pkg/utils"
-	"goose/pkg/wire"
+	"github.com/nickjfree/goose/pkg/message"
+	"github.com/nickjfree/goose/pkg/utils"
+	"github.com/nickjfree/goose/pkg/wire"
 	"net"
 	"sync"
 	"testing"

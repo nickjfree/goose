@@ -13,8 +13,8 @@ import (
 	"strings"
 	"syscall"
 
-	"goose/pkg/utils"
-	"goose/pkg/wire"
+	"github.com/nickjfree/goose/pkg/utils"
+	"github.com/nickjfree/goose/pkg/wire"
 )
 
 var (

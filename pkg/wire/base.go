@@ -7,8 +7,8 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/nickjfree/goose/pkg/message"
 	"github.com/pkg/errors"
-	"goose/pkg/message"
 )
 
 var (

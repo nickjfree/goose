@@ -11,8 +11,8 @@ import (
 	"github.com/pkg/errors"
 	"github.com/yl2chen/cidranger"
 
-	"goose/pkg/message"
-	"goose/pkg/routing/fakeip"
+	"github.com/nickjfree/goose/pkg/message"
+	"github.com/nickjfree/goose/pkg/routing/fakeip"
 )
 
 const (

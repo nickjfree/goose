@@ -11,9 +11,9 @@ import (
 	"github.com/songgao/water"
 	"github.com/songgao/water/waterutil"
 
-	"goose/pkg/message"
-	"goose/pkg/utils"
-	"goose/pkg/wire"
+	"github.com/nickjfree/goose/pkg/message"
+	"github.com/nickjfree/goose/pkg/utils"
+	"github.com/nickjfree/goose/pkg/wire"
 )
 
 var (

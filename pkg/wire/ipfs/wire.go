@@ -31,10 +31,10 @@ import (
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/quic-go/quic-go"
 
+	"github.com/nickjfree/goose/pkg/message"
+	"github.com/nickjfree/goose/pkg/options"
+	"github.com/nickjfree/goose/pkg/wire"
 	"github.com/pkg/errors"
-	"goose/pkg/message"
-	"goose/pkg/options"
-	"goose/pkg/wire"
 )
 
 // ipfs bootstrap node
