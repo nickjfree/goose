@@ -269,7 +269,7 @@ func (c *BaseConnector) start() error {
 				}
 			}
 			c.lock.Unlock()
-			for i, _ := range requests {
+			for i := range requests {
 				c.requests <- requests[i]
 			}
 		case <-c.router.Done():

@@ -211,7 +211,7 @@ func (w *TunWire) resolveConflict(routings []message.RoutingEntry) error {
 			if newAddress.Equal(w.gateway) {
 				continue
 			}
-			// new ip should not be the already conflicing one
+			// new ip should not be the already conflicting one
 			if newAddress.Equal(entry.Network.IP) {
 				continue
 			}

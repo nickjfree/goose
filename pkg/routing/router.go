@@ -131,7 +131,7 @@ func (r *Router) RegisterPort(p *Port) error {
 // update single routing entry
 func (r *Router) updateEntry(myEntry, peerEntry *routingEntry) error {
 
-	// if a address with same ip but diffrent origin is detected
+	// if a address with same ip but different origin is detected
 	mask, _ := peerEntry.network.Mask.Size()
 	if myEntry.origin != "" && peerEntry.origin != "" &&
 		myEntry.port != peerEntry.port &&

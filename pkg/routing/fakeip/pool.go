@@ -91,7 +91,7 @@ func (manager *FakeIPManager) ToFake(real net.IP) *net.IP {
 func (manager *FakeIPManager) DNSRoutings() []net.IPNet {
 	return []net.IPNet{
 		manager.network,
-		net.IPNet{
+		{
 			IP:   net.IPv4(8, 8, 8, 8),
 			Mask: net.IPv4Mask(255, 255, 255, 255),
 		},

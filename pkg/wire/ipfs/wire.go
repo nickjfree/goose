@@ -113,7 +113,7 @@ func (w *IPFSWire) Address() net.IP {
 // Encode
 func (w *IPFSWire) Encode(msg *message.Message) error {
 	var err error
-	msgs := []message.Message{}
+	var msgs []message.Message
 	// routings message may exceed MTU, split it
 	if msg.Type == message.MessageTypeRouting {
 		msgs, err = msg.Split()
@@ -170,13 +170,13 @@ func newIPFSWireManager() *IPFSWireManager {
 	if err != nil {
 		logger.Fatalf("Error: %s", err)
 	}
-	// do backgroud relay refresh jobs
+	// do background relay refresh jobs
 	go host.Background()
 	m := &IPFSWireManager{
 		P2PHost:         host,
 		BaseWireManager: wire.NewBaseWireManager(),
 	}
-	// set server stream hanlder
+	// set server stream handler
 	m.SetStreamHandler(protocolName, func(s network.Stream) {
 		host.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
 		// close func
@@ -512,7 +512,7 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		libp2p.EnableRelay(),
 		// enable node to use relay for wire communication
 		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerSource), autorelay.WithNumRelays(4)),
-		// force node belive it is behind a NAT firewall to force using relays
+		// force node believe it is behind a NAT firewall to force using relays
 		// libp2p.ForceReachabilityPrivate(),
 		// hole punching
 		libp2p.EnableHolePunching(),

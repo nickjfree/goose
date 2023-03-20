@@ -108,7 +108,7 @@ func (m *Message) Split() ([]Message, error) {
 	}
 
 	fragment := []RoutingEntry{}
-	for i, _ := range routingMessage.Routings {
+	for i := range routingMessage.Routings {
 
 		fragment = append(fragment, routingMessage.Routings[i])
 		if len(fragment) >= 32 {

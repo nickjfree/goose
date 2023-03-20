@@ -13,7 +13,7 @@ import (
 	"github.com/nickjfree/goose/pkg/wire/ipfs"
 )
 
-// monitoring the goose network and get current infomation
+// monitoring the goose network and get current information
 // then calculate ratings based on that information
 type RatingSystem struct {
 	// p2p host
