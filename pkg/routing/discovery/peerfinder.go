@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/discovery"
@@ -14,7 +15,7 @@ import (
 )
 
 const (
-	// advertise node [refix]
+	// advertise node prefix
 	prefixGooseNode = "/goose/0.1.0/node"
 	// advertise network prefix
 	prefixGooseNetwork = "/goose/0.1.0/network"
@@ -32,7 +33,7 @@ type PeerFinder struct {
 	// p2p host
 	*ipfs.P2PHost
 	// namespace
-	ns string
+	ns []string
 	// peer channel
 	peers chan string
 }
@@ -41,10 +42,16 @@ func nodeKey(ns string) string {
 	return fmt.Sprintf("%s/%s", prefixGooseNode, ns)
 }
 
-func NewPeerFinder(ns string) PeerFinder {
+func NewPeerFinder(namesapce string) PeerFinder {
+
+	namespaces := strings.Split(namesapce, ",")
+	ns := []string{}
+	for i := range namespaces {
+		ns = append(ns, nodeKey(namespaces[i]))
+	}
 	pf := PeerFinder{
 		P2PHost: ipfs.GetP2PHost(),
-		ns:      nodeKey(ns),
+		ns:      ns,
 		peers:   make(chan string),
 	}
 	go pf.start()
@@ -56,23 +63,28 @@ func (pf *PeerFinder) Peers() <-chan string {
 }
 
 func (pf *PeerFinder) findPeers() error {
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*300)
-	defer cancel()
-	logger.Printf("searching peers in %s", pf.ns)
-	peers, err := pf.FindPeers(ctx, pf.ns)
-	if err != nil {
-		return errors.WithStack(err)
-	}
+
 	count := 0
-	for p := range peers {
-		// remove self
-		if p.ID == pf.ID() {
-			continue
+	for _, ns := range pf.ns {
+
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*300)
+		defer cancel()
+
+		logger.Printf("searching peers in %s", ns)
+		peers, err := pf.FindPeers(ctx, ns)
+		if err != nil {
+			return errors.WithStack(err)
 		}
-		pf.AllowPeer(p.ID.String())
-		pf.peers <- fmt.Sprintf("ipfs/%s", p.ID)
-		logger.Printf("found peer %s in %s", p.ID, pf.ns)
-		count += 1
+		for p := range peers {
+			// remove self
+			if p.ID == pf.ID() {
+				continue
+			}
+			pf.AllowPeer(p.ID.String())
+			pf.peers <- fmt.Sprintf("ipfs/%s", p.ID)
+			logger.Printf("found peer %s in %s", p.ID, ns)
+			count += 1
+		}
 	}
 	logger.Printf("found %d peers(goose)", count)
 	return nil
@@ -88,9 +100,12 @@ func (pf *PeerFinder) start() error {
 
 	ctx := context.Background()
 
-	if _, err := pf.Advertise(ctx, pf.ns, discovery.TTL(advertiseInterval)); err != nil {
-		logger.Println("failed to advertise", err)
+	for _, ns := range pf.ns {
+		if _, err := pf.Advertise(ctx, ns, discovery.TTL(advertiseInterval)); err != nil {
+			logger.Println("failed to advertise", err)
+		}
 	}
+
 	if err := pf.findPeers(); err != nil {
 		logger.Println("failed find peers", err)
 	}
@@ -103,8 +118,10 @@ func (pf *PeerFinder) start() error {
 				logger.Println("failed find peers", err)
 			}
 		case <-advertiseTicker.C:
-			if _, err := pf.Advertise(ctx, pf.ns, discovery.TTL(advertiseInterval)); err != nil {
-				logger.Println("failed to advertise", err)
+			for _, ns := range pf.ns {
+				if _, err := pf.Advertise(ctx, ns, discovery.TTL(advertiseInterval)); err != nil {
+					logger.Println("failed to advertise", err)
+				}
 			}
 		}
 	}
