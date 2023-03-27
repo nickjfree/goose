@@ -61,6 +61,24 @@ func SetupNAT() error {
 	if out, err := RunCmd("sysctl", "-p"); err != nil {
 		return errors.Wrap(err, string(out))
 	}
+	//tcp mss clamp
+	if out, err := RunCmd("iptables", "-t", "mangle", "-A", "FORWARD", "-p", "tcp",
+		"--tcp-flags", "SYN,RST", "SYN", "-o", defaultInterface, "-j", "TCPMSS", "--set-mss", "940"); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	// block DoH
+	// iptables -A FORWARD -p tcp --dport 443 -d 8.8.8.8 -j DROP
+	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "443", "-d", "8.8.8.8", "-j", "DROP"); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	// iptables -A FORWARD -p tcp --dport 443 -d 8.8.8.8 -j DROP
+	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "443", "-d", "8.8.4.4", "-j", "DROP"); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	// iptables -A FORWARD -p tcp --dport 853 -j DROP
+	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "853", "-j", "DROP"); err != nil {
+		return errors.Wrap(err, string(out))
+	}
 	// running as a router
 	if out, err := RunCmd("iptables", "-t", "nat", "-A", "POSTROUTING", "-o", defaultInterface, "-j", "MASQUERADE"); err != nil {
 		return errors.Wrap(err, string(out))
