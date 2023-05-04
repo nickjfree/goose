@@ -268,7 +268,7 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 		// ignore unlimit relay connections
 		if isP2PCircuitAddress(s.Conn().RemoteMultiaddr()) {
 			close()
-			logger.Printf("ignore unlimited relay %+v", s.Conn())
+			return errors.Errorf("ignore unlimited relay %+v", s.Conn())
 		}
 		// got an outbound wire
 		m.Out <- &IPFSWire{
