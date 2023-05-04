@@ -82,6 +82,7 @@ func getQuicConn(c network.Conn) quic.Connection {
 	// capableConn = capableConn.Elem()
 
 	// quicConn := capableConn.FieldByName("quicConn")
+	// logger.Printf("type is %s value is %+v", reflect.TypeOf(c), c)
 
 	quicConn := reflect.ValueOf(c).Elem().FieldByName("conn").Elem().Elem().FieldByName("quicConn")
 	v := reflect.NewAt(quicConn.Type(), unsafe.Pointer(quicConn.UnsafeAddr())).Elem()

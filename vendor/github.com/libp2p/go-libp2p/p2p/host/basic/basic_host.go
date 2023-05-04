@@ -1,11 +1,13 @@
 package basichost
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
+	"sort"
 	"sync"
 	"time"
 
@@ -767,6 +769,7 @@ func (h *BasicHost) Addrs() []ma.Multiaddr {
 	type transportForListeninger interface {
 		TransportForListening(a ma.Multiaddr) transport.Transport
 	}
+
 	type addCertHasher interface {
 		AddCertHashes(m ma.Multiaddr) ma.Multiaddr
 	}
@@ -809,18 +812,24 @@ func (h *BasicHost) NormalizeMultiaddr(addr ma.Multiaddr) ma.Multiaddr {
 	return addr
 }
 
-// mergeAddrs merges input address lists, leave only unique addresses
-func dedupAddrs(addrs []ma.Multiaddr) (uniqueAddrs []ma.Multiaddr) {
-	exists := make(map[string]bool)
-	for _, addr := range addrs {
-		k := string(addr.Bytes())
-		if exists[k] {
-			continue
-		}
-		exists[k] = true
-		uniqueAddrs = append(uniqueAddrs, addr)
+// dedupAddrs deduplicates addresses in place, leave only unique addresses.
+// It doesn't allocate.
+func dedupAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
+	if len(addrs) == 0 {
+		return addrs
 	}
-	return uniqueAddrs
+	sort.Slice(addrs, func(i, j int) bool { return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0 })
+	idx := 1
+	for i := 1; i < len(addrs); i++ {
+		if !addrs[i-1].Equal(addrs[i]) {
+			addrs[idx] = addrs[i]
+			idx++
+		}
+	}
+	for i := idx; i < len(addrs); i++ {
+		addrs[i] = nil
+	}
+	return addrs[:idx]
 }
 
 // AllAddrs returns all the addresses of BasicHost at this moment in time.
@@ -997,8 +1006,83 @@ func (h *BasicHost) AllAddrs() []ma.Multiaddr {
 		}
 		finalAddrs = append(finalAddrs, observedAddrs...)
 	}
+	finalAddrs = dedupAddrs(finalAddrs)
+	finalAddrs = inferWebtransportAddrsFromQuic(finalAddrs)
 
-	return dedupAddrs(finalAddrs)
+	return finalAddrs
+}
+
+var wtComponent = ma.StringCast("/webtransport")
+
+// inferWebtransportAddrsFromQuic infers more webtransport addresses from QUIC addresses.
+// This is useful when we discover our public QUIC address, but haven't discovered our public WebTransport addrs.
+// If we see that we are listening on the same port for QUIC and WebTransport,
+// we can be pretty sure that the WebTransport addr will be reachable if the
+// QUIC one is.
+// We assume the input is deduped.
+func inferWebtransportAddrsFromQuic(in []ma.Multiaddr) []ma.Multiaddr {
+	// We need to check if we are listening on the same ip+port for QUIC and WebTransport.
+	// If not, there's nothing to do since we can't infer anything.
+
+	// Count the number of QUIC addrs, this will let us allocate just once at the beginning.
+	quicAddrCount := 0
+	for _, addr := range in {
+		if _, lastComponent := ma.SplitLast(addr); lastComponent.Protocol().Code == ma.P_QUIC_V1 {
+			quicAddrCount++
+		}
+	}
+	quicOrWebtransportAddrs := make(map[string]struct{}, quicAddrCount)
+	webtransportAddrs := make(map[string]struct{}, quicAddrCount)
+	foundSameListeningAddr := false
+	for _, addr := range in {
+		isWebtransport, numCertHashes := libp2pwebtransport.IsWebtransportMultiaddr(addr)
+		if isWebtransport {
+			for i := 0; i < numCertHashes; i++ {
+				// Remove certhashes
+				addr, _ = ma.SplitLast(addr)
+			}
+			webtransportAddrs[addr.String()] = struct{}{}
+			// Remove webtransport component, now it's a multiaddr that ends in /quic-v1
+			addr, _ = ma.SplitLast(addr)
+		}
+
+		if _, lastComponent := ma.SplitLast(addr); lastComponent.Protocol().Code == ma.P_QUIC_V1 {
+			addrStr := addr.String()
+			if _, ok := quicOrWebtransportAddrs[addrStr]; ok {
+				foundSameListeningAddr = true
+			} else {
+				quicOrWebtransportAddrs[addrStr] = struct{}{}
+			}
+		}
+	}
+
+	if !foundSameListeningAddr {
+		return in
+	}
+
+	if len(webtransportAddrs) == 0 {
+		// No webtransport addresses, we aren't listening on any webtransport
+		// address, so we shouldn't add any.
+		return in
+	}
+
+	out := make([]ma.Multiaddr, 0, len(in)+(quicAddrCount-len(webtransportAddrs)))
+	for _, addr := range in {
+		// Add all the original addresses
+		out = append(out, addr)
+		if _, lastComponent := ma.SplitLast(addr); lastComponent.Protocol().Code == ma.P_QUIC_V1 {
+			// Convert quic to webtransport
+			addr = addr.Encapsulate(wtComponent)
+			if _, ok := webtransportAddrs[addr.String()]; ok {
+				// We already have this address
+				continue
+			}
+			// Add the new inferred address
+			out = append(out, addr)
+		}
+	}
+
+	return out
 }
 
 // SetAutoNat sets the autonat service for the host.

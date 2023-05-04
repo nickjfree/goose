@@ -7,6 +7,7 @@ import (
 	"net"
 	"os"
 	"regexp"
+	"sync"
 	"unicode/utf8"
 
 	"github.com/oschwald/geoip2-golang"
@@ -28,6 +29,7 @@ type Rule struct {
 	Scripts string
 	vm      *otto.Otto
 	db      *geoip2.Reader
+	mux     sync.Mutex
 }
 
 func New(path string, geoip string) *Rule {
@@ -167,6 +169,9 @@ func checkValid(ipaddr string) bool {
 
 // match ip or domain
 func (r *Rule) MatchDomain(domain string) bool {
+	r.mux.Lock()
+	defer r.mux.Unlock()
+
 	if !checkValid(domain) {
 		logger.Println("domain not valid")
 		return false

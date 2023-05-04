@@ -360,26 +360,35 @@ type normalizeMultiaddrer interface {
 	NormalizeMultiaddr(addr ma.Multiaddr) ma.Multiaddr
 }
 
-func (oas *ObservedAddrManager) maybeRecordObservation(conn network.Conn, observed ma.Multiaddr) {
+type addrsProvider interface {
+	Addrs() []ma.Multiaddr
+}
+
+type listenAddrsProvider interface {
+	ListenAddresses() []ma.Multiaddr
+	InterfaceListenAddresses() ([]ma.Multiaddr, error)
+}
+
+func shouldRecordObservation(host addrsProvider, network listenAddrsProvider, conn network.ConnMultiaddrs, observed ma.Multiaddr) bool {
 	// First, determine if this observation is even worth keeping...
 
 	// Ignore observations from loopback nodes. We already know our loopback
 	// addresses.
 	if manet.IsIPLoopback(observed) {
-		return
+		return false
 	}
 
 	// we should only use ObservedAddr when our connection's LocalAddr is one
 	// of our ListenAddrs. If we Dial out using an ephemeral addr, knowing that
 	// address's external mapping is not very useful because the port will not be
 	// the same as the listen addr.
-	ifaceaddrs, err := oas.host.Network().InterfaceListenAddresses()
+	ifaceaddrs, err := network.InterfaceListenAddresses()
 	if err != nil {
 		log.Infof("failed to get interface listen addrs", err)
-		return
+		return false
 	}
 
-	normalizer, canNormalize := oas.host.(normalizeMultiaddrer)
+	normalizer, canNormalize := host.(normalizeMultiaddrer)
 
 	if canNormalize {
 		for i, a := range ifaceaddrs {
@@ -391,21 +400,23 @@ func (oas *ObservedAddrManager) maybeRecordObservation(conn network.Conn, observ
 	if canNormalize {
 		local = normalizer.NormalizeMultiaddr(local)
 	}
-	if !ma.Contains(ifaceaddrs, local) && !ma.Contains(oas.host.Network().ListenAddresses(), local) {
-		// not in our list
-		return
-	}
 
-	hostAddrs := oas.host.Addrs()
-	if canNormalize {
-		for i, a := range hostAddrs {
-			hostAddrs[i] = normalizer.NormalizeMultiaddr(a)
-		}
-	}
-	listenAddrs := oas.host.Network().ListenAddresses()
+	listenAddrs := network.ListenAddresses()
 	if canNormalize {
 		for i, a := range listenAddrs {
 			listenAddrs[i] = normalizer.NormalizeMultiaddr(a)
+		}
+	}
+
+	if !ma.Contains(ifaceaddrs, local) && !ma.Contains(listenAddrs, local) {
+		// not in our list
+		return false
+	}
+
+	hostAddrs := host.Addrs()
+	if canNormalize {
+		for i, a := range hostAddrs {
+			hostAddrs[i] = normalizer.NormalizeMultiaddr(a)
 		}
 	}
 
@@ -418,20 +429,26 @@ func (oas *ObservedAddrManager) maybeRecordObservation(conn network.Conn, observ
 			"from", conn.RemoteMultiaddr(),
 			"observed", observed,
 		)
-		return
+		return false
 	}
 
-	// Ok, the observation is good, record it.
-	log.Debugw("added own observed listen addr", "observed", observed)
+	return true
+}
 
-	defer oas.addConn(conn, observed)
+func (oas *ObservedAddrManager) maybeRecordObservation(conn network.Conn, observed ma.Multiaddr) {
+	shouldRecord := shouldRecordObservation(oas.host, oas.host.Network(), conn, observed)
+	if shouldRecord {
+		// Ok, the observation is good, record it.
+		log.Debugw("added own observed listen addr", "observed", observed)
+		defer oas.addConn(conn, observed)
 
-	oas.mu.Lock()
-	defer oas.mu.Unlock()
-	oas.recordObservationUnlocked(conn, observed)
+		oas.mu.Lock()
+		defer oas.mu.Unlock()
+		oas.recordObservationUnlocked(conn, observed)
 
-	if oas.reachability == network.ReachabilityPrivate {
-		oas.emitAllNATTypes()
+		if oas.reachability == network.ReachabilityPrivate {
+			oas.emitAllNATTypes()
+		}
 	}
 }
 
