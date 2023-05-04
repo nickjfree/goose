@@ -73,6 +73,15 @@ func init() {
 	wire.RegisterWireManager(ipfsWireManager)
 }
 
+func isP2PCircuitAddress(addr ma.Multiaddr) bool {
+	for _, p := range addr.Protocols() {
+		if p.Name == "p2p-circuit" {
+			return true
+		}
+	}
+	return false
+}
+
 // hack. get quic.Connection to send datagram
 func getQuicConn(c network.Conn) quic.Connection {
 
@@ -193,8 +202,14 @@ func newIPFSWireManager() *IPFSWireManager {
 		// read the hello
 		buf := make([]byte, 32)
 		if _, err := s.Read(buf); err != nil {
-			s.Close()
+			close()
 			logger.Printf("error reading client hello %s", err)
+			return
+		}
+		// ignore unlimit relay connections
+		if isP2PCircuitAddress(s.Conn().RemoteMultiaddr()) {
+			close()
+			logger.Printf("ignore unlimited relay %+v", s.Conn())
 			return
 		}
 		logger.Printf("received new stream(%s) peerId (%s) data %s", s.ID(), s.Conn().RemotePeer(), string(buf))
@@ -249,6 +264,11 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 		if _, err := s.Write([]byte("hello")); err != nil {
 			close()
 			return errors.WithStack(err)
+		}
+		// ignore unlimit relay connections
+		if isP2PCircuitAddress(s.Conn().RemoteMultiaddr()) {
+			close()
+			logger.Printf("ignore unlimited relay %+v", s.Conn())
 		}
 		// got an outbound wire
 		m.Out <- &IPFSWire{
