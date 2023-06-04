@@ -1,17 +1,23 @@
 # go-ipns
 
+> ipns record definitions
+
 [![](https://img.shields.io/badge/made%20by-Protocol%20Labs-blue.svg?style=flat-square)](https://protocol.ai)
 [![](https://img.shields.io/badge/project-IPFS-blue.svg?style=flat-square)](https://ipfs.tech/)
 [![standard-readme compliant](https://img.shields.io/badge/standard--readme-OK-green.svg?style=flat-square)](https://github.com/RichardLitt/standard-readme)
 [![GoDoc](https://godoc.org/github.com/ipfs/go-datastore?status.svg)](https://godoc.org/github.com/ipfs/go-ipns)
 
-> ipns record definitions
+
+## ❗ This repo is no longer maintained.
+👉 We highly recommend switching to the maintained version at https://github.com/ipfs/boxo/tree/main/ipns.
+🏎️ Good news!  There is [tooling and documentation](https://github.com/ipfs/boxo#migrating-to-boxo) to expedite a switch in your repo. 
+
+⚠️ If you continue using this repo, please note that security fixes will not be provided (unless someone steps in to maintain it).
+
+📚 Learn more, including how to take the maintainership mantle or ask questions, [here](https://github.com/ipfs/boxo/wiki/Copied-or-Migrated-Repos-FAQ).
+
 
 This package contains all of the components necessary to create, understand, and validate IPNS records. It does *not* publish or resolve those records. [Kubo](https://github.com/ipfs/kubo) uses this package internally to manipulate records.
-
-## Lead Maintainer
-
-[Adin Schmahmann](https://github.com/aschmahmann)
 
 ## Usage
 
@@ -48,12 +54,6 @@ There are several other major operations you can do with `go-ipns`. Check out th
 ## Documentation
 
 https://godoc.org/github.com/ipfs/go-ipns
-
-## Contribute
-
-Feel free to join in. All welcome. Open an [issue](https://github.com/ipfs/go-ipns/issues)!
-
-This repository falls under the IPFS [Code of Conduct](https://github.com/ipfs/community/blob/master/code-of-conduct.md).
 
 ### Want to hack on IPFS?
 

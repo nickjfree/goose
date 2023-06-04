@@ -1,13 +1,11 @@
 package basichost
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net"
-	"sort"
 	"sync"
 	"time"
 
@@ -771,7 +769,7 @@ func (h *BasicHost) Addrs() []ma.Multiaddr {
 	}
 
 	type addCertHasher interface {
-		AddCertHashes(m ma.Multiaddr) ma.Multiaddr
+		AddCertHashes(m ma.Multiaddr) (ma.Multiaddr, bool)
 	}
 
 	addrs := h.AddrsFactory(h.AllAddrs())
@@ -793,7 +791,11 @@ func (h *BasicHost) Addrs() []ma.Multiaddr {
 			if !ok {
 				continue
 			}
-			addrs[i] = tpt.AddCertHashes(addr)
+			addrWithCerthash, added := tpt.AddCertHashes(addr)
+			addrs[i] = addrWithCerthash
+			if !added {
+				log.Debug("Couldn't add certhashes to webtransport multiaddr because we aren't listening on webtransport")
+			}
 		}
 	}
 	return addrs
@@ -810,26 +812,6 @@ func (h *BasicHost) NormalizeMultiaddr(addr ma.Multiaddr) ma.Multiaddr {
 		return out
 	}
 	return addr
-}
-
-// dedupAddrs deduplicates addresses in place, leave only unique addresses.
-// It doesn't allocate.
-func dedupAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {
-	if len(addrs) == 0 {
-		return addrs
-	}
-	sort.Slice(addrs, func(i, j int) bool { return bytes.Compare(addrs[i].Bytes(), addrs[j].Bytes()) < 0 })
-	idx := 1
-	for i := 1; i < len(addrs); i++ {
-		if !addrs[i-1].Equal(addrs[i]) {
-			addrs[idx] = addrs[i]
-			idx++
-		}
-	}
-	for i := idx; i < len(addrs); i++ {
-		addrs[i] = nil
-	}
-	return addrs[:idx]
 }
 
 // AllAddrs returns all the addresses of BasicHost at this moment in time.
@@ -856,7 +838,7 @@ func (h *BasicHost) AllAddrs() []ma.Multiaddr {
 		finalAddrs = append(finalAddrs, resolved...)
 	}
 
-	finalAddrs = dedupAddrs(finalAddrs)
+	finalAddrs = network.DedupAddrs(finalAddrs)
 
 	var natMappings []inat.Mapping
 
@@ -1006,7 +988,7 @@ func (h *BasicHost) AllAddrs() []ma.Multiaddr {
 		}
 		finalAddrs = append(finalAddrs, observedAddrs...)
 	}
-	finalAddrs = dedupAddrs(finalAddrs)
+	finalAddrs = network.DedupAddrs(finalAddrs)
 	finalAddrs = inferWebtransportAddrsFromQuic(finalAddrs)
 
 	return finalAddrs

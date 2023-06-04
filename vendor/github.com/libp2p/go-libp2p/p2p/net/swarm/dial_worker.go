@@ -27,9 +27,9 @@ type dialResponse struct {
 }
 
 type pendRequest struct {
-	req   dialRequest               // the original request
-	err   *DialError                // dial error accumulator
-	addrs map[ma.Multiaddr]struct{} // pending addr dials
+	req   dialRequest         // the original request
+	err   *DialError          // dial error accumulator
+	addrs map[string]struct{} // pending address to dial. The key is a multiaddr
 }
 
 type addrDial struct {
@@ -47,7 +47,7 @@ type dialWorker struct {
 	reqch    <-chan dialRequest
 	reqno    int
 	requests map[int]*pendRequest
-	pending  map[ma.Multiaddr]*addrDial
+	pending  map[string]*addrDial // pending addresses to dial. The key is a multiaddr
 	resch    chan dialResult
 
 	connected bool // true when a connection has been successfully established
@@ -67,7 +67,7 @@ func newDialWorker(s *Swarm, p peer.ID, reqch <-chan dialRequest) *dialWorker {
 		peer:     p,
 		reqch:    reqch,
 		requests: make(map[int]*pendRequest),
-		pending:  make(map[ma.Multiaddr]*addrDial),
+		pending:  make(map[string]*addrDial),
 		resch:    make(chan dialResult),
 	}
 }
@@ -109,10 +109,10 @@ loop:
 			pr := &pendRequest{
 				req:   req,
 				err:   &DialError{Peer: w.peer},
-				addrs: make(map[ma.Multiaddr]struct{}),
+				addrs: make(map[string]struct{}),
 			}
 			for _, a := range addrs {
-				pr.addrs[a] = struct{}{}
+				pr.addrs[string(a.Bytes())] = struct{}{}
 			}
 
 			// check if any of the addrs has been successfully dialed and accumulate
@@ -121,7 +121,7 @@ loop:
 			var tojoin []*addrDial
 
 			for _, a := range addrs {
-				ad, ok := w.pending[a]
+				ad, ok := w.pending[string(a.Bytes())]
 				if !ok {
 					todial = append(todial, a)
 					continue
@@ -136,7 +136,7 @@ loop:
 				if ad.err != nil {
 					// dial to this addr errored, accumulate the error
 					pr.err.recordErr(a, ad.err)
-					delete(pr.addrs, a)
+					delete(pr.addrs, string(a.Bytes()))
 					continue
 				}
 
@@ -167,7 +167,7 @@ loop:
 
 			if len(todial) > 0 {
 				for _, a := range todial {
-					w.pending[a] = &addrDial{addr: a, ctx: req.ctx, requests: []int{w.reqno}}
+					w.pending[string(a.Bytes())] = &addrDial{addr: a, ctx: req.ctx, requests: []int{w.reqno}}
 				}
 
 				w.nextDial = append(w.nextDial, todial...)
@@ -180,7 +180,12 @@ loop:
 		case <-w.triggerDial:
 			for _, addr := range w.nextDial {
 				// spawn the dial
-				ad := w.pending[addr]
+				ad, ok := w.pending[string(addr.Bytes())]
+				if !ok {
+					log.Warn("unexpectedly missing pending addrDial for addr")
+					// Assume nothing to dial here
+					continue
+				}
 				err := w.s.dialNextAddr(ad.ctx, w.peer, addr, w.resch)
 				if err != nil {
 					w.dispatchError(ad, err)
@@ -195,7 +200,12 @@ loop:
 				w.connected = true
 			}
 
-			ad := w.pending[res.Addr]
+			ad, ok := w.pending[string(res.Addr.Bytes())]
+			if !ok {
+				log.Warn("unexpectedly missing pending addrDial res")
+				// Assume nothing to do here
+				continue
+			}
 
 			if res.Conn != nil {
 				// we got a connection, add it to the swarm
@@ -250,7 +260,7 @@ func (w *dialWorker) dispatchError(ad *addrDial, err error) {
 		// accumulate the error
 		pr.err.recordErr(ad.addr, err)
 
-		delete(pr.addrs, ad.addr)
+		delete(pr.addrs, string(ad.addr.Bytes()))
 		if len(pr.addrs) == 0 {
 			// all addrs have erred, dispatch dial error
 			// but first do a last one check in case an acceptable connection has landed from
@@ -274,7 +284,7 @@ func (w *dialWorker) dispatchError(ad *addrDial, err error) {
 	// it is also necessary to preserve consisent behaviour with the old dialer -- TestDialBackoff
 	// regresses without this.
 	if err == ErrDialBackoff {
-		delete(w.pending, ad.addr)
+		delete(w.pending, string(ad.addr.Bytes()))
 	}
 }
 

@@ -5,8 +5,8 @@ go 1.20
 require (
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.3.0
-	github.com/ipfs/go-ipns v0.3.0
-	github.com/libp2p/go-libp2p v0.27.1
+	github.com/ipfs/go-ipns v0.3.1
+	github.com/libp2p/go-libp2p v0.27.5
 	github.com/libp2p/go-libp2p-kad-dht v0.23.0
 	github.com/multiformats/go-multiaddr v0.9.0
 	github.com/oschwald/geoip2-golang v1.8.0
