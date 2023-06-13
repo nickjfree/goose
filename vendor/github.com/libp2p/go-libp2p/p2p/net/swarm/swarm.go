@@ -100,6 +100,14 @@ func WithResourceManager(m network.ResourceManager) Option {
 	}
 }
 
+// WithDialRanker configures swarm to use d as the DialRanker
+func WithDialRanker(d network.DialRanker) Option {
+	return func(s *Swarm) error {
+		s.dialRanker = d
+		return nil
+	}
+}
+
 // Swarm is a connection muxer, allowing connections to other peers to
 // be opened and closed, while still using the same Chan for all
 // communication. The Chan sends/receives Messages, which note the
@@ -163,6 +171,8 @@ type Swarm struct {
 
 	bwc           metrics.Reporter
 	metricsTracer MetricsTracer
+
+	dialRanker network.DialRanker
 }
 
 // NewSwarm constructs a Swarm.
@@ -181,6 +191,7 @@ func NewSwarm(local peer.ID, peers peerstore.Peerstore, eventBus event.Bus, opts
 		dialTimeout:      defaultDialTimeout,
 		dialTimeoutLocal: defaultDialTimeoutLocal,
 		maResolver:       madns.DefaultResolver,
+		dialRanker:       DefaultDialRanker,
 	}
 
 	s.conns.m = make(map[peer.ID][]*Conn)
@@ -229,7 +240,7 @@ func (s *Swarm) close() {
 
 	for l := range listeners {
 		go func(l transport.Listener) {
-			if err := l.Close(); err != nil {
+			if err := l.Close(); err != nil && err != transport.ErrListenerClosed {
 				log.Errorf("error when shutting down listener: %s", err)
 			}
 		}(l)

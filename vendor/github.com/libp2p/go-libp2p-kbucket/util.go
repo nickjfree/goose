@@ -2,12 +2,13 @@ package kbucket
 
 import (
 	"errors"
+
 	"github.com/minio/sha256-simd"
 
 	ks "github.com/libp2p/go-libp2p-kbucket/keyspace"
 	"github.com/libp2p/go-libp2p/core/peer"
 
-	u "github.com/ipfs/go-ipfs-util"
+	u "github.com/ipfs/boxo/util"
 )
 
 // ErrLookupFailure is returned if a routing table query returns no results. This is NOT expected

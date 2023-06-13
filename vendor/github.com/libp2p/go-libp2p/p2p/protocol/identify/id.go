@@ -3,6 +3,7 @@ package identify
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"sort"
@@ -41,8 +42,6 @@ const (
 	// It sends full identify messages containing the current state of the peer.
 	IDPush = "/ipfs/id/push/1.0.0"
 )
-
-const DefaultProtocolVersion = "ipfs/0.1.0"
 
 const ServiceName = "libp2p.identify"
 
@@ -189,16 +188,11 @@ func NewIDService(h host.Host, opts ...Option) (*idService, error) {
 		userAgent = cfg.userAgent
 	}
 
-	protocolVersion := DefaultProtocolVersion
-	if cfg.protocolVersion != "" {
-		protocolVersion = cfg.protocolVersion
-	}
-
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &idService{
 		Host:                    h,
 		UserAgent:               userAgent,
-		ProtocolVersion:         protocolVersion,
+		ProtocolVersion:         cfg.protocolVersion,
 		ctx:                     ctx,
 		ctxCancel:               cancel,
 		conns:                   make(map[network.Conn]entry),
@@ -764,20 +758,18 @@ func (ids *idService) consumeMessage(mes *pb.Identify, c network.Conn, isPush bo
 		ids.Host.Peerstore().UpdateAddrs(p, ttl, peerstore.TempAddrTTL)
 	}
 
-	// add signed addrs if we have them and the peerstore supports them
-	cab, ok := peerstore.GetCertifiedAddrBook(ids.Host.Peerstore())
-	if ok && signedPeerRecord != nil && signedPeerRecord.PublicKey != nil {
-		id, err := peer.IDFromPublicKey(signedPeerRecord.PublicKey)
+	var addrs []ma.Multiaddr
+	if signedPeerRecord != nil {
+		signedAddrs, err := ids.consumeSignedPeerRecord(c.RemotePeer(), signedPeerRecord)
 		if err != nil {
-			log.Debugf("failed to derive peer ID from peer record: %s", err)
-		} else if id != c.RemotePeer() {
-			log.Debugf("received signed peer record for unexpected peer ID. expected %s, got %s", c.RemotePeer(), id)
-		} else if _, err := cab.ConsumePeerRecord(signedPeerRecord, ttl); err != nil {
-			log.Debugf("error adding signed addrs to peerstore: %v", err)
+			log.Debugf("failed to consume signed peer record: %s", err)
+		} else {
+			addrs = signedAddrs
 		}
 	} else {
-		ids.Host.Peerstore().AddAddrs(p, lmaddrs, ttl)
+		addrs = lmaddrs
 	}
+	ids.Host.Peerstore().AddAddrs(p, filterAddrs(addrs, c.RemoteMultiaddr()), ttl)
 
 	// Finally, expire all temporary addrs.
 	ids.Host.Peerstore().UpdateAddrs(p, peerstore.TempAddrTTL, 0)
@@ -794,6 +786,34 @@ func (ids *idService) consumeMessage(mes *pb.Identify, c network.Conn, isPush bo
 
 	// get the key from the other side. we may not have it (no-auth transport)
 	ids.consumeReceivedPubKey(c, mes.PublicKey)
+}
+
+func (ids *idService) consumeSignedPeerRecord(p peer.ID, signedPeerRecord *record.Envelope) ([]ma.Multiaddr, error) {
+	if signedPeerRecord.PublicKey == nil {
+		return nil, errors.New("missing pubkey")
+	}
+	id, err := peer.IDFromPublicKey(signedPeerRecord.PublicKey)
+	if err != nil {
+		return nil, fmt.Errorf("failed to derive peer ID: %s", err)
+	}
+	if id != p {
+		return nil, fmt.Errorf("received signed peer record envelope for unexpected peer ID. expected %s, got %s", p, id)
+	}
+	r, err := signedPeerRecord.Record()
+	if err != nil {
+		return nil, fmt.Errorf("failed to obtain record: %w", err)
+	}
+	rec, ok := r.(*peer.PeerRecord)
+	if !ok {
+		return nil, errors.New("not a peer record")
+	}
+	if rec.PeerID != p {
+		return nil, fmt.Errorf("received signed peer record for unexpected peer ID. expected %s, got %s", p, rec.PeerID)
+	}
+	// Don't put the signed peer record into the peer store.
+	// They're not used anywhere.
+	// All we care about are the addresses.
+	return rec.Addrs, nil
 }
 
 func (ids *idService) consumeReceivedPubKey(c network.Conn, kb []byte) {
@@ -966,3 +986,17 @@ func (nn *netNotifiee) Disconnected(_ network.Network, c network.Conn) {
 
 func (nn *netNotifiee) Listen(n network.Network, a ma.Multiaddr)      {}
 func (nn *netNotifiee) ListenClose(n network.Network, a ma.Multiaddr) {}
+
+// filterAddrs filters the address slice based on the remove multiaddr:
+// * if it's a localhost address, no filtering is applied
+// * if it's a local network address, all localhost addresses are filtered out
+// * if it's a public address, all localhost and local network addresses are filtered out
+func filterAddrs(addrs []ma.Multiaddr, remote ma.Multiaddr) []ma.Multiaddr {
+	if manet.IsIPLoopback(remote) {
+		return addrs
+	}
+	if manet.IsPrivateAddr(remote) {
+		return ma.FilterAddrs(addrs, func(a ma.Multiaddr) bool { return !manet.IsIPLoopback(a) })
+	}
+	return ma.FilterAddrs(addrs, manet.IsPublicAddr)
+}
