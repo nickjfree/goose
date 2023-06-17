@@ -1,9 +1,13 @@
 
 
 <!-- ABOUT THE PROJECT -->
-<h2 align="center"># Decentralized Tunnel Network - Goose</h2>
+<h2 align="center">
+# Decentralized Tunnel Network - Goose
 
 [![Build](https://github.com/nickjfree/goose/actions/workflows/build.yml/badge.svg)](https://github.com/nickjfree/goose/actions/workflows/build.yml/badge.svg)
+[![Go Report Card](https://goreportcard.com/badge/github.com/nickjfree/goose)](https://goreportcard.com/report/github.com/nickjfree/goose)
+
+</h2>
 
 Welcome to Goose, a decentralized tunnel network built on top of libp2p. With Goose, every node is both a client and server, meaning there's no need for a specific server. This makes it easier to establish connections between nodes.
   
