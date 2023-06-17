@@ -3,16 +3,18 @@ package routing
 import (
 	"fmt"
 	"net"
+	"os"
 	"runtime"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
-	"github.com/pkg/errors"
-	"github.com/yl2chen/cidranger"
-
+	"github.com/jedib0t/go-pretty/v6/table"
 	"github.com/nickjfree/goose/pkg/message"
 	"github.com/nickjfree/goose/pkg/routing/fakeip"
+	"github.com/nickjfree/goose/pkg/wire/filters"
+	"github.com/pkg/errors"
+	"github.com/yl2chen/cidranger"
 )
 
 const (
@@ -38,6 +40,8 @@ type routingEntry struct {
 	rtt int
 	// origin
 	origin string
+	// name
+	name string
 	// last updated
 	updatedAt time.Time
 }
@@ -47,7 +51,14 @@ func (entry *routingEntry) Network() net.IPNet {
 }
 
 func (entry *routingEntry) String() string {
-	return fmt.Sprintf("%s -> %s metric %d %s rtt %dms", entry.network.String(), entry.port, entry.metric%10, entry.origin, entry.rtt)
+	return fmt.Sprintf("%s -> %s metric %d %s(%s) rtt %dms", entry.network.String(), entry.port, entry.metric%10, entry.origin, entry.name, entry.rtt)
+}
+
+func (entry *routingEntry) Name() string {
+	if entry.name != "" {
+		return entry.name
+	}
+	return entry.origin
 }
 
 type portState struct {
@@ -62,6 +73,8 @@ type Router struct {
 	Connector
 	// id
 	id string
+	// name
+	name string
 	// lock
 	lock sync.Mutex
 	// port routing infos
@@ -116,6 +129,13 @@ func (r *Router) RegisterPort(p *Port) error {
 		updatedAt: time.Now(),
 	}
 
+	// if fakeip is enabled, we wrap the tunnel with a filter
+	if r.fakeIP != nil && p.IsTunnel() {
+		filter := filters.WrapFilter(p.w)
+		filter.AddMiddleware(r.fakeIP)
+		p.w = filter
+	}
+
 	go func() {
 		logger.Printf("traffic quite for port(%s) %s", p, r.handleTraffic(p))
 		r.clearRouting(p)
@@ -145,6 +165,7 @@ func (r *Router) updateEntry(myEntry, peerEntry *routingEntry) error {
 		myEntry.metric = peerEntry.metric
 		myEntry.rtt = peerEntry.rtt
 		myEntry.origin = peerEntry.origin
+		myEntry.name = peerEntry.name
 		myEntry.updatedAt = time.Now()
 		return nil
 	}
@@ -157,6 +178,7 @@ func (r *Router) updateEntry(myEntry, peerEntry *routingEntry) error {
 			myEntry.metric = peerEntry.metric
 			myEntry.rtt = peerEntry.rtt
 			myEntry.origin = peerEntry.origin
+			myEntry.name = peerEntry.name
 			myEntry.updatedAt = time.Now()
 		}
 	}
@@ -219,6 +241,7 @@ func (r *Router) UpdateRouting(p *Port, routing message.Routing) error {
 				metric:    entry.Metric + 1,
 				rtt:       p.Rtt() + entry.Rtt,
 				origin:    entry.Origin,
+				name:      entry.Name,
 				updatedAt: time.Now(),
 			}
 			// routings reach max hops
@@ -340,29 +363,12 @@ func (r *Router) handleTraffic(p *Port) error {
 			if packet.TTL <= 0 {
 				continue
 			}
-			// replace fake ip to src ip for ingress traffic from tunnel
-			if r.fakeIP != nil && p.IsTunnel() {
-				if err := r.fakeIP.DNAT(&packet); err != nil {
-					return err
-				}
-			}
 			// routing
 			target, err := r.FindDestPort(packet.Dst)
 			if err != nil {
 				return err
 			}
 			if target != nil {
-				// fake ip enabled, should do some modifying for egress traffic from tunnel
-				if r.fakeIP != nil && target.IsTunnel() {
-					// modify dns response
-					if err := r.fakeIP.FakeDnsResponse(&packet); err != nil {
-						return err
-					}
-					// replace src ip to fake ip
-					if err := r.fakeIP.SNAT(&packet); err != nil {
-						return err
-					}
-				}
 				if err := target.WritePacket(&packet); err != nil {
 					// target port too slow or dead. we should close it. or it will slowdown everyone
 					logger.Printf("error relaying packet to port(%s). it is too slow. close port: %s", target, err)
@@ -421,6 +427,7 @@ func (r *Router) handleRouting(p *Port) error {
 				}
 				// the first localnet is the tunnel address
 				origin := r.id
+				name := r.name
 				r.localNets[0] = net.IPNet{
 					IP:   p.Address(),
 					Mask: net.CIDRMask(32, 32),
@@ -432,10 +439,14 @@ func (r *Router) handleRouting(p *Port) error {
 						Metric: 0,
 						Rtt:    0,
 						Origin: origin,
+						Name:   name,
 					})
 					origin = ""
+					name = ""
 				}
-				r.UpdateRouting(p, routing)
+				if err := r.UpdateRouting(p, routing); err != nil {
+					return err
+				}
 			}
 		}
 	}
@@ -466,6 +477,7 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 					Metric:  entry.metric,
 					Rtt:     entry.rtt,
 					Origin:  entry.origin,
+					Name:    entry.name,
 				})
 				continue
 			}
@@ -525,19 +537,37 @@ func (r *Router) refreshRoutings() error {
 	if err != nil {
 		return errors.WithStack(err)
 	}
+
+	t := table.NewWriter()
+	t.SetOutputMirror(os.Stdout)
+	t.AppendHeader(table.Row{"Network", "Port", "Metric", "RTT", "Name"})
 	for _, e := range all {
 		if entry, ok := e.(*routingEntry); ok {
-			logger.Printf("routing: %s\n", entry)
+			t.AppendRow(table.Row{
+				entry.network.String(),
+				entry.port.String(),
+				entry.metric,
+				entry.rtt,
+				entry.Name(),
+			})
 			if now.Sub(entry.updatedAt) > routingExpire {
 				// entry expired, remove the routing
 				if _, err := r.routeTable.Remove(entry.Network()); err != nil {
 					return errors.WithStack(err)
 				}
 			} else {
-				// todo
+				// update dns names for peers
+				if r.fakeIP != nil {
+					if mask, _ := entry.network.Mask.Size(); mask == 32 {
+						if name := entry.Name(); name != "" {
+							r.fakeIP.SetNameRecord(entry.Name(), entry.Network().IP)
+						}
+					}
+				}
 			}
 		}
 	}
+	t.Render()
 	return nil
 }
 

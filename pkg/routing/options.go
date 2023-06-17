@@ -76,3 +76,11 @@ func WithFakeIP(network, script, db string) Option {
 		return nil
 	}
 }
+
+// name
+func WithName(name string) Option {
+	return func(r *Router) error {
+		r.name = name
+		return nil
+	}
+}

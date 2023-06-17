@@ -24,15 +24,21 @@ func main() {
 		// use base connector
 		routing.WithConnector(),
 	}
+
 	if options.Forward != "" {
 		opts = append(opts, routing.WithForward(strings.Split(options.Forward, ",")...))
 	}
+
 	if options.Namespace != "" {
 		opts = append(opts, routing.WithDiscovery(options.Namespace))
 	}
 
 	if options.FakeRange != "" {
 		opts = append(opts, routing.WithFakeIP(options.FakeRange, options.RuleScript, options.GeoipDbFile))
+	}
+
+	if options.Name != "" && options.Namespace != "" {
+		opts = append(opts, routing.WithName(fmt.Sprintf("%s.%s", options.Name, options.Namespace)))
 	}
 
 	r := routing.NewRouter(options.LocalAddr, opts...)

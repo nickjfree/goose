@@ -3,10 +3,17 @@ package fakeip
 import (
 	"net"
 	"sync"
+	"time"
 
 	"github.com/nickjfree/goose/pkg/routing/rule"
 	"github.com/nickjfree/goose/pkg/utils"
 )
+
+// dns record A
+type dnsRecord struct {
+	IP  net.IP
+	Exp time.Time
+}
 
 // fake ip manager
 type FakeIPManager struct {
@@ -20,6 +27,8 @@ type FakeIPManager struct {
 	r2f *utils.IPMapping
 	// fakeip rule
 	rule *rule.Rule
+	// fale name server cache
+	nameServer map[string][]dnsRecord
 	// lock
 	mu sync.Mutex
 }
@@ -39,7 +48,8 @@ func NewFakeIPManager(network, script, db string) *FakeIPManager {
 			pool.Free(ip)
 			return nil
 		}),
-		r2f: utils.NewIPMapping(nil),
+		r2f:        utils.NewIPMapping(nil),
+		nameServer: make(map[string][]dnsRecord),
 	}
 	if script != "" && db != "" {
 		m.rule = rule.New(script, db)
@@ -51,7 +61,7 @@ func NewFakeIPManager(network, script, db string) *FakeIPManager {
 }
 
 // alloc fake ip
-func (manager *FakeIPManager) Alloc(domain string, real net.IP) (net.IP, error) {
+func (manager *FakeIPManager) alloc(domain string, real net.IP) (net.IP, error) {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
@@ -74,14 +84,14 @@ func (manager *FakeIPManager) Alloc(domain string, real net.IP) (net.IP, error) 
 }
 
 // get real ip by fake ip
-func (manager *FakeIPManager) ToReal(fake net.IP) *net.IP {
+func (manager *FakeIPManager) toReal(fake net.IP) *net.IP {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	return manager.f2r.Get(fake)
 }
 
 // get fake ip by real ip
-func (manager *FakeIPManager) ToFake(real net.IP) *net.IP {
+func (manager *FakeIPManager) toFake(real net.IP) *net.IP {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	return manager.r2f.Get(real)
@@ -96,4 +106,55 @@ func (manager *FakeIPManager) DNSRoutings() []net.IPNet {
 			Mask: net.IPv4Mask(255, 255, 255, 255),
 		},
 	}
+}
+
+// register custome dns record to fakeip manager
+func (manager *FakeIPManager) SetNameRecord(name string, ip net.IP) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	// expire time for the record
+	exp := time.Now().Add(3 * time.Minute)
+
+	answers, ok := manager.nameServer[name]
+	if ok {
+		found := false
+		for i := range answers {
+			if answers[i].IP.Equal(ip) {
+				answers[i].Exp = exp
+				found = true
+				break
+			}
+		}
+		if !found {
+			answers = append(answers, dnsRecord{
+				IP:  ip,
+				Exp: exp,
+			})
+		}
+	} else {
+		answers = []dnsRecord{
+			{
+				IP:  ip,
+				Exp: exp,
+			},
+		}
+	}
+	manager.nameServer[name] = answers
+}
+
+func (manager *FakeIPManager) GetNameRecord(name string) []net.IP {
+	current := time.Now()
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	result := []net.IP{}
+	if answers, ok := manager.nameServer[name]; ok {
+		for _, ans := range answers {
+			if current.Sub(ans.Exp) < 0 {
+				result = append(result, ans.IP)
+			}
+		}
+	}
+	return result
 }

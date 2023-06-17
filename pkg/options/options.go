@@ -32,6 +32,8 @@ var (
 	// rule script path
 	RuleScript  = ""
 	GeoipDbFile = ""
+	// name
+	Name = ""
 )
 
 func init() {
@@ -45,5 +47,6 @@ func init() {
 	flag.StringVar(&FakeRange, "p", "", "fake ip range")
 	flag.StringVar(&RuleScript, "r", "", "rule script")
 	flag.StringVar(&GeoipDbFile, "g", "", "geoip db file")
+	flag.StringVar(&Name, "name", "", "domain name to use, namespace must be set")
 	flag.Parse()
 }

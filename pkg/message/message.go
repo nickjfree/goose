@@ -49,6 +49,8 @@ type RoutingEntry struct {
 	Rtt int
 	// origin
 	Origin string
+	// name
+	Name string
 }
 
 // routing register msg
