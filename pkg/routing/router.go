@@ -547,7 +547,7 @@ func (r *Router) refreshRoutings() error {
 				entry.network.String(),
 				entry.port.String(),
 				entry.metric,
-				entry.rtt,
+				fmt.Sprintf("%d ms", entry.rtt),
 				entry.Name(),
 			})
 			if now.Sub(entry.updatedAt) > routingExpire {

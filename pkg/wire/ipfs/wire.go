@@ -305,7 +305,7 @@ type P2PHost struct {
 }
 
 func NewP2PHost() (*P2PHost, error) {
-	// crreate peer chan
+	// create peer chan
 	peerChan := make(chan peer.AddrInfo, 100)
 
 	// this is the callback for AutoRelay

@@ -24,6 +24,8 @@ func (manager *FakeIPManager) fakeDnsResponse(p *message.Packet) error {
 
 	packet := gopacket.NewPacket(p.Data, layers.LayerTypeIPv4, gopacket.Default)
 
+	modified := false
+
 	if ipLayer := packet.Layer(layers.LayerTypeIPv4); ipLayer != nil {
 		ip := ipLayer.(*layers.IPv4)
 		// must be udp packet
@@ -54,6 +56,7 @@ func (manager *FakeIPManager) fakeDnsResponse(p *message.Packet) error {
 						}
 						// replace anwser to fake ip
 						dns.Answers[i].IP = fakeIP
+						modified = true
 					}
 				}
 				// handle NXDomain
@@ -75,20 +78,23 @@ func (manager *FakeIPManager) fakeDnsResponse(p *message.Packet) error {
 							}
 							dns.ANCount = uint16(len(ips))
 							dns.ResponseCode = layers.DNSResponseCodeNoErr
+							modified = true
 						}
 					}
 				}
 				// serialize the modifyed packet
-				buffer := gopacket.NewSerializeBuffer()
-				options := gopacket.SerializeOptions{
-					ComputeChecksums: true,
-					FixLengths:       true,
+				if modified {
+					buffer := gopacket.NewSerializeBuffer()
+					options := gopacket.SerializeOptions{
+						ComputeChecksums: true,
+						FixLengths:       true,
+					}
+					udp.SetNetworkLayerForChecksum(ip)
+					if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
+						return errors.WithStack(err)
+					}
+					p.Data = buffer.Bytes()
 				}
-				udp.SetNetworkLayerForChecksum(ip)
-				if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
-					return errors.WithStack(err)
-				}
-				p.Data = buffer.Bytes()
 			}
 		}
 	}
