@@ -180,7 +180,7 @@ github.com/libp2p/go-cidranger/net
 # github.com/libp2p/go-flow-metrics v0.1.0
 ## explicit; go 1.17
 github.com/libp2p/go-flow-metrics
-# github.com/libp2p/go-libp2p v0.28.0
+# github.com/libp2p/go-libp2p v0.28.1
 ## explicit; go 1.19
 github.com/libp2p/go-libp2p
 github.com/libp2p/go-libp2p/config
