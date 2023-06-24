@@ -112,16 +112,22 @@ func (rt *RoutingTable) NPeersForCpl(cpl uint) int {
 	}
 }
 
-// UsefulPeer verifies whether the given peer.ID would be a good fit for the routing table
-// It returns true if the bucket corresponding to peer.ID isn't full, if it contains
-// replaceable peers or if it is the last bucket and adding a peer would unfold it.
-func (rt *RoutingTable) UsefulPeer(p peer.ID) bool {
+// UsefulNewPeer verifies whether the given peer.ID would be a good fit for the
+// routing table. It returns true if the peer isn't in the routing table yet, if
+// the bucket corresponding to peer.ID isn't full, if it contains replaceable
+// peers or if it is the last bucket and adding a peer would unfold it.
+func (rt *RoutingTable) UsefulNewPeer(p peer.ID) bool {
 	rt.tabLock.RLock()
 	defer rt.tabLock.RUnlock()
 
 	// bucket corresponding to p
 	bucketID := rt.bucketIdForPeer(p)
 	bucket := rt.buckets[bucketID]
+
+	if bucket.getPeer(p) != nil {
+		// peer already exists in the routing table, so it isn't useful
+		return false
+	}
 
 	// bucket isn't full
 	if bucket.len() < rt.bucketsize {
