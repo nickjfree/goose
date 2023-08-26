@@ -16,9 +16,9 @@ import (
 
 const (
 	// advertise node prefix
-	prefixGooseNode = "/goose/0.1.0/node"
+	prefixGooseNode = "/goose/0.2.0/node"
 	// advertise network prefix
-	prefixGooseNetwork = "/goose/0.1.0/network"
+	prefixGooseNetwork = "/goose/0.2.0/network"
 	// intervals
 	searchInterval = time.Second * 3600
 

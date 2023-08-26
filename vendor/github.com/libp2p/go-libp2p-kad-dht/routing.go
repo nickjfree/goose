@@ -13,7 +13,6 @@ import (
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/routing"
 	"go.opentelemetry.io/otel/attribute"
-	"go.opentelemetry.io/otel/codes"
 	"go.opentelemetry.io/otel/trace"
 
 	u "github.com/ipfs/boxo/util"
@@ -34,7 +33,7 @@ import (
 // PutValue adds value corresponding to given Key.
 // This is the top level "Store" operation of the DHT
 func (dht *IpfsDHT) PutValue(ctx context.Context, key string, value []byte, opts ...routing.Option) (err error) {
-	ctx, span := internal.StartSpan(ctx, "IpfsDHT.PutValue", trace.WithAttributes(attribute.String("Key", key)))
+	ctx, span := internal.StartSpan(ctx, "IpfsDHT.PutValue", trace.WithAttributes(internal.KeyAsAttribute("Key", key)))
 	defer span.End()
 
 	if !dht.enableValues {
@@ -109,7 +108,7 @@ type recvdVal struct {
 
 // GetValue searches for the value corresponding to given Key.
 func (dht *IpfsDHT) GetValue(ctx context.Context, key string, opts ...routing.Option) (_ []byte, err error) {
-	ctx, span := internal.StartSpan(ctx, "IpfsDHT.GetValue", trace.WithAttributes(attribute.String("Key", key)))
+	ctx, span := internal.StartSpan(ctx, "IpfsDHT.GetValue", trace.WithAttributes(internal.KeyAsAttribute("Key", key)))
 	defer span.End()
 
 	if !dht.enableValues {
@@ -146,7 +145,7 @@ func (dht *IpfsDHT) GetValue(ctx context.Context, key string, opts ...routing.Op
 
 // SearchValue searches for the value corresponding to given Key and streams the results.
 func (dht *IpfsDHT) SearchValue(ctx context.Context, key string, opts ...routing.Option) (<-chan []byte, error) {
-	ctx, span := internal.StartSpan(ctx, "IpfsDHT.SearchValue", trace.WithAttributes(attribute.String("Key", key)))
+	ctx, span := internal.StartSpan(ctx, "IpfsDHT.SearchValue", trace.WithAttributes(internal.KeyAsAttribute("Key", key)))
 	var good bool
 	defer func() {
 		if !good {
@@ -317,17 +316,11 @@ func (dht *IpfsDHT) getValues(ctx context.Context, key string, stopQuery chan st
 					ID:   p,
 				})
 
-				mctx, mspan := internal.StartSpan(ctx, "protoMessenger.GetValue", trace.WithAttributes(attribute.Stringer("peer", p)))
-				rec, peers, err := dht.protoMessenger.GetValue(mctx, p, key)
+				rec, peers, err := dht.protoMessenger.GetValue(ctx, p, key)
 				if err != nil {
-					if mspan.IsRecording() {
-						mspan.SetStatus(codes.Error, err.Error())
-					}
-					mspan.End()
 					logger.Debugf("error getting closer peers: %s", err)
 					return nil, err
 				}
-				mspan.End()
 
 				// For DHT query command
 				routing.PublishQueryEvent(ctx, &routing.QueryEvent{
@@ -584,16 +577,10 @@ func (dht *IpfsDHT) findProvidersAsyncRoutine(ctx context.Context, key multihash
 				ID:   p,
 			})
 
-			mctx, mspan := internal.StartSpan(ctx, "protoMessenger.GetProviders", trace.WithAttributes(attribute.Stringer("peer", p)))
-			provs, closest, err := dht.protoMessenger.GetProviders(mctx, p, key)
+			provs, closest, err := dht.protoMessenger.GetProviders(ctx, p, key)
 			if err != nil {
-				if mspan.IsRecording() {
-					mspan.SetStatus(codes.Error, err.Error())
-				}
-				mspan.End()
 				return nil, err
 			}
-			mspan.End()
 
 			logger.Debugf("%d provider entries", len(provs))
 
@@ -665,17 +652,11 @@ func (dht *IpfsDHT) FindPeer(ctx context.Context, id peer.ID) (_ peer.AddrInfo, 
 				ID:   p,
 			})
 
-			mctx, mspan := internal.StartSpan(ctx, "protoMessenger.GetClosestPeers", trace.WithAttributes(attribute.Stringer("peer", p)))
-			peers, err := dht.protoMessenger.GetClosestPeers(mctx, p, id)
+			peers, err := dht.protoMessenger.GetClosestPeers(ctx, p, id)
 			if err != nil {
-				if mspan.IsRecording() {
-					mspan.SetStatus(codes.Error, err.Error())
-				}
-				mspan.End()
 				logger.Debugf("error getting closer peers: %s", err)
 				return nil, err
 			}
-			mspan.End()
 
 			// For DHT query command
 			routing.PublishQueryEvent(ctx, &routing.QueryEvent{

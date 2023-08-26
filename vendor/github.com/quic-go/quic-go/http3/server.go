@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -23,16 +24,16 @@ import (
 
 // allows mocking of quic.Listen and quic.ListenAddr
 var (
-	quicListen     = quic.ListenEarly
-	quicListenAddr = quic.ListenAddrEarly
+	quicListen = func(conn net.PacketConn, tlsConf *tls.Config, config *quic.Config) (QUICEarlyListener, error) {
+		return quic.ListenEarly(conn, tlsConf, config)
+	}
+	quicListenAddr = func(addr string, tlsConf *tls.Config, config *quic.Config) (QUICEarlyListener, error) {
+		return quic.ListenAddrEarly(addr, tlsConf, config)
+	}
 )
 
-const (
-	// NextProtoH3Draft29 is the ALPN protocol negotiated during the TLS handshake, for QUIC draft 29.
-	NextProtoH3Draft29 = "h3-29"
-	// NextProtoH3 is the ALPN protocol negotiated during the TLS handshake, for QUIC v1 and v2.
-	NextProtoH3 = "h3"
-)
+// NextProtoH3 is the ALPN protocol negotiated during the TLS handshake, for QUIC v1 and v2.
+const NextProtoH3 = "h3"
 
 // StreamType is the stream type of a unidirectional stream.
 type StreamType uint64
@@ -44,13 +45,20 @@ const (
 	streamTypeQPACKDecoderStream = 3
 )
 
+// A QUICEarlyListener listens for incoming QUIC connections.
+type QUICEarlyListener interface {
+	Accept(context.Context) (quic.EarlyConnection, error)
+	Addr() net.Addr
+	io.Closer
+}
+
+var _ QUICEarlyListener = &quic.EarlyListener{}
+
 func versionToALPN(v protocol.VersionNumber) string {
 	//nolint:exhaustive // These are all the versions we care about.
 	switch v {
 	case protocol.Version1, protocol.Version2:
 		return NextProtoH3
-	case protocol.VersionDraft29:
-		return NextProtoH3Draft29
 	default:
 		return ""
 	}
@@ -165,7 +173,7 @@ type Server struct {
 
 	// EnableDatagrams enables support for HTTP/3 datagrams.
 	// If set to true, QuicConfig.EnableDatagram will be set.
-	// See https://datatracker.ietf.org/doc/html/draft-ietf-masque-h3-datagram-07.
+	// See https://datatracker.ietf.org/doc/html/rfc9297.
 	EnableDatagrams bool
 
 	// MaxHeaderBytes controls the maximum number of bytes the server will
@@ -193,7 +201,7 @@ type Server struct {
 	UniStreamHijacker func(StreamType, quic.Connection, quic.ReceiveStream, error) (hijacked bool)
 
 	mutex     sync.RWMutex
-	listeners map[*quic.EarlyListener]listenerInfo
+	listeners map[*QUICEarlyListener]listenerInfo
 
 	closed bool
 
@@ -249,13 +257,26 @@ func (s *Server) ServeQUICConn(conn quic.Connection) error {
 // Make sure you use http3.ConfigureTLSConfig to configure a tls.Config
 // and use it to construct a http3-friendly QUIC listener.
 // Closing the server does close the listener.
-func (s *Server) ServeListener(ln quic.EarlyListener) error {
+// ServeListener always returns a non-nil error. After Shutdown or Close, the returned error is http.ErrServerClosed.
+func (s *Server) ServeListener(ln QUICEarlyListener) error {
 	if err := s.addListener(&ln); err != nil {
 		return err
 	}
-	err := s.serveListener(ln)
-	s.removeListener(&ln)
-	return err
+	defer s.removeListener(&ln)
+	for {
+		conn, err := ln.Accept(context.Background())
+		if err == quic.ErrServerClosed {
+			return http.ErrServerClosed
+		}
+		if err != nil {
+			return err
+		}
+		go func() {
+			if err := s.handleConn(conn); err != nil {
+				s.logger.Debugf(err.Error())
+			}
+		}()
+	}
 }
 
 var errServerWithoutTLSConfig = errors.New("use of http3.Server without TLSConfig")
@@ -275,7 +296,7 @@ func (s *Server) serveConn(tlsConf *tls.Config, conn net.PacketConn) error {
 	baseConf := ConfigureTLSConfig(tlsConf)
 	quicConf := s.QuicConfig
 	if quicConf == nil {
-		quicConf = &quic.Config{Allow0RTT: func(net.Addr) bool { return true }}
+		quicConf = &quic.Config{Allow0RTT: true}
 	} else {
 		quicConf = s.QuicConfig.Clone()
 	}
@@ -283,7 +304,7 @@ func (s *Server) serveConn(tlsConf *tls.Config, conn net.PacketConn) error {
 		quicConf.EnableDatagrams = true
 	}
 
-	var ln quic.EarlyListener
+	var ln QUICEarlyListener
 	var err error
 	if conn == nil {
 		addr := s.Addr
@@ -297,26 +318,7 @@ func (s *Server) serveConn(tlsConf *tls.Config, conn net.PacketConn) error {
 	if err != nil {
 		return err
 	}
-	if err := s.addListener(&ln); err != nil {
-		return err
-	}
-	err = s.serveListener(ln)
-	s.removeListener(&ln)
-	return err
-}
-
-func (s *Server) serveListener(ln quic.EarlyListener) error {
-	for {
-		conn, err := ln.Accept(context.Background())
-		if err != nil {
-			return err
-		}
-		go func() {
-			if err := s.handleConn(conn); err != nil {
-				s.logger.Debugf(err.Error())
-			}
-		}()
-	}
+	return s.ServeListener(ln)
 }
 
 func extractPort(addr string) (int, error) {
@@ -391,7 +393,7 @@ func (s *Server) generateAltSvcHeader() {
 // We store a pointer to interface in the map set. This is safe because we only
 // call trackListener via Serve and can track+defer untrack the same pointer to
 // local variable there. We never need to compare a Listener from another caller.
-func (s *Server) addListener(l *quic.EarlyListener) error {
+func (s *Server) addListener(l *QUICEarlyListener) error {
 	s.mutex.Lock()
 	defer s.mutex.Unlock()
 
@@ -402,25 +404,24 @@ func (s *Server) addListener(l *quic.EarlyListener) error {
 		s.logger = utils.DefaultLogger.WithPrefix("server")
 	}
 	if s.listeners == nil {
-		s.listeners = make(map[*quic.EarlyListener]listenerInfo)
+		s.listeners = make(map[*QUICEarlyListener]listenerInfo)
 	}
 
 	if port, err := extractPort((*l).Addr().String()); err == nil {
 		s.listeners[l] = listenerInfo{port}
 	} else {
-		s.logger.Errorf(
-			"Unable to extract port from listener %+v, will not be announced using SetQuicHeaders: %s", err)
+		s.logger.Errorf("Unable to extract port from listener %+v, will not be announced using SetQuicHeaders: %s", err)
 		s.listeners[l] = listenerInfo{}
 	}
 	s.generateAltSvcHeader()
 	return nil
 }
 
-func (s *Server) removeListener(l *quic.EarlyListener) {
+func (s *Server) removeListener(l *QUICEarlyListener) {
 	s.mutex.Lock()
+	defer s.mutex.Unlock()
 	delete(s.listeners, l)
 	s.generateAltSvcHeader()
-	s.mutex.Unlock()
 }
 
 func (s *Server) handleConn(conn quic.Connection) error {
@@ -569,14 +570,22 @@ func (s *Server) handleRequest(conn quic.Connection, str quic.Stream, decoder *q
 	}
 	req, err := requestFromHeaders(hfs)
 	if err != nil {
-		// TODO: use the right error code
-		return newStreamError(ErrCodeGeneralProtocolError, err)
+		return newStreamError(ErrCodeMessageError, err)
 	}
 
-	connState := conn.ConnectionState().TLS.ConnectionState
+	connState := conn.ConnectionState().TLS
 	req.TLS = &connState
 	req.RemoteAddr = conn.RemoteAddr().String()
-	body := newRequestBody(newStream(str, onFrameError))
+
+	// Check that the client doesn't send more data in DATA frames than indicated by the Content-Length header (if set).
+	// See section 4.1.2 of RFC 9114.
+	var httpStr Stream
+	if _, ok := req.Header["Content-Length"]; ok && req.ContentLength >= 0 {
+		httpStr = newLengthLimitedStream(newStream(str, onFrameError), req.ContentLength)
+	} else {
+		httpStr = newStream(str, onFrameError)
+	}
+	body := newRequestBody(httpStr)
 	req.Body = body
 
 	if s.logger.Debug() {
@@ -590,7 +599,6 @@ func (s *Server) handleRequest(conn quic.Connection, str quic.Stream, decoder *q
 	ctx = context.WithValue(ctx, http.LocalAddrContextKey, conn.LocalAddr())
 	req = req.WithContext(ctx)
 	r := newResponseWriter(str, conn, s.logger)
-	defer r.Flush()
 	handler := s.Handler
 	if handler == nil {
 		handler = http.DefaultServeMux
@@ -618,10 +626,15 @@ func (s *Server) handleRequest(conn quic.Connection, str quic.Stream, decoder *q
 		return requestError{err: errHijacked}
 	}
 
-	if panicked {
-		r.WriteHeader(http.StatusInternalServerError)
-	} else {
-		r.WriteHeader(http.StatusOK)
+	// only write response when there is no panic
+	if !panicked {
+		// response not written to the client yet, set Content-Length
+		if !r.written {
+			if _, haveCL := r.header["Content-Length"]; !haveCL {
+				r.header.Set("Content-Length", strconv.FormatInt(r.numWritten, 10))
+			}
+		}
+		r.Flush()
 	}
 	// If the EOF was read by the handler, CancelRead() is a no-op.
 	str.CancelRead(quic.StreamErrorCode(ErrCodeNoError))
