@@ -64,7 +64,7 @@ github.com/golang/protobuf/proto
 github.com/google/gopacket
 github.com/google/gopacket/layers
 github.com/google/gopacket/routing
-# github.com/google/pprof v0.0.0-20230817174616-7a8ec2ada47b
+# github.com/google/pprof v0.0.0-20230821062121-407c9e7a662f
 ## explicit; go 1.19
 github.com/google/pprof/profile
 # github.com/google/uuid v1.3.1
@@ -148,7 +148,7 @@ github.com/jbenet/go-temp-err-catcher
 # github.com/jbenet/goprocess v0.1.4
 ## explicit; go 1.12
 github.com/jbenet/goprocess
-# github.com/jedib0t/go-pretty/v6 v6.4.6
+# github.com/jedib0t/go-pretty/v6 v6.4.7
 ## explicit; go 1.16
 github.com/jedib0t/go-pretty/v6/table
 github.com/jedib0t/go-pretty/v6/text
@@ -179,7 +179,7 @@ github.com/libp2p/go-cidranger/net
 # github.com/libp2p/go-flow-metrics v0.1.0
 ## explicit; go 1.17
 github.com/libp2p/go-flow-metrics
-# github.com/libp2p/go-libp2p v0.30.0
+# github.com/libp2p/go-libp2p v0.31.0
 ## explicit; go 1.20
 github.com/libp2p/go-libp2p
 github.com/libp2p/go-libp2p/config
@@ -249,8 +249,8 @@ github.com/libp2p/go-libp2p/p2p/transport/webtransport
 # github.com/libp2p/go-libp2p-asn-util v0.3.0
 ## explicit; go 1.19
 github.com/libp2p/go-libp2p-asn-util
-# github.com/libp2p/go-libp2p-kad-dht v0.25.0
-## explicit; go 1.19
+# github.com/libp2p/go-libp2p-kad-dht v0.25.1
+## explicit; go 1.20
 github.com/libp2p/go-libp2p-kad-dht
 github.com/libp2p/go-libp2p-kad-dht/internal
 github.com/libp2p/go-libp2p-kad-dht/internal/config
@@ -270,6 +270,9 @@ github.com/libp2p/go-libp2p-kbucket/peerdiversity
 ## explicit; go 1.17
 github.com/libp2p/go-libp2p-record
 github.com/libp2p/go-libp2p-record/pb
+# github.com/libp2p/go-libp2p-routing-helpers v0.7.2
+## explicit; go 1.20
+github.com/libp2p/go-libp2p-routing-helpers/tracing
 # github.com/libp2p/go-msgio v0.3.0
 ## explicit; go 1.18
 github.com/libp2p/go-msgio
@@ -398,20 +401,20 @@ github.com/polydawn/refmt/obj
 github.com/polydawn/refmt/obj/atlas
 github.com/polydawn/refmt/shared
 github.com/polydawn/refmt/tok
-# github.com/prometheus/client_golang v1.14.0
+# github.com/prometheus/client_golang v1.16.0
 ## explicit; go 1.17
 github.com/prometheus/client_golang/prometheus
 github.com/prometheus/client_golang/prometheus/internal
 # github.com/prometheus/client_model v0.4.0
 ## explicit; go 1.18
 github.com/prometheus/client_model/go
-# github.com/prometheus/common v0.42.0
+# github.com/prometheus/common v0.44.0
 ## explicit; go 1.18
 github.com/prometheus/common/expfmt
 github.com/prometheus/common/internal/bitbucket.org/ww/goautoneg
 github.com/prometheus/common/model
-# github.com/prometheus/procfs v0.9.0
-## explicit; go 1.18
+# github.com/prometheus/procfs v0.11.1
+## explicit; go 1.19
 github.com/prometheus/procfs
 github.com/prometheus/procfs/internal/fs
 github.com/prometheus/procfs/internal/util
@@ -625,7 +628,7 @@ gonum.org/v1/gonum/mathext
 gonum.org/v1/gonum/mathext/internal/amos
 gonum.org/v1/gonum/mathext/internal/cephes
 gonum.org/v1/gonum/mathext/internal/gonum
-# google.golang.org/protobuf v1.30.0
+# google.golang.org/protobuf v1.31.0
 ## explicit; go 1.11
 google.golang.org/protobuf/cmd/protoc-gen-go
 google.golang.org/protobuf/cmd/protoc-gen-go/internal_gengo
