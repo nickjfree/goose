@@ -34,6 +34,8 @@ var (
 	GeoipDbFile = ""
 	// name
 	Name = ""
+	// wireguard
+	WireguardConfig = ""
 )
 
 func init() {
@@ -48,5 +50,6 @@ func init() {
 	flag.StringVar(&RuleScript, "r", "", "rule script")
 	flag.StringVar(&GeoipDbFile, "g", "", "geoip db file")
 	flag.StringVar(&Name, "name", "", "domain name to use, namespace must be set")
+	flag.StringVar(&WireguardConfig, "wg", "", "wireguard config file")
 	flag.Parse()
 }

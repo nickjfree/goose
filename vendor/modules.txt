@@ -544,6 +544,7 @@ golang.org/x/crypto/curve25519/internal/field
 golang.org/x/crypto/hkdf
 golang.org/x/crypto/internal/alias
 golang.org/x/crypto/internal/poly1305
+golang.org/x/crypto/poly1305
 golang.org/x/crypto/salsa20/salsa
 golang.org/x/crypto/sha3
 # golang.org/x/exp v0.0.0-20230817173708-d852ddb80c63
@@ -629,7 +630,13 @@ golang.zx2c4.com/wintun
 ## explicit; go 1.20
 golang.zx2c4.com/wireguard/conn
 golang.zx2c4.com/wireguard/conn/winrio
+golang.zx2c4.com/wireguard/device
+golang.zx2c4.com/wireguard/ipc
+golang.zx2c4.com/wireguard/ipc/namedpipe
+golang.zx2c4.com/wireguard/ratelimiter
+golang.zx2c4.com/wireguard/replay
 golang.zx2c4.com/wireguard/rwcancel
+golang.zx2c4.com/wireguard/tai64n
 golang.zx2c4.com/wireguard/tun
 # gonum.org/v1/gonum v0.13.0
 ## explicit; go 1.18

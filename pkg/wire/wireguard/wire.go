@@ -6,13 +6,12 @@ import (
 	"github.com/nickjfree/goose/pkg/wire"
 	"github.com/pkg/errors"
 	"github.com/songgao/water/waterutil"
+	"golang.zx2c4.com/wireguard/conn"
+	"golang.zx2c4.com/wireguard/device"
 	"golang.zx2c4.com/wireguard/tun"
 	"log"
 	"net"
 	"os"
-	"strconv"
-	"strings"
-	"sync"
 	"sync/atomic"
 	"time"
 )
@@ -28,7 +27,7 @@ var (
 	wgWireManager *WGWireManager
 )
 
-// register ipfs wire manager
+// register wireguard wire manager
 func init() {
 	wgWireManager = newWGWireManager()
 	wire.RegisterWireManager(wgWireManager)
@@ -45,7 +44,33 @@ func newWGWireManager() *WGWireManager {
 	}
 }
 
+// create a wireguard server then register it as a goose wire
 func (m *WGWireManager) Dial(endpoint string) error {
+
+	// create a goose tun device
+	w, err := NewTunDevice()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	// create wireguard device
+	dev := device.NewDevice(w, conn.NewDefaultBind(), device.NewLogger(device.LogLevelError, ""))
+	// set configuration from file
+	config, err := convertToConfigProtocol(endpoint)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	logger.Printf("setting up wireguard:\n%s", config.Protocol)
+	if err := dev.IpcSet(config.Protocol); err != nil {
+		return errors.WithStack(err)
+	}
+	if err := dev.Up(); err != nil {
+		return errors.WithStack(err)
+	}
+	// set dev
+	w.dev = dev
+	// set config
+	w.config = config
+	m.Out <- w
 	return nil
 }
 
@@ -57,48 +82,40 @@ func (m *WGWireManager) Protocol() string {
 type TunDevice struct {
 	// base
 	wire.BaseWire
+	// config
+	config *Config
 	// address
 	address net.IP
-	// port
-	port int
+	// wireguard device
+	dev *device.Device
+	// event chan
+	events chan tun.Event
 	// output chan
 	outBuffer chan []byte
 	// input chan
 	inBuffer chan []byte
-	// known client networks
-	networks []net.IPNet
 	// update routing flag
-	updateRouting atomic.Bool
+	updateRouting chan struct{}
 	// close state
-	close sync.Once
-	done  chan struct{}
+	closed atomic.Bool
+	done   chan struct{}
 }
 
-func NewTunDevice(addr string) (wire.Wire, error) {
-	// get listen address and port
-	parts := strings.Split(addr, ":")
-	if len(parts) != 2 {
-		return nil, errors.Errorf("invalid wireguard listen address %s", addr)
+func NewTunDevice() (*TunDevice, error) {
+	t := &TunDevice{
+		outBuffer:     make(chan []byte, tun_buffer_size),
+		inBuffer:      make(chan []byte, tun_buffer_size),
+		events:        make(chan tun.Event),
+		updateRouting: make(chan struct{}),
+		address:       net.ParseIP("0.0.0.0"),
+		done:          make(chan struct{}),
 	}
-	address, _, err := net.ParseCIDR(parts[0])
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	port, err := strconv.Atoi(parts[1])
-	if err != nil {
-		return nil, errors.WithStack(err)
-	}
-	return &TunDevice{
-		outBuffer: make(chan []byte, tun_buffer_size),
-		inBuffer:  make(chan []byte, tun_buffer_size),
-		address:   address,
-		port:      port,
-		done:      make(chan struct{}),
-	}, nil
+	go t.loop()
+	return t, nil
 }
 
 func (t *TunDevice) Endpoint() string {
-	return fmt.Sprintf("wireguard/%s/%d", t.address.String(), t.port)
+	return fmt.Sprintf("wireguard/%s/%d", t.address.String(), t.config.ListenPort)
 }
 
 func (t *TunDevice) Address() net.IP {
@@ -130,28 +147,6 @@ func (t *TunDevice) Encode(msg *message.Message) error {
 
 // Decode
 func (t *TunDevice) Decode(msg *message.Message) error {
-
-	// read a routing message
-	if t.updateRouting.CompareAndSwap(true, false) {
-		routing := message.Routing{
-			Type:     message.MessageTypeRouting,
-			Routings: []message.RoutingEntry{},
-		}
-		for _, network := range t.networks {
-			routing.Routings = append(routing.Routings, message.RoutingEntry{
-				Network: network,
-				// local net, metric is always 0
-				Metric: 0,
-				Rtt:    0,
-				Origin: "",
-				Name:   "",
-			})
-		}
-		msg.Payload = routing
-		msg.Type = message.MessageTypeRouting
-		t.updateRouting.Store(false)
-		return nil
-	}
 	// read packet
 	if err := t.readPacket(msg); err != nil {
 		return err
@@ -161,20 +156,43 @@ func (t *TunDevice) Decode(msg *message.Message) error {
 
 func (t *TunDevice) readPacket(msg *message.Message) error {
 	for {
-		buff, ok := <-t.inBuffer
-		if !ok {
-			return errors.Errorf(error_tun_closed, t.Endpoint())
-		}
-		if !waterutil.IsIPv4(buff) {
-			continue
-		} else {
-			msg.Type = message.MessageTypePacket
-			msg.Payload = message.Packet{
-				Src:  waterutil.IPv4Source(buff),
-				Dst:  waterutil.IPv4Destination(buff),
-				TTL:  message.PacketTTL,
-				Data: buff,
+		select {
+		case buff, ok := <-t.inBuffer:
+			if !ok {
+				return errors.Errorf(error_tun_closed, t.Endpoint())
 			}
+			if !waterutil.IsIPv4(buff) {
+				continue
+			} else {
+				msg.Type = message.MessageTypePacket
+				msg.Payload = message.Packet{
+					Src:  waterutil.IPv4Source(buff),
+					Dst:  waterutil.IPv4Destination(buff),
+					TTL:  message.PacketTTL,
+					Data: buff,
+				}
+				return nil
+			}
+		case _, ok := <-t.updateRouting:
+			if !ok {
+				return errors.Errorf(error_tun_closed, t.Endpoint())
+			}
+			routing := message.Routing{
+				Type:     message.MessageTypeRouting,
+				Routings: []message.RoutingEntry{},
+			}
+			for _, network := range t.config.AllowedIPs {
+				routing.Routings = append(routing.Routings, message.RoutingEntry{
+					Network: network,
+					// local net, metric is always 0
+					Metric: 0,
+					Rtt:    0,
+					Origin: "",
+					Name:   "",
+				})
+			}
+			msg.Payload = routing
+			msg.Type = message.MessageTypeRouting
 			return nil
 		}
 	}
@@ -201,25 +219,30 @@ func (t *TunDevice) writePacket(msg *message.Message) error {
 func (t *TunDevice) loop() {
 
 	ticker := time.NewTicker(30 * time.Second)
-	ticker.Stop()
+	defer ticker.Stop()
 	for {
 		select {
 		case <-t.done:
 			logger.Printf(error_tun_closed, t.Endpoint())
 			return
 		case <-ticker.C:
-			t.updateRouting.Store(true)
+			select {
+			case t.updateRouting <- struct{}{}:
+			default:
+			}
 		}
 	}
 }
 
 func (t *TunDevice) Close() error {
-	t.close.Do(func() {
+	if t.closed.CompareAndSwap(false, true) {
 		close(t.outBuffer)
 		close(t.inBuffer)
+		close(t.updateRouting)
+		close(t.events)
 		close(t.done)
-		// TODO: stop the device
-	})
+		t.dev.Close()
+	}
 	return nil
 }
 
@@ -236,8 +259,7 @@ func (t *TunDevice) MTU() (int, error) {
 }
 
 func (t *TunDevice) Events() <-chan tun.Event {
-	// TODO: make real events
-	return make(chan tun.Event)
+	return t.events
 }
 
 func (t *TunDevice) BatchSize() int {

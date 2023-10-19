@@ -43,9 +43,15 @@ func main() {
 
 	r := routing.NewRouter(options.LocalAddr, opts...)
 
-	// connct to tunnel and peers
+	// create the tun device
 	tunnel := fmt.Sprintf("tun/%s/%s", "goose", options.LocalAddr)
 	r.Dial(tunnel)
+	// create a wireguard listener if enabled
+	if options.WireguardConfig != "" {
+		wireguard := fmt.Sprintf("wireguard/%s", options.WireguardConfig)
+		r.Dial(wireguard)
+	}
+	// connect to peers
 	if options.Endpoints != "" {
 		addrs := strings.Split(options.Endpoints, ",")
 		for _, endpoint := range addrs {

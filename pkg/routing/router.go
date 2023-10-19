@@ -401,7 +401,7 @@ func (r *Router) handleRouting(p *Port) error {
 			r.lock.Unlock()
 			if ok {
 				diff := time.Now().Sub(state.updatedAt)
-				if diff > time.Second*300 {
+				if diff > idleTimeout {
 					return errors.Errorf("port(%s) idle closed", p)
 				}
 			} else {
