@@ -1,79 +1,225 @@
 
-
-<!-- ABOUT THE PROJECT -->
 <h2 align="center">
 # Decentralized Tunnel Network - Goose
+
 
 [![Build](https://github.com/nickjfree/goose/actions/workflows/build.yml/badge.svg)](https://github.com/nickjfree/goose/actions/workflows/build.yml/badge.svg)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nickjfree/goose)](https://goreportcard.com/report/github.com/nickjfree/goose)
 
 </h2>
 
-Welcome to Goose, a decentralized tunnel network built on top of libp2p. With Goose, every node is both a client and server, meaning there's no need for a specific server. This makes it easier to establish connections between nodes.
-  
-    
 
 
-## Architecture
-Here's how Goose works:
-![How it works][arch]
+## Features
 
-<!-- GETTING STARTED -->
-## Getting Started
+- **QUIC and libp2p**: Leverages the speed and security of the QUIC protocol, built on top of the libp2p networking stack. This provides a robust and efficient transport layer.
 
-### Connecting to each other
+- **Config-Free Node Discovery**: Eliminates the need for manual configuration by automatically discovering peers in the network. It uses the libp2p network and is bootstrapped via the IPFS network, making the setup hassle-free.
 
-Nodes connect to each other automatically if they are started with the same namespace. Assuming you have two hosts, A and B, that are located in different LANs, you can connect them using Goose. First, start `node A` with the virtual address `192.168.0.3` on host A:
+- **Protocol Support**: Offers flexibility by supporting multiple protocols, including QUIC and WireGuard. This allows users to choose the protocol that best suits their needs.
 
+- **Virtual Private Network**: Creates a virtual network interface named `goose`, enabling secure and private communication channels over the internet.
+
+- **Fake-IP**:  Utilizes the `fake-ip` method to selectively route traffic either through the secure tunnel interface or directly to the real network interface. This feature allows for more granular control over traffic routing. Users can write custom scripts to handle the selection of routing, making it highly customizable.
+
+
+## Usage
+
+Run the following command to see the available options:
+
+```bash
+goose -h
+Usage of goose:
+  -e string
+
+        comma separated remote endpoints.
+        eg. ipfs/QmVCVa7RfutQDjvUYTejMyVLMMF5xYAM1mEddDVwMmdLf4,ipfs/QmYXWTQ1jTZ3ZEXssCyBHMh4H4HqLPez5dhpqkZbSJjh7r
+
+  -f string
+        forward networks, comma separated CIDRs
+  -g string
+        geoip db file
+  -l string
+
+        virtual ip address to use in CIDR format.
+        local ipv4 address to set on the tunnel interface.
+         (default "192.168.32.166/24")
+  -n string
+        namespace
+  -name string
+        domain name to use, namespace must be set
+  -p string
+        fake ip range
+  -r string
+        rule script
+  -wg string
+        wireguard config file
 ```
-goose -n name1 -l 192.168.0.3/24
-```
-Then, start `node B` with the virtual address `192.168.0.4` on host B:
-```
-goose -n name1 -l 192.168.0.4/24
-```
 
-Now, both nodes are connected to each other within the same virtual network `192.168.0.0/24`.
 
-To ping `node B` from host A:
-```
-ping 192.168.0.4
-PING 192.168.0.4 (192.168.0.4) 56(84) bytes of data.
-64 bytes from 192.168.0.4: icmp_seq=1 ttl=63 time=188 ms
-64 bytes from 192.168.0.4: icmp_seq=2 ttl=63 time=206 ms
-64 bytes from 192.168.0.4: icmp_seq=3 ttl=63 time=748 ms
-64 bytes from 192.168.0.42: icmp_seq=4 ttl=63 time=562 ms
+## Examples
+
+### Simple Connection
+
+1. On Computer A, run:
+
+```bash
+    goose -n my-network -name a
 ```
 
-### Forwarding to Real Networks
+2. On Computer B, run:
 
-If nodes only communicate under their virtual networks, it's not very useful. To enable communication with real networks, you can run `node B` with the `-f` argument:
-
+```bash
+    goose -n my-network -name b
 ```
-goose -n test -l 192.168.0.4/24 -f 10.1.1.0/24
+
+3. After a few minutes, they will connect. You can ping B from A using:
+
+```bash
+ping a.my-network
+
+64 bytes from a.goose.my-network(192.168.0.4): icmp_seq=1 ttl=63 time=188 ms
+64 bytes from a.goose.my-network(192.168.0.4): icmp_seq=2 ttl=63 time=206 ms
+64 bytes from a.goose.my-network(192.168.0.4): icmp_seq=3 ttl=63 time=748 ms
+64 bytes from a.goose.my-network(192.168.0.4): icmp_seq=4 ttl=63 time=562 ms
 ```
-After this, processes on host A can communicate with any host under `10.1.1.0/24`.
 
-To ping some host  in `10.1.1.0/24`:
+### Network Forwarding
+
+1. Assume Computer A is connected to a private network `10.1.1.0/24`.
+
+2. On Computer A, run:
+
+```bash
+    goose -n my-network -name a -f 10.1.1.0/24
 ```
-ping 10.1.1.3
-PING 10.1.1.3 (10.1.1.3) 56(84) bytes of data.
-64 bytes from 10.1.1.3: icmp_seq=1 ttl=63 time=188 ms
-64 bytes from 10.1.1.3: icmp_seq=2 ttl=63 time=206 ms
-64 bytes from 10.1.1.3: icmp_seq=3 ttl=63 time=748 ms
-64 bytes from 10.1.1.3: icmp_seq=4 ttl=63 time=562 ms
+
+3. On Computer B, run:
+
+```bash
+    goose -n my-network -name b
 ```
-[arch]: images/arch.png
 
-## What You Can Do With It
+4. Now you can access any host in `10.1.1.0/24` from Computer B using:
 
-Goose can be used for various purposes such as:
+```bash
+ping 10.1.1.1
 
--   Creating a private network for IoT devices
--   Setting up a virtual private network (VPN)
--   Establishing a secure, private communication channel between remote teams
--   Creating a private gaming network
--   Enabling secure communication between multiple devices within a smart home ecosystem
+64 bytes from 10.1.1.1: icmp_seq=1 ttl=63 time=188 ms
+64 bytes from 10.1.1.1: icmp_seq=2 ttl=63 time=206 ms
+64 bytes from 10.1.1.1: icmp_seq=3 ttl=63 time=748 ms
+64 bytes from 10.1.1.1: icmp_seq=4 ttl=63 time=562 ms
+```
 
+### Fake-IP Example
 
-The possibilities are endless, and Goose provides a flexible and powerful platform for building decentralized, secure networks for a wide range of use cases.
+1. On Computer A, run:
+
+```bash
+    goose -n my-network -name a -f 0.0.0.0/0
+```
+
+2. On Computer B:
+
+####  Custom Script for Routing (Optional)
+
+Use `rule.js` to define custom routing rules.
+
+The custom script must define a `matchDomain(domain)` function. Any traffic that matches the criteria set in this function will bypass the tunnel and be routed directly to the real network interface.
+
+The scripts should be written in ES5
+
+Here's an example:
+
+```javascript
+// rule.js
+var filters = ['baidu', 'shifen', 'csdn', 'qq', 'libp2p'];
+var filterRegions = ['CN'];
+
+function isIPv4(str) {
+  var ipv4Regex = /^(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.(25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)$/;
+  return ipv4Regex.test(str);
+}
+
+// Define the main function to match a domain
+function matchDomain(domain) {
+  if (isIPv4(domain)) {
+    var country = getCountry(domain); 
+    return filterRegions.indexOf(country) !== -1
+  }
+  else if (filters.some(function(name) {
+    return domain.indexOf(name) !== -1;
+  })) {
+    return true;
+  }
+  return false;
+}
+```
+Run the following command to apply the custom rules:
+
+```bash
+goose -n my-network -name b -g geoip-country.mmdb -r rule.js -p 11.0.0.0/16
+```
+Testing
+
+```bash
+ping www.google.com
+
+PING www.google.com (11.0.0.133) 56(84) bytes of data.
+64 bytes from 10.0.0.133 (10.0.0.133): icmp_seq=1 ttl=59 time=188 ms
+64 bytes from 10.0.0.133 (10.0.0.133): icmp_seq=2 ttl=59 time=189 ms
+64 bytes from 10.0.0.133 (10.0.0.133): icmp_seq=3 ttl=59 time=188 ms
+64 bytes from 10.0.0.133 (10.0.0.133): icmp_seq=4 ttl=59 time=188 ms
+
+ping www.baidu.com
+
+PING www.wshifen.com (104.193.88.123) 56(84) bytes of data.
+64 bytes from 104.193.88.123 (104.193.88.123): icmp_seq=1 ttl=50 time=150 ms
+64 bytes from 104.193.88.123 (104.193.88.123): icmp_seq=2 ttl=50 time=149 ms
+64 bytes from 104.193.88.123 (104.193.88.123): icmp_seq=3 ttl=50 time=149 ms
+```
+
+### WireGuard Example
+
+WireGuard is a modern, secure, and fast VPN tunnel that aims to be easy to use and lean.
+
+#### Example WireGuard Config File
+
+Below is an example of a WireGuard configuration file that can be used with Goose:
+
+```bash
+[Interface]
+PrivateKey = mIz7fpuVMc4p1S3e3D4sifkq1fGtgzRJs/kgcuYARWE=
+ListenPort = 51820
+
+[Peer]  
+PublicKey = CdjruGQqzRC5zUUQEPNjXRPlbmj5t/C0VzF+g93wGkM=
+AllowedIPs = 10.0.0.1/32
+PersistentKeepalive = 25
+
+PublicKey = x0BPthZpWvmt+KagQgX1zdCQtAHi1Rv6PhcHkOb1cjA=
+AllowedIPs = 10.0.0.2/32
+PersistentKeepalive = 25
+
+PublicKey = CNx+uklxUet6JQASvh315s1zKqsXh8n1sm3PYUNgeiU=
+AllowedIPs = 10.0.0.3/32
+PersistentKeepalive = 25
+```
+
+#### Running the WireGuard Command
+
+To integrate WireGuard with Goose, run the following command:
+
+```bash
+goose -n my-network -name a -wg /etc/wg.conf
+```
+
+This command does the following:
+
+- `-n my-network`: Specifies the virtual network name as `my-network`.
+- `-name a`: Sets the node name to `a`.
+- `-wg /etc/wg.conf`: Points to the WireGuard configuration file located at `/etc/wg.conf`.
+
+#### Connecting to the Virtual Network
+
+After running this command, you can connect to the virtual `my-network` using any WireGuard client implementation.
