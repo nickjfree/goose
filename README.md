@@ -12,8 +12,6 @@
 
 ## Features
 
-- **QUIC and libp2p**: Leverages the speed and security of the QUIC protocol, built on top of the libp2p networking stack. This provides a robust and efficient transport layer.
-
 - **Config-Free Node Discovery**: Eliminates the need for manual configuration by automatically discovering peers in the network. It uses the libp2p network and is bootstrapped via the IPFS network, making the setup hassle-free.
 
 - **Protocol Support**: Offers flexibility by supporting multiple protocols, including QUIC and WireGuard. This allows users to choose the protocol that best suits their needs.
@@ -160,6 +158,10 @@ Run the following command to apply the custom rules:
 ```bash
 goose -n my-network -name b -g geoip-country.mmdb -r rule.js -p 11.0.0.0/16
 ```
+
+Explanation: This command applies the custom routing rules defined in rule.js and sets up a fake-ip range of 11.0.0.0/16.
+
+
 Testing
 
 ```bash
