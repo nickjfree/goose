@@ -210,10 +210,9 @@ func (t *TunDevice) writePacket(msg *message.Message) error {
 	select {
 	case <-t.done:
 		return errors.Errorf(error_tun_closed, t.Endpoint())
-	default:
-		t.outBuffer <- packet.Data
+	case t.outBuffer <- packet.Data:
+		return nil
 	}
-	return nil
 }
 
 func (t *TunDevice) loop() {
@@ -236,9 +235,6 @@ func (t *TunDevice) loop() {
 
 func (t *TunDevice) Close() error {
 	if t.closed.CompareAndSwap(false, true) {
-		close(t.outBuffer)
-		close(t.inBuffer)
-		close(t.updateRouting)
 		close(t.events)
 		close(t.done)
 		t.dev.Close()
@@ -292,8 +288,7 @@ func (t *TunDevice) Write(bufs [][]byte, offset int) (int, error) {
 	select {
 	case <-t.done:
 		return 0, errors.Errorf(error_tun_closed, t.Endpoint())
-	default:
-		t.inBuffer <- buf
+	case t.inBuffer <- buf:
+		return 1, nil
 	}
-	return 1, nil
 }
