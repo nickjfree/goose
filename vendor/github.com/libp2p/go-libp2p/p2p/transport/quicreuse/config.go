@@ -20,6 +20,4 @@ var quicConfig = &quic.Config{
 	Versions:        []quic.VersionNumber{quic.Version1},
 	// We don't use datagrams (yet), but this is necessary for WebTransport
 	EnableDatagrams: true,
-	// The multiaddress encodes the QUIC version, thus there's no need to send Version Negotiation packets.
-	DisableVersionNegotiationPackets: true,
 }

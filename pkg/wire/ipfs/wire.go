@@ -140,7 +140,7 @@ func (w *IPFSWire) Encode(msg *message.Message) error {
 		if err != nil {
 			return err
 		}
-		if err := w.conn.SendMessage(buf); err != nil {
+		if err := w.conn.SendDatagram(buf); err != nil {
 			return errors.WithStack(err)
 		}
 	}
@@ -149,7 +149,7 @@ func (w *IPFSWire) Encode(msg *message.Message) error {
 
 // Decode
 func (w *IPFSWire) Decode(msg *message.Message) error {
-	buf, err := w.conn.ReceiveMessage(context.Background())
+	buf, err := w.conn.ReceiveDatagram(context.Background())
 	if err != nil {
 		return errors.WithStack(err)
 	}

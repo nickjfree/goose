@@ -1,4 +1,6 @@
-//go:build windows
+// riscv64 see: https://github.com/marten-seemann/tcp/pull/1
+
+//go:build windows || riscv64
 
 package tcp
 

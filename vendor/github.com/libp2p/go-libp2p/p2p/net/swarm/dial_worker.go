@@ -8,8 +8,10 @@ import (
 
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
+	tpt "github.com/libp2p/go-libp2p/core/transport"
 
 	ma "github.com/multiformats/go-multiaddr"
+	manet "github.com/multiformats/go-multiaddr/net"
 )
 
 // dialRequest is structure used to request dials to the peer associated with a
@@ -62,6 +64,8 @@ type addrDial struct {
 	createdAt time.Time
 	// dialRankingDelay is the delay in dialing this address introduced by the ranking logic
 	dialRankingDelay time.Duration
+	// expectedTCPUpgradeTime is the expected time by which security upgrade will complete
+	expectedTCPUpgradeTime time.Time
 }
 
 // dialWorker synchronises concurrent dials to a peer. It ensures that we make at most one dial to a
@@ -77,7 +81,7 @@ type dialWorker struct {
 	// we dial an address at most once
 	trackedDials map[string]*addrDial
 	// resch is used to receive response for dials to the peers addresses.
-	resch chan dialResult
+	resch chan tpt.DialUpdate
 
 	connected bool // true when a connection has been successfully established
 
@@ -96,7 +100,7 @@ func newDialWorker(s *Swarm, p peer.ID, reqch <-chan dialRequest, cl Clock) *dia
 		reqch:           reqch,
 		pendingRequests: make(map[*pendRequest]struct{}),
 		trackedDials:    make(map[string]*addrDial),
-		resch:           make(chan dialResult),
+		resch:           make(chan tpt.DialUpdate),
 		cl:              cl,
 	}
 }
@@ -123,12 +127,18 @@ func (w *dialWorker) loop() {
 			<-dialTimer.Ch()
 		}
 		timerRunning = false
-		if dq.len() > 0 {
+		if dq.Len() > 0 {
 			if dialsInFlight == 0 && !w.connected {
 				// if there are no dials in flight, trigger the next dials immediately
 				dialTimer.Reset(startTime)
 			} else {
-				dialTimer.Reset(startTime.Add(dq.top().Delay))
+				resetTime := startTime.Add(dq.top().Delay)
+				for _, ad := range w.trackedDials {
+					if !ad.expectedTCPUpgradeTime.IsZero() && ad.expectedTCPUpgradeTime.After(resetTime) {
+						resetTime = ad.expectedTCPUpgradeTime
+					}
+				}
+				dialTimer.Reset(resetTime)
 			}
 			timerRunning = true
 		}
@@ -159,9 +169,9 @@ loop:
 			// Enqueue the peer's addresses relevant to this request in dq and
 			// track dials to the addresses relevant to this request.
 
-			c, err := w.s.bestAcceptableConnToPeer(req.ctx, w.peer)
-			if c != nil || err != nil {
-				req.resch <- dialResponse{conn: c, err: err}
+			c := w.s.bestAcceptableConnToPeer(req.ctx, w.peer)
+			if c != nil {
+				req.resch <- dialResponse{conn: c}
 				continue loop
 			}
 
@@ -303,16 +313,29 @@ loop:
 			// Update all requests waiting on this address. On success, complete the request.
 			// On error, record the error
 
-			dialsInFlight--
 			ad, ok := w.trackedDials[string(res.Addr.Bytes())]
 			if !ok {
 				log.Errorf("SWARM BUG: no entry for address %s in trackedDials", res.Addr)
 				if res.Conn != nil {
 					res.Conn.Close()
 				}
+				dialsInFlight--
 				continue
 			}
 
+			// TCP Connection has been established. Wait for connection upgrade on this address
+			// before making new dials.
+			if res.Kind == tpt.UpdateKindHandshakeProgressed {
+				// Only wait for public addresses to complete dialing since private dials
+				// are quick any way
+				if manet.IsPublicAddr(res.Addr) {
+					ad.expectedTCPUpgradeTime = w.cl.Now().Add(PublicTCPDelay)
+				}
+				scheduleNextDial()
+				continue
+			}
+			dialsInFlight--
+			ad.expectedTCPUpgradeTime = time.Time{}
 			if res.Conn != nil {
 				// we got a connection, add it to the swarm
 				conn, err := w.s.addConn(res.Conn, network.DirOutbound)
@@ -373,7 +396,7 @@ func (w *dialWorker) dispatchError(ad *addrDial, err error) {
 				// all addrs have erred, dispatch dial error
 				// but first do a last one check in case an acceptable connection has landed from
 				// a simultaneous dial that started later and added new acceptable addrs
-				c, _ := w.s.bestAcceptableConnToPeer(pr.req.ctx, w.peer)
+				c := w.s.bestAcceptableConnToPeer(pr.req.ctx, w.peer)
 				if c != nil {
 					pr.req.resch <- dialResponse{conn: c}
 				} else {
@@ -417,7 +440,7 @@ func newDialQueue() *dialQueue {
 // Add adds adelay to the queue. If another element exists in the queue with
 // the same address, it replaces that element.
 func (dq *dialQueue) Add(adelay network.AddrDelay) {
-	for i := 0; i < dq.len(); i++ {
+	for i := 0; i < dq.Len(); i++ {
 		if dq.q[i].Addr.Equal(adelay.Addr) {
 			if dq.q[i].Delay == adelay.Delay {
 				// existing element is the same. nothing to do
@@ -430,7 +453,7 @@ func (dq *dialQueue) Add(adelay network.AddrDelay) {
 		}
 	}
 
-	for i := 0; i < dq.len(); i++ {
+	for i := 0; i < dq.Len(); i++ {
 		if dq.q[i].Delay > adelay.Delay {
 			dq.q = append(dq.q, network.AddrDelay{}) // extend the slice
 			copy(dq.q[i+1:], dq.q[i:])
@@ -443,13 +466,13 @@ func (dq *dialQueue) Add(adelay network.AddrDelay) {
 
 // NextBatch returns all the elements in the queue with the highest priority
 func (dq *dialQueue) NextBatch() []network.AddrDelay {
-	if dq.len() == 0 {
+	if dq.Len() == 0 {
 		return nil
 	}
 
 	// i is the index of the second highest priority element
 	var i int
-	for i = 0; i < dq.len(); i++ {
+	for i = 0; i < dq.Len(); i++ {
 		if dq.q[i].Delay != dq.q[0].Delay {
 			break
 		}
@@ -464,7 +487,7 @@ func (dq *dialQueue) top() network.AddrDelay {
 	return dq.q[0]
 }
 
-// len returns the number of elements in the queue
-func (dq *dialQueue) len() int {
+// Len returns the number of elements in the queue
+func (dq *dialQueue) Len() int {
 	return len(dq.q)
 }

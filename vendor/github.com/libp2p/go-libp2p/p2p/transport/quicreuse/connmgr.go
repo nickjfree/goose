@@ -25,8 +25,8 @@ type ConnManager struct {
 	quicListenersMu sync.Mutex
 	quicListeners   map[string]quicListenerEntry
 
-	srk quic.StatelessResetKey
-	mt  *metricsTracer
+	srk      quic.StatelessResetKey
+	tokenKey quic.TokenGeneratorKey
 }
 
 type quicListenerEntry struct {
@@ -34,11 +34,12 @@ type quicListenerEntry struct {
 	ln       *quicListener
 }
 
-func NewConnManager(statelessResetKey quic.StatelessResetKey, opts ...Option) (*ConnManager, error) {
+func NewConnManager(statelessResetKey quic.StatelessResetKey, tokenKey quic.TokenGeneratorKey, opts ...Option) (*ConnManager, error) {
 	cm := &ConnManager{
 		enableReuseport: true,
 		quicListeners:   make(map[string]quicListenerEntry),
 		srk:             statelessResetKey,
+		tokenKey:        tokenKey,
 	}
 	for _, o := range opts {
 		if err := o(cm); err != nil {
@@ -48,26 +49,20 @@ func NewConnManager(statelessResetKey quic.StatelessResetKey, opts ...Option) (*
 
 	quicConf := quicConfig.Clone()
 
-	if cm.enableMetrics {
-		cm.mt = newMetricsTracer()
-	}
-	quicConf.Tracer = func(ctx context.Context, p quiclogging.Perspective, ci quic.ConnectionID) quiclogging.ConnectionTracer {
-		tracers := make([]quiclogging.ConnectionTracer, 0, 2)
+	quicConf.Tracer = func(ctx context.Context, p quiclogging.Perspective, ci quic.ConnectionID) *quiclogging.ConnectionTracer {
+		var tracer *quiclogging.ConnectionTracer
 		if qlogTracerDir != "" {
-			tracers = append(tracers, qloggerForDir(qlogTracerDir, p, ci))
+			tracer = qloggerForDir(qlogTracerDir, p, ci)
 		}
-		if cm.mt != nil {
-			tracers = append(tracers, cm.mt.TracerForConnection(ctx, p, ci))
-		}
-		return quiclogging.NewMultiplexedConnectionTracer(tracers...)
+		return tracer
 	}
 	serverConfig := quicConf.Clone()
 
 	cm.clientConfig = quicConf
 	cm.serverConfig = serverConfig
 	if cm.enableReuseport {
-		cm.reuseUDP4 = newReuse(&statelessResetKey, cm.mt)
-		cm.reuseUDP6 = newReuse(&statelessResetKey, cm.mt)
+		cm.reuseUDP4 = newReuse(&statelessResetKey, &tokenKey)
+		cm.reuseUDP6 = newReuse(&statelessResetKey, &tokenKey)
 	}
 	return cm, nil
 }
@@ -149,11 +144,14 @@ func (c *ConnManager) transportForListen(network string, laddr *net.UDPAddr) (re
 	if err != nil {
 		return nil, err
 	}
-	tr := &singleOwnerTransport{Transport: quic.Transport{Conn: conn, StatelessResetKey: &c.srk}, packetConn: conn}
-	if c.mt != nil {
-		tr.Transport.Tracer = c.mt
-	}
-	return tr, nil
+	return &singleOwnerTransport{
+		packetConn: conn,
+		Transport: quic.Transport{
+			Conn:              conn,
+			StatelessResetKey: &c.srk,
+			TokenGeneratorKey: &c.tokenKey,
+		},
+	}, nil
 }
 
 func (c *ConnManager) DialQUIC(ctx context.Context, raddr ma.Multiaddr, tlsConf *tls.Config, allowWindowIncrease func(conn quic.Connection, delta uint64) bool) (quic.Connection, error) {
@@ -208,12 +206,7 @@ func (c *ConnManager) TransportForDial(network string, raddr *net.UDPAddr) (refC
 	if err != nil {
 		return nil, err
 	}
-	tr := &singleOwnerTransport{Transport: quic.Transport{Conn: conn, StatelessResetKey: &c.srk}, packetConn: conn}
-	if c.mt != nil {
-		tr.Transport.Tracer = c.mt
-	}
-
-	return tr, nil
+	return &singleOwnerTransport{Transport: quic.Transport{Conn: conn, StatelessResetKey: &c.srk}, packetConn: conn}, nil
 }
 
 func (c *ConnManager) Protocols() []int {

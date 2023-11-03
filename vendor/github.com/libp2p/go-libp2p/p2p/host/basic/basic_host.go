@@ -437,7 +437,7 @@ func (h *BasicHost) newStreamHandler(s network.Stream) {
 
 	log.Debugf("negotiated: %s (took %s)", protoID, took)
 
-	go handle(protoID, s)
+	handle(protoID, s)
 }
 
 // SignalAddressChange signals to the host that it needs to determine whether our listen addresses have recently
@@ -666,7 +666,9 @@ func (h *BasicHost) NewStream(ctx context.Context, p peer.ID, pids ...protocol.I
 	}
 
 	if pref != "" {
-		s.SetProtocol(pref)
+		if err := s.SetProtocol(pref); err != nil {
+			return nil, err
+		}
 		lzcon := msmux.NewMSSelect(s, pref)
 		return &streamWrapper{
 			Stream: s,
