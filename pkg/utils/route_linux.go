@@ -75,6 +75,10 @@ func SetupNAT() error {
 	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "443", "-d", "8.8.4.4", "-j", "DROP"); err != nil {
 		return errors.Wrap(err, string(out))
 	}
+	// iptables -A FORWARD -p tcp --dport 53 -j DROP
+	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "53", "-j", "DROP"); err != nil {
+		return errors.Wrap(err, string(out))
+	}
 	// iptables -A FORWARD -p tcp --dport 853 -j DROP
 	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "853", "-j", "DROP"); err != nil {
 		return errors.Wrap(err, string(out))
