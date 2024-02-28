@@ -106,8 +106,8 @@ func NewConnectionTracer(w io.WriteCloser, p protocol.Perspective, odcid protoco
 		BufferedPacket: func(pt logging.PacketType, size protocol.ByteCount) {
 			t.BufferedPacket(pt, size)
 		},
-		DroppedPacket: func(pt logging.PacketType, size protocol.ByteCount, reason logging.PacketDropReason) {
-			t.DroppedPacket(pt, size, reason)
+		DroppedPacket: func(pt logging.PacketType, pn logging.PacketNumber, size logging.ByteCount, reason logging.PacketDropReason) {
+			t.DroppedPacket(pt, pn, size, reason)
 		},
 		UpdatedMetrics: func(rttStats *utils.RTTStats, cwnd, bytesInFlight protocol.ByteCount, packetsInFlight int) {
 			t.UpdatedMetrics(rttStats, cwnd, bytesInFlight, packetsInFlight)
@@ -144,6 +144,11 @@ func NewConnectionTracer(w io.WriteCloser, p protocol.Perspective, odcid protoco
 		},
 		ECNStateUpdated: func(state logging.ECNState, trigger logging.ECNStateTrigger) {
 			t.ECNStateUpdated(state, trigger)
+		},
+		ChoseALPN: func(protocol string) {
+			t.mutex.Lock()
+			t.recordEvent(time.Now(), eventALPNInformation{chosenALPN: protocol})
+			t.mutex.Unlock()
 		},
 		Debug: func(name, msg string) {
 			t.Debug(name, msg)
@@ -299,9 +304,7 @@ func (t *connectionTracer) toTransportParameters(tp *wire.TransportParameters) *
 	if tp.PreferredAddress != nil {
 		pa = &preferredAddress{
 			IPv4:                tp.PreferredAddress.IPv4,
-			PortV4:              tp.PreferredAddress.IPv4Port,
 			IPv6:                tp.PreferredAddress.IPv6,
-			PortV6:              tp.PreferredAddress.IPv6Port,
 			ConnectionID:        tp.PreferredAddress.ConnectionID,
 			StatelessResetToken: tp.PreferredAddress.StatelessResetToken,
 		}
@@ -444,12 +447,13 @@ func (t *connectionTracer) BufferedPacket(pt logging.PacketType, size protocol.B
 	t.mutex.Unlock()
 }
 
-func (t *connectionTracer) DroppedPacket(pt logging.PacketType, size protocol.ByteCount, reason logging.PacketDropReason) {
+func (t *connectionTracer) DroppedPacket(pt logging.PacketType, pn logging.PacketNumber, size protocol.ByteCount, reason logging.PacketDropReason) {
 	t.mutex.Lock()
 	t.recordEvent(time.Now(), &eventPacketDropped{
-		PacketType: pt,
-		PacketSize: size,
-		Trigger:    packetDropReason(reason),
+		PacketType:   pt,
+		PacketNumber: pn,
+		PacketSize:   size,
+		Trigger:      packetDropReason(reason),
 	})
 	t.mutex.Unlock()
 }

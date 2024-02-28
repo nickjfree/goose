@@ -171,12 +171,11 @@ func NewHost(n network.Network, opts *HostOpts) (*BasicHost, error) {
 		opts.EventBus = eventbus.NewBus()
 	}
 
-	psManager, err := pstoremanager.NewPeerstoreManager(n.Peerstore(), opts.EventBus)
+	psManager, err := pstoremanager.NewPeerstoreManager(n.Peerstore(), opts.EventBus, n)
 	if err != nil {
 		return nil, err
 	}
 	hostCtx, cancel := context.WithCancel(context.Background())
-
 	h := &BasicHost{
 		network:                 n,
 		psManager:               psManager,
@@ -543,7 +542,7 @@ func (h *BasicHost) background() {
 			h.updateLocalIpAddr()
 		}
 		// Request addresses anyways because, technically, address filters still apply.
-		// The underlying AllAddrs call is effectivley a no-op.
+		// The underlying AllAddrs call is effectively a no-op.
 		curr := h.Addrs()
 		emitAddrChange(curr, lastAddrs)
 		lastAddrs = curr
