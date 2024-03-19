@@ -40,12 +40,12 @@ import (
 // ipfs bootstrap node
 var (
 	bootstraps = []string{
-		"/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
-		"/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
-		"/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
-		"/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
-		"/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
-		"/ip4/104.131.131.82/udp/4001/quic-v1/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+		// "/dnsaddr/bootstrap.libp2p.io/p2p/QmNnooDu7bfjPFoTZYxMNLWUQJyrVwtbZg5gBMjTezGAJN",
+		// "/dnsaddr/bootstrap.libp2p.io/p2p/QmQCU2EcMqAqQPR2i9bChDtGNJchTbq5TbXJJ16u19uLTa",
+		// "/dnsaddr/bootstrap.libp2p.io/p2p/QmbLHAnMoJPWSCR5Zhtx6BHJX9KiKNN6tpvbUcqanj75Nb",
+		// "/dnsaddr/bootstrap.libp2p.io/p2p/QmcZf59bWwK5XFi76CZX8cbJ4BhTzzA3gU1ZjYZcYW3dwt",
+		// "/ip4/104.131.131.82/tcp/4001/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
+		// "/ip4/104.131.131.82/udp/4001/quic-v1/p2p/QmaCpDMGvV2BGHeYERUEnRQAwe3N8SzbUtfsmvsqQLuvuJ",
 	}
 )
 
@@ -69,6 +69,11 @@ var (
 
 // register ipfs wire manager
 func init() {
+
+	if len(options.Bootstraps) > 0 {
+		bootstraps = strings.Split(options.Bootstraps, ",")
+	}
+
 	ipfsWireManager = newIPFSWireManager()
 	wire.RegisterWireManager(ipfsWireManager)
 }
@@ -341,7 +346,7 @@ func NewP2PHost() (*P2PHost, error) {
 		cancel:           cancel,
 		allowedPeers:     make(map[string]ma.Multiaddr),
 	}
-	if h.Bootstrap(bootstraps); err != nil {
+	if err := h.Bootstrap(bootstraps); err != nil {
 		return nil, err
 	}
 	return h, nil
@@ -354,7 +359,7 @@ func (h *P2PHost) Bootstrap(peers []string) error {
 	defer cancel()
 
 	if len(peers) < 1 {
-		return errors.New("not enough bootstrap peers")
+		return errors.Errorf("not enough bootstrap peers")
 	}
 	errs := make(chan error, len(peers))
 	var wg sync.WaitGroup
