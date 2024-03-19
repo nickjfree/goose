@@ -359,7 +359,8 @@ func (h *P2PHost) Bootstrap(peers []string) error {
 	defer cancel()
 
 	if len(peers) < 1 {
-		return errors.Errorf("not enough bootstrap peers")
+		logger.Printf("not enough bootstrap peers")
+		return nil
 	}
 	errs := make(chan error, len(peers))
 	var wg sync.WaitGroup
