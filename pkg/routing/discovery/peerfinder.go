@@ -20,9 +20,9 @@ const (
 	// advertise network prefix
 	prefixGooseNetwork = "/goose/0.2.0/network"
 	// intervals
-	searchInterval = time.Second * 3600
+	searchInterval = time.Second * 300
 
-	advertiseInterval = time.Second * 900
+	advertiseInterval = time.Second * 300
 )
 
 var (
