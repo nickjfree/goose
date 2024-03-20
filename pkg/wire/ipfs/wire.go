@@ -553,7 +553,7 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		// enable routing
 		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
 			ctx := context.Background()
-			idht, err = dht.New(ctx, h, dht.Mode(dht.ModeAutoServer))
+			idht, err = dht.New(ctx, h, dht.Mode(dht.ModeServer))
 			if err = idht.Bootstrap(ctx); err != nil {
 				logger.Fatal(err)
 			}
