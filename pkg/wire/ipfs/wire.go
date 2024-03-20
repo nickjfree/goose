@@ -28,6 +28,7 @@ import (
 	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	quic_transport "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/quic-go/quic-go"
 
@@ -539,17 +540,15 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		libp2p.EnableRelay(),
 		// enable node to use relay for wire communication
 		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerSource), autorelay.WithNumRelays(4), autorelay.WithMinCandidates(1)),
-
 		libp2p.EnableRelayService(),
-		// force node believe it is behind a NAT firewall to force using relays
-		// libp2p.ForceReachabilityPrivate(),
 		// hole punching
 		libp2p.EnableHolePunching(),
 		libp2p.ResourceManager(mgr),
 		// must disable metrics, because metrics is buggy
 		libp2p.DisableMetrics(),
 
-		libp2p.DefaultTransports,
+		libp2p.Transport(quic_transport.NewTransport),
+		// libp2p.DefaultTransports,
 		libp2p.DefaultMuxers,
 		libp2p.DefaultSecurity,
 		// enable routing
@@ -562,6 +561,13 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 			return idht, err
 		}),
 	}
+
+	if options.Private {
+		opts = append(opts, libp2p.ForceReachabilityPrivate())
+	} else {
+		opts = append(opts, libp2p.ForceReachabilityPublic())
+	}
+
 	host, err := libp2p.New(opts...)
 	if err != nil {
 		return nil, nil, errors.WithStack(err)

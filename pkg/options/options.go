@@ -38,6 +38,8 @@ var (
 	WireguardConfig = ""
 	// bootstraps
 	Bootstraps = ""
+	// private
+	Private = false
 )
 
 func init() {
@@ -54,5 +56,6 @@ func init() {
 	flag.StringVar(&Name, "name", "", "domain name to use, namespace must be set")
 	flag.StringVar(&WireguardConfig, "wg", "", "wireguard config file")
 	flag.StringVar(&Bootstraps, "b", "", "bootstraps")
+	flag.BoolVar(&Private, "private", false, "private network")
 	flag.Parse()
 }
