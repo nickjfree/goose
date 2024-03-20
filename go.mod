@@ -6,14 +6,14 @@ require (
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
 	github.com/ipfs/go-ipns v0.3.1
-	github.com/jedib0t/go-pretty/v6 v6.5.4
-	github.com/libp2p/go-libp2p v0.33.0
+	github.com/jedib0t/go-pretty/v6 v6.5.5
+	github.com/libp2p/go-libp2p v0.33.1
 	github.com/libp2p/go-libp2p-kad-dht v0.25.2
 	github.com/multiformats/go-multiaddr v0.12.2
 	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58
 	github.com/pkg/errors v0.9.1
-	github.com/quic-go/quic-go v0.41.0
+	github.com/quic-go/quic-go v0.42.0
 	github.com/robertkrimen/otto v0.3.0
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/yl2chen/cidranger v1.0.2
