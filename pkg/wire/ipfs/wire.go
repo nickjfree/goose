@@ -28,6 +28,7 @@ import (
 	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
+	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
 	quic_transport "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/quic-go/quic-go"
@@ -70,6 +71,9 @@ var (
 
 // register ipfs wire manager
 func init() {
+
+	// only need 1 peer to get the observed address
+	identify.ActivationThresh = 1
 
 	if len(options.Bootstraps) > 0 {
 		bootstraps = strings.Split(options.Bootstraps, ",")
