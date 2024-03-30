@@ -141,7 +141,7 @@ github.com/jbenet/go-temp-err-catcher
 # github.com/jbenet/goprocess v0.1.4
 ## explicit; go 1.12
 github.com/jbenet/goprocess
-# github.com/jedib0t/go-pretty/v6 v6.5.5
+# github.com/jedib0t/go-pretty/v6 v6.5.6
 ## explicit; go 1.17
 github.com/jedib0t/go-pretty/v6/table
 github.com/jedib0t/go-pretty/v6/text
@@ -172,7 +172,7 @@ github.com/libp2p/go-cidranger/net
 # github.com/libp2p/go-flow-metrics v0.1.0
 ## explicit; go 1.17
 github.com/libp2p/go-flow-metrics
-# github.com/libp2p/go-libp2p v0.33.1
+# github.com/libp2p/go-libp2p v0.33.2
 ## explicit; go 1.21
 github.com/libp2p/go-libp2p
 github.com/libp2p/go-libp2p/config
@@ -312,8 +312,8 @@ github.com/multiformats/go-base32
 # github.com/multiformats/go-base36 v0.2.0
 ## explicit; go 1.18
 github.com/multiformats/go-base36
-# github.com/multiformats/go-multiaddr v0.12.2
-## explicit; go 1.20
+# github.com/multiformats/go-multiaddr v0.12.3
+## explicit; go 1.21
 github.com/multiformats/go-multiaddr
 github.com/multiformats/go-multiaddr/net
 # github.com/multiformats/go-multiaddr-dns v0.3.1

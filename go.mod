@@ -6,10 +6,10 @@ require (
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
 	github.com/ipfs/go-ipns v0.3.1
-	github.com/jedib0t/go-pretty/v6 v6.5.5
-	github.com/libp2p/go-libp2p v0.33.1
+	github.com/jedib0t/go-pretty/v6 v6.5.6
+	github.com/libp2p/go-libp2p v0.33.2
 	github.com/libp2p/go-libp2p-kad-dht v0.25.2
-	github.com/multiformats/go-multiaddr v0.12.2
+	github.com/multiformats/go-multiaddr v0.12.3
 	github.com/oschwald/geoip2-golang v1.9.0
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58
 	github.com/pkg/errors v0.9.1
