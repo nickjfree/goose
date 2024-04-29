@@ -1,9 +1,9 @@
 package utils
 
 import (
-	"regexp"
-
 	"github.com/pkg/errors"
+	"regexp"
+	"strings"
 )
 
 var (
@@ -52,8 +52,51 @@ func RemoveRoute(network string, gateway string) error {
 	return nil
 }
 
-// nat rules
-func SetupNAT() error {
+// ensure iptables rule
+func iptablesEnsureRule(table, chain string, rule ...string) error {
+	cmd := []string{"-t", table, "-C", chain}
+	cmd = append(cmd, rule...)
+	// check rule exists
+	for {
+		if _, err := RunCmd("iptables", cmd...); err != nil {
+			// if something went wrong with the command
+			if !strings.Contains(err.Error(), "Bad rule") {
+				return err
+			}
+			// change to add
+			cmd[2] = "-A"
+			continue
+		}
+		return nil
+	}
+}
+
+// ensure iptables chain
+func iptablesEnsureChain(table, chain string) error {
+	cmd := []string{"-t", table, "-L", chain}
+	// check chain exists
+	for {
+		if _, err := RunCmd("iptables", cmd...); err != nil {
+			// if something went wrong with the command
+			if !strings.Contains(err.Error(), chain) {
+				return err
+			}
+			// change to add
+			cmd[2] = "-N"
+			continue
+		}
+		return nil
+	}
+}
+
+type Rule struct {
+	Table string
+	Chain string
+	Rule  []string
+}
+
+// set up iptables rules when running as a router
+func SetupNAT(tun string) error {
 	// enabled ip forward
 	if out, err := RunCmd("sysctl", "-w", "net.ipv4.ip_forward=1"); err != nil {
 		return errors.Wrap(err, string(out))
@@ -61,31 +104,100 @@ func SetupNAT() error {
 	if out, err := RunCmd("sysctl", "-p"); err != nil {
 		return errors.Wrap(err, string(out))
 	}
-	//tcp mss clamp
-	if out, err := RunCmd("iptables", "-t", "mangle", "-A", "FORWARD", "-p", "tcp",
-		"--tcp-flags", "SYN,RST", "SYN", "-o", defaultInterface, "-j", "TCPMSS", "--set-mss", "940"); err != nil {
-		return errors.Wrap(err, string(out))
+
+	mssClamp := []Rule{
+		{
+			Table: "mangle",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-i", tun, "-j", "TCPMSS", "--set-mss", "940"},
+		},
+		{
+			Table: "mangle",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-p", "tcp", "--tcp-flags", "SYN,RST", "SYN", "-o", tun, "-j", "TCPMSS", "--set-mss", "940"},
+		},
 	}
-	// block DoH
-	// iptables -A FORWARD -p tcp --dport 443 -d 8.8.8.8 -j DROP
-	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "443", "-d", "8.8.8.8", "-j", "DROP"); err != nil {
-		return errors.Wrap(err, string(out))
+
+	// only to masquerate for packates from the tun interface
+	markMASQ := []Rule{
+		{
+			Table: "mangle",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-i", tun, "-j", "MARK", "--set-xmark", "0x0200/0x0200"},
+		},
 	}
-	// iptables -A FORWARD -p tcp --dport 443 -d 8.8.8.8 -j DROP
-	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "443", "-d", "8.8.4.4", "-j", "DROP"); err != nil {
-		return errors.Wrap(err, string(out))
+
+	// block DoH, so we can intercept DNS responses
+	blockDoH := []Rule{
+		// block DoH
+		{
+			Table: "filter",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "443", "-d", "8.8.8.8", "-j", "DROP"},
+		},
+		{
+			Table: "filter",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "443", "-d", "8.8.4.4", "-j", "DROP"},
+		},
+		{
+			Table: "filter",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "53", "-j", "DROP"},
+		},
+		{
+			Table: "filter",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "853", "-j", "DROP"},
+		},
+		{
+			Table: "filter",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "443", "-d", "8.8.4.4", "-j", "DROP"},
+		},
 	}
-	// iptables -A FORWARD -p tcp --dport 53 -j DROP
-	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "53", "-j", "DROP"); err != nil {
-		return errors.Wrap(err, string(out))
+
+	// masq
+	masq := []Rule{
+		{
+			Table: "nat",
+			Chain: "GOOSE-MASQ",
+			Rule:  []string{"-m", "mark", "--mark", "0x0200/0x0200", "-j", "MASQUERADE"},
+		},
 	}
-	// iptables -A FORWARD -p tcp --dport 853 -j DROP
-	if out, err := RunCmd("iptables", "-A", "FORWARD", "-p", "tcp", "--dport", "853", "-j", "DROP"); err != nil {
-		return errors.Wrap(err, string(out))
+
+	// system rule
+	system := []Rule{
+		{
+			Table: "filter",
+			Chain: "FORWARD",
+			Rule:  []string{"-j", "GOOSE-FORWARD"},
+		},
+		{
+			Table: "mangle",
+			Chain: "FORWARD",
+			Rule:  []string{"-j", "GOOSE-FORWARD"},
+		},
+		{
+			Table: "nat",
+			Chain: "POSTROUTING",
+			Rule:  []string{"-j", "GOOSE-MASQ"},
+		},
 	}
-	// running as a router
-	if out, err := RunCmd("iptables", "-t", "nat", "-A", "POSTROUTING", "-o", defaultInterface, "-j", "MASQUERADE"); err != nil {
-		return errors.Wrap(err, string(out))
+
+	// ensure all rules exists
+	for _, rules := range [][]Rule{mssClamp, markMASQ, blockDoH, masq, system} {
+		for _, rule := range rules {
+			//  ensure chain
+			if err := iptablesEnsureChain(rule.Table, rule.Chain); err != nil {
+				return err
+			}
+			// ensure rule
+			if err := iptablesEnsureRule(rule.Table, rule.Chain, rule.Rule...); err != nil {
+				return err
+			}
+		}
 	}
+
 	return nil
 }

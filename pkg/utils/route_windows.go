@@ -142,6 +142,6 @@ func RemoveRoute(network string, gateway string) error {
 }
 
 // nat rules
-func SetupNAT() error {
+func SetupNAT(tun string) error {
 	return nil
 }

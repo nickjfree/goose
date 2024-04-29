@@ -45,7 +45,7 @@ func WithForward(forwardCIDRs ...string) Option {
 		}
 		// set up nat
 		if len(forwardCIDRs) > 0 {
-			if err := utils.SetupNAT(); err != nil {
+			if err := utils.SetupNAT("goose"); err != nil {
 				return err
 			}
 		}

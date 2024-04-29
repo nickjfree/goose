@@ -13,6 +13,9 @@ windows:
 arm32:
 	GOOS=linux GOARCH=arm GOARM=7 go build -ldflags "-w -s" -o bin/goose cmd/main.go
 
+mipsle:
+	GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -ldflags "-w -s" -o bin/goose cmd/main.go
+
 docker-build:
 	docker build -t $(REGISTRY)/$(REPO):$(VERSION) .
 
