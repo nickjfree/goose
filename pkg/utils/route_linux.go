@@ -60,7 +60,7 @@ func iptablesEnsureRule(table, chain string, rule ...string) error {
 	for {
 		if _, err := RunCmd("iptables", cmd...); err != nil {
 			// if something went wrong with the command
-			if !strings.Contains(err.Error(), "Bad rule") {
+			if !(strings.Contains(err.Error(), "Bad rule") || strings.Contains(err.Error(), "No ")) {
 				return err
 			}
 			// change to add
@@ -78,7 +78,7 @@ func iptablesEnsureChain(table, chain string) error {
 	for {
 		if _, err := RunCmd("iptables", cmd...); err != nil {
 			// if something went wrong with the command
-			if !strings.Contains(err.Error(), chain) {
+			if !(strings.Contains(err.Error(), chain) || strings.Contains(err.Error(), "No ")) {
 				return err
 			}
 			// change to add
