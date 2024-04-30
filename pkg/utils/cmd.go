@@ -18,7 +18,6 @@ func RunCmd(name string, cmdStr ...string) ([]byte, error) {
 	defer cancel()
 	cmd := exec.CommandContext(ctx, name, cmdStr...)
 	if out, err := cmd.CombinedOutput(); err != nil {
-		logger.Printf("run cmd %s failed(%s) %s", cmd, err, string(out))
 		return nil, errors.Wrapf(err, "cmd %s failed output %s", cmd, string(out))
 	} else {
 		return out, nil

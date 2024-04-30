@@ -4,6 +4,8 @@ import (
 	"github.com/pkg/errors"
 	"regexp"
 	"strings"
+
+	"github.com/nickjfree/goose/pkg/options"
 )
 
 var (
@@ -11,6 +13,13 @@ var (
 	defaultGateway string
 	// default interface
 	defaultInterface string
+	// iptables output partterns
+	isNotExistPatterns = []string{
+		"Bad rule (does a matching rule exist in that chain?)",
+		"No chain/target/match by that name",
+		"does not exist",
+		"is incompatible",
+	}
 )
 
 func init() {
@@ -60,7 +69,7 @@ func iptablesEnsureRule(table, chain string, rule ...string) error {
 	for {
 		if _, err := RunCmd("iptables", cmd...); err != nil {
 			// if something went wrong with the command
-			if !(strings.Contains(err.Error(), "Bad rule") || strings.Contains(err.Error(), "No ")) {
+			if !isNotExist(err.Error()) {
 				return err
 			}
 			// change to add
@@ -78,7 +87,7 @@ func iptablesEnsureChain(table, chain string) error {
 	for {
 		if _, err := RunCmd("iptables", cmd...); err != nil {
 			// if something went wrong with the command
-			if !(strings.Contains(err.Error(), chain) || strings.Contains(err.Error(), "No ")) {
+			if !isNotExist(err.Error()) {
 				return err
 			}
 			// change to add
@@ -87,6 +96,15 @@ func iptablesEnsureChain(table, chain string) error {
 		}
 		return nil
 	}
+}
+
+func isNotExist(msg string) bool {
+	for _, str := range isNotExistPatterns {
+		if strings.Contains(msg, str) {
+			return true
+		}
+	}
+	return false
 }
 
 type Rule struct {
@@ -118,7 +136,7 @@ func SetupNAT(tun string) error {
 		},
 	}
 
-	// only to masquerate for packates from the tun interface
+	// only do masquerate for packets from the tun interface
 	markMASQ := []Rule{
 		{
 			Table: "mangle",
@@ -178,11 +196,17 @@ func SetupNAT(tun string) error {
 			Chain: "FORWARD",
 			Rule:  []string{"-j", "GOOSE-FORWARD"},
 		},
-		{
+	}
+
+	// Append a MASQUERADE rule for non-router devices to dynamically adjust their outgoing IP
+	// to the device's external IP, similar to proxy behavior. This is unnecessary for routers
+	// which inherently manage this for all connected devices.
+	if !options.Router {
+		system = append(system, Rule{
 			Table: "nat",
 			Chain: "POSTROUTING",
 			Rule:  []string{"-j", "GOOSE-MASQ"},
-		},
+		})
 	}
 
 	// ensure all rules exists

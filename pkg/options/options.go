@@ -40,6 +40,8 @@ var (
 	Bootstraps = ""
 	// private
 	Private = false
+	// router
+	Router = false
 )
 
 func init() {
@@ -57,5 +59,6 @@ func init() {
 	flag.StringVar(&WireguardConfig, "wg", "", "wireguard config file")
 	flag.StringVar(&Bootstraps, "b", "", "bootstraps")
 	flag.BoolVar(&Private, "private", false, "private network")
+	flag.BoolVar(&Router, "router", false, "running in routers")
 	flag.Parse()
 }
