@@ -2,7 +2,6 @@
 <h2 align="center">
 # Decentralized Tunnel Network - Goose
 
-
 [![Build](https://github.com/nickjfree/goose/actions/workflows/build.yml/badge.svg)](https://github.com/nickjfree/goose/actions/workflows/build.yml/badge.svg)
 [![Go Report Card](https://goreportcard.com/badge/github.com/nickjfree/goose)](https://goreportcard.com/report/github.com/nickjfree/goose)
 
@@ -21,7 +20,7 @@
 - **Fake-IP**:  Utilizes the `fake-ip` method to selectively route traffic either through the secure tunnel interface or directly to the real network interface. This feature allows for more granular control over traffic routing. Users can write custom scripts to handle the selection of routing, making it highly customizable.
 
 
-## Usage
+## Usage [🤖](https://chat.openai.com/g/g-CMQzJ1mTq-goose-grid-commander)
 
 Run the following command to see the available options:
 
