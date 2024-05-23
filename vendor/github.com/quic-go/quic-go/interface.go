@@ -59,6 +59,9 @@ var Err0RTTRejected = errors.New("0-RTT rejected")
 // as well as on the context passed to logging.Tracer.NewConnectionTracer.
 var ConnectionTracingKey = connTracingCtxKey{}
 
+// ConnectionTracingID is the type of the context value saved under the ConnectionTracingKey.
+type ConnectionTracingID uint64
+
 type connTracingCtxKey struct{}
 
 // QUICVersionContextKey can be used to find out the QUIC version of a TLS handshake from the
@@ -121,7 +124,9 @@ type SendStream interface {
 	// CancelWrite aborts sending on this stream.
 	// Data already written, but not yet delivered to the peer is not guaranteed to be delivered reliably.
 	// Write will unblock immediately, and future calls to Write will fail.
-	// When called multiple times or after closing the stream it is a no-op.
+	// When called multiple times it is a no-op.
+	// When called after Close, it aborts delivery. Note that there is no guarantee if
+	// the peer will receive the FIN or the reset first.
 	CancelWrite(StreamErrorCode)
 	// The Context is canceled as soon as the write-side of the stream is closed.
 	// This happens when Close() or CancelWrite() is called, or when the peer
@@ -320,10 +325,16 @@ type Config struct {
 	// If set to 0, then no keep alive is sent. Otherwise, the keep alive is sent on that period (or at most
 	// every half of MaxIdleTimeout, whichever is smaller).
 	KeepAlivePeriod time.Duration
+	// InitialPacketSize is the initial size of packets sent.
+	// It is usually not necessary to manually set this value,
+	// since Path MTU discovery very quickly finds the path's MTU.
+	// If set too high, the path might not support packets that large, leading to a timeout of the QUIC handshake.
+	// Values below 1200 are invalid.
+	InitialPacketSize uint16
 	// DisablePathMTUDiscovery disables Path MTU Discovery (RFC 8899).
 	// This allows the sending of QUIC packets that fully utilize the available MTU of the path.
 	// Path MTU discovery is only available on systems that allow setting of the Don't Fragment (DF) bit.
-	// If unavailable or disabled, packets will be at most 1252 (IPv4) / 1232 (IPv6) bytes in size.
+	// If unavailable or disabled, packets will be at most 1280 bytes in size.
 	DisablePathMTUDiscovery bool
 	// Allow0RTT allows the application to decide if a 0-RTT connection attempt should be accepted.
 	// Only valid for the server.

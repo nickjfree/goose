@@ -57,7 +57,7 @@ const (
 	// protocol name
 	protocolName = "/goose/0.2.0"
 	// transiend error string
-	transientErrorString = "transient connection"
+	transientErrorString = "limited connection"
 	// key size
 	keyBits = 2048
 )
@@ -249,7 +249,7 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 		s, err := m.NewStream(ctx, p.ID, protocolName)
 		msg := fmt.Sprintf("%s", err)
 		if err != nil && retries > 0 && strings.Contains(msg, transientErrorString) {
-			logger.Printf("transient connection, try again for %s", p.ID)
+			logger.Printf("limited connection, try again for %s", p.ID)
 			time.Sleep(time.Second * 15)
 			retries -= 1
 			continue

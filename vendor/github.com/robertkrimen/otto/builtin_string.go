@@ -473,6 +473,14 @@ func builtinStringTrim(call FunctionCall) Value {
 		builtinStringTrimWhitespace))
 }
 
+func builtinStringTrimStart(call FunctionCall) Value {
+	return builtinStringTrimLeft(call)
+}
+
+func builtinStringTrimEnd(call FunctionCall) Value {
+	return builtinStringTrimRight(call)
+}
+
 // Mozilla extension, not ECMAScript 5.
 func builtinStringTrimLeft(call FunctionCall) Value {
 	checkObjectCoercible(call.runtime, call.This)
@@ -489,7 +497,7 @@ func builtinStringTrimRight(call FunctionCall) Value {
 
 func builtinStringLocaleCompare(call FunctionCall) Value {
 	checkObjectCoercible(call.runtime, call.This)
-	this := call.This.string() //nolint: ifshort
+	this := call.This.string() //nolint:ifshort
 	that := call.Argument(0).string()
 	if this < that {
 		return intValue(-1)
