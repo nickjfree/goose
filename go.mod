@@ -7,7 +7,7 @@ require (
 	github.com/google/uuid v1.6.0
 	github.com/ipfs/go-ipns v0.3.1
 	github.com/jedib0t/go-pretty/v6 v6.5.9
-	github.com/libp2p/go-libp2p v0.34.0
+	github.com/libp2p/go-libp2p v0.35.0
 	github.com/libp2p/go-libp2p-kad-dht v0.25.2
 	github.com/multiformats/go-multiaddr v0.12.4
 	github.com/oschwald/geoip2-golang v1.9.0

@@ -372,12 +372,11 @@ func (cfg *Config) NewNode() (host.Host, error) {
 			return sw
 		}),
 		fx.Provide(cfg.newBasicHost),
-		fx.Provide(func(h *bhost.BasicHost, lifecycle fx.Lifecycle) host.Host {
-			lifecycle.Append(fx.StartHook(h.Start))
-			return h
+		fx.Provide(func(bh *bhost.BasicHost) host.Host {
+			return bh
 		}),
-		fx.Provide(func(h host.Host) peer.ID { return h.ID() }),
-		fx.Provide(func(h host.Host) crypto.PrivKey { return h.Peerstore().PrivKey(h.ID()) }),
+		fx.Provide(func(h *swarm.Swarm) peer.ID { return h.LocalPeer() }),
+		fx.Provide(func(h *swarm.Swarm) crypto.PrivKey { return h.Peerstore().PrivKey(h.LocalPeer()) }),
 	}
 	transportOpts, err := cfg.addTransports()
 	if err != nil {
@@ -418,6 +417,9 @@ func (cfg *Config) NewNode() (host.Host, error) {
 
 	var bh *bhost.BasicHost
 	fxopts = append(fxopts, fx.Invoke(func(bho *bhost.BasicHost) { bh = bho }))
+	fxopts = append(fxopts, fx.Invoke(func(h *bhost.BasicHost, lifecycle fx.Lifecycle) {
+		lifecycle.Append(fx.StartHook(h.Start))
+	}))
 
 	var rh *routed.RoutedHost
 	if cfg.Routing != nil {
@@ -430,7 +432,12 @@ func (cfg *Config) NewNode() (host.Host, error) {
 	}
 
 	if err := cfg.addAutoNAT(bh); err != nil {
-		rh.Close()
+		app.Stop(context.Background())
+		if cfg.Routing != nil {
+			rh.Close()
+		} else {
+			bh.Close()
+		}
 		return nil, err
 	}
 
@@ -505,6 +512,7 @@ func (cfg *Config) addAutoNAT(h *bhost.BasicHost) error {
 				return dialer, err
 
 			}),
+			fx.Provide(func(s *swarm.Swarm) peer.ID { return s.LocalPeer() }),
 			fx.Provide(func() crypto.PrivKey { return autonatPrivKey }),
 		)
 		app := fx.New(fxopts...)

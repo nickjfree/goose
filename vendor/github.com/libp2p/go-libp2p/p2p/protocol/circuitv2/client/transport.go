@@ -48,23 +48,8 @@ func AddTransport(h host.Host, upgrader transport.Upgrader) error {
 var _ transport.Transport = (*Client)(nil)
 var _ io.Closer = (*Client)(nil)
 
-// If the resource manager supports OpenConnectionNoIP, we'll use it to open connections.
-// That's because the swarm is already limiting by IP address at the swarm
-// level, and here we want to limit by everything but the IP.
-// Some ResourceManager implementations may not care about IP addresses, so we
-// do our own interface check to see if they provide this option.
-type rcmgrOpenConnectionNoIPer interface {
-	OpenConnectionNoIP(network.Direction, bool, ma.Multiaddr) (network.ConnManagementScope, error)
-}
-
 func (c *Client) Dial(ctx context.Context, a ma.Multiaddr, p peer.ID) (transport.CapableConn, error) {
-	var connScope network.ConnManagementScope
-	var err error
-	if rcmgr, ok := c.host.Network().ResourceManager().(rcmgrOpenConnectionNoIPer); ok {
-		connScope, err = rcmgr.OpenConnectionNoIP(network.DirOutbound, false, a)
-	} else {
-		connScope, err = c.host.Network().ResourceManager().OpenConnection(network.DirOutbound, false, a)
-	}
+	connScope, err := c.host.Network().ResourceManager().OpenConnection(network.DirOutbound, false, a)
 
 	if err != nil {
 		return nil, err

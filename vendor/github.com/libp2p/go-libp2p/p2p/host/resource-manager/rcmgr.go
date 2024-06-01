@@ -148,6 +148,28 @@ func NewResourceManager(limits Limiter, opts ...Option) (network.ResourceManager
 		}
 	}
 
+	registeredConnLimiterPrefixes := make(map[string]struct{})
+	for _, npLimit := range r.connLimiter.networkPrefixLimitV4 {
+		registeredConnLimiterPrefixes[npLimit.Network.String()] = struct{}{}
+	}
+	for _, npLimit := range r.connLimiter.networkPrefixLimitV6 {
+		registeredConnLimiterPrefixes[npLimit.Network.String()] = struct{}{}
+	}
+	for _, network := range allowlist.allowedNetworks {
+		prefix, err := netip.ParsePrefix(network.String())
+		if err != nil {
+			log.Debugf("failed to parse prefix from allowlist %s, %s", network, err)
+			continue
+		}
+		if _, ok := registeredConnLimiterPrefixes[prefix.String()]; !ok {
+			// connlimiter doesn't know about this network. Let's fix that
+			r.connLimiter.addNetworkPrefixLimit(prefix.Addr().Is6(), NetworkPrefixLimit{
+				Network:   prefix,
+				ConnCount: r.limits.GetAllowlistedSystemLimits().GetConnTotalLimit(),
+			})
+		}
+	}
+
 	if !r.disableMetrics {
 		var sr TraceReporter
 		sr, err := NewStatsTraceReporter()
@@ -316,9 +338,7 @@ func (r *resourceManager) nextStreamId() int64 {
 	return r.streamId
 }
 
-// OpenConnectionNoIP is like OpenConnection, but does not use IP information.
-// Used when we still want to limit the connection by other scopes, but don't
-// have IP information like when we are relaying.
+// OpenConnectionNoIP is deprecated and will be removed in the next release
 func (r *resourceManager) OpenConnectionNoIP(dir network.Direction, usefd bool, endpoint multiaddr.Multiaddr) (network.ConnManagementScope, error) {
 	return r.openConnection(dir, usefd, endpoint, netip.Addr{})
 }
@@ -326,7 +346,8 @@ func (r *resourceManager) OpenConnectionNoIP(dir network.Direction, usefd bool, 
 func (r *resourceManager) OpenConnection(dir network.Direction, usefd bool, endpoint multiaddr.Multiaddr) (network.ConnManagementScope, error) {
 	ip, err := manet.ToIP(endpoint)
 	if err != nil {
-		return nil, err
+		// No IP address
+		return r.openConnection(dir, usefd, endpoint, netip.Addr{})
 	}
 
 	ipAddr, ok := netip.AddrFromSlice(ip)
