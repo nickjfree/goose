@@ -244,10 +244,10 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 		ID: peerID,
 	}
 	// connect to the peer
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second*300)
-	defer cancel()
 	retries := 30
 	for {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second*300)
+		defer cancel()
 		s, err := m.NewStream(ctx, p.ID, protocolName)
 		msg := fmt.Sprintf("%s", err)
 		if err != nil && retries > 0 && strings.Contains(msg, transientErrorString) {
@@ -527,14 +527,23 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 	if err != nil {
 		return nil, nil, err
 	}
-
 	// resource manager
 	limits := getResourceLimits()
-	mgr, err := rcmgr.NewResourceManager(rcmgr.NewFixedLimiter(limits))
+	mgr, err := rcmgr.NewResourceManager(
+		rcmgr.NewFixedLimiter(limits),
+		rcmgr.WithLimitPerSubnet(
+			[]rcmgr.ConnLimitPerSubnet{
+				{
+					ConnCount:    128,
+					PrefixLength: 32,
+				},
+			},
+			nil,
+		),
+	)
 	if err != nil {
 		return nil, nil, errors.WithStack(err)
 	}
-
 	var idht *dht.IpfsDHT
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings("/ip4/0.0.0.0/udp/4001/quic-v1"),
