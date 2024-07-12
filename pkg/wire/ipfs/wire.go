@@ -244,7 +244,8 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 		ID: peerID,
 	}
 	// connect to the peer
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second*300)
+	defer cancel()
 	retries := 30
 	for {
 		s, err := m.NewStream(ctx, p.ID, protocolName)
@@ -255,7 +256,6 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 			retries -= 1
 			continue
 		} else if err != nil {
-			cancel()
 			return errors.WithStack(err)
 		}
 		m.ConnManager().Protect(s.Conn().RemotePeer(), connectionTag)
@@ -267,8 +267,6 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 			s.Close()
 			// we use quic datagram, also close the connection
 			s.Conn().Close()
-			// cancel stream context
-			cancel()
 			return nil
 		}
 		// send hello to make sure there is only one stream bettwen 2 peers
