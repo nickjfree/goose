@@ -15,6 +15,12 @@ type dnsRecord struct {
 	Exp time.Time
 }
 
+type ipTracking struct {
+	Real    net.IP
+	Fake    net.IP
+	Updated time.Time
+}
+
 // fake ip manager
 type FakeIPManager struct {
 	// network
@@ -22,9 +28,11 @@ type FakeIPManager struct {
 	// fake ip pool
 	pool *utils.IPPool
 	// fake to real ip mapping
-	f2r *utils.IPMapping
+	f2r map[string]*net.IP
 	// real to fake ip mapping
-	r2f *utils.IPMapping
+	r2f map[string]*net.IP
+	// ip trackings
+	trackings []ipTracking
 	// fakeip rule
 	rule *rule.Rule
 	// fale name server cache
@@ -42,13 +50,11 @@ func NewFakeIPManager(network, script, db string) *FakeIPManager {
 	pool := utils.NewIPPool(*ipNet)
 
 	m := &FakeIPManager{
-		network: *ipNet,
-		pool:    pool,
-		f2r: utils.NewIPMapping(func(ip net.IP) error {
-			pool.Free(ip)
-			return nil
-		}),
-		r2f:        utils.NewIPMapping(nil),
+		network:    *ipNet,
+		pool:       pool,
+		f2r:        make(map[string]*net.IP),
+		r2f:        make(map[string]*net.IP),
+		trackings:  []ipTracking{},
 		nameServer: make(map[string][]dnsRecord),
 	}
 	if script != "" && db != "" {
@@ -57,7 +63,39 @@ func NewFakeIPManager(network, script, db string) *FakeIPManager {
 			logger.Fatal(err)
 		}
 	}
+	go m.run()
 	return m
+}
+
+// run the expiring loop
+func (manager *FakeIPManager) run() {
+
+	ticker := time.NewTicker(time.Second * 120)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ticker.C:
+			now := time.Now()
+			manager.mu.Lock()
+			old := manager.trackings
+			manager.trackings = []ipTracking{}
+			for _, item := range old {
+				if now.Sub(item.Updated) < time.Second*900 {
+					manager.trackings = append(manager.trackings, item)
+				} else {
+					// free the expired item
+					manager.free_locked(&item)
+				}
+			}
+			manager.mu.Unlock()
+		}
+	}
+}
+
+func (manager *FakeIPManager) free_locked(tracking *ipTracking) {
+	delete(manager.r2f, string(tracking.Real.To4()))
+	delete(manager.f2r, string(tracking.Fake.To4()))
 }
 
 // alloc fake ip
@@ -69,32 +107,33 @@ func (manager *FakeIPManager) alloc(domain string, real net.IP) (net.IP, error) 
 	var err error
 
 	// find fakeip from mapping
-	if f := manager.r2f.Get(real); f != nil {
+	if f, ok := manager.r2f[string(real.To4())]; ok {
 		fake = *f
+		return fake, nil
 	} else {
 		// alloc new fake ip
 		if fake, err = manager.pool.Alloc(); err != nil {
 			return nil, err
 		}
+		// update mapping
+		manager.f2r[string(fake.To4())] = &real
+		manager.r2f[string(real.To4())] = &fake
+		return fake, nil
 	}
-	// update mapping
-	manager.f2r.Put(fake, real)
-	manager.r2f.Put(real, fake)
-	return fake, nil
 }
 
 // get real ip by fake ip
 func (manager *FakeIPManager) toReal(fake net.IP) *net.IP {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	return manager.f2r.Get(fake)
+	return manager.f2r[string(fake.To4())]
 }
 
 // get fake ip by real ip
 func (manager *FakeIPManager) toFake(real net.IP) *net.IP {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	return manager.r2f.Get(real)
+	return manager.r2f[string(real.To4())]
 }
 
 // dns traffice routing
