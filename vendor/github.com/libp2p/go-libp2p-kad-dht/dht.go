@@ -33,7 +33,7 @@ import (
 
 	"github.com/gogo/protobuf/proto"
 	ds "github.com/ipfs/go-datastore"
-	logging "github.com/ipfs/go-log"
+	logging "github.com/ipfs/go-log/v2"
 	"github.com/multiformats/go-base32"
 	ma "github.com/multiformats/go-multiaddr"
 	"go.opencensus.io/tag"
@@ -378,8 +378,10 @@ func makeDHT(h host.Host, cfg dhtcfg.Config) (*IpfsDHT, error) {
 func (dht *IpfsDHT) lookupCheck(ctx context.Context, p peer.ID) error {
 	// lookup request to p requesting for its own peer.ID
 	peerids, err := dht.protoMessenger.GetClosestPeers(ctx, p, p)
-	// p should return at least its own peerid
-	if err == nil && len(peerids) == 0 {
+	// p is expected to return at least 1 peer id, unless our routing table has
+	// less than bucketSize peers, in which case we aren't picky about who we
+	// add to the routing table.
+	if err == nil && len(peerids) == 0 && dht.routingTable.Size() >= dht.bucketSize {
 		return fmt.Errorf("peer %s failed to return its closest peers, got %d", p, len(peerids))
 	}
 	return err
@@ -735,12 +737,10 @@ func (dht *IpfsDHT) FindLocal(ctx context.Context, id peer.ID) peer.AddrInfo {
 	_, span := internal.StartSpan(ctx, "IpfsDHT.FindLocal", trace.WithAttributes(attribute.Stringer("PeerID", id)))
 	defer span.End()
 
-	switch dht.host.Network().Connectedness(id) {
-	case network.Connected, network.CanConnect:
+	if hasValidConnectedness(dht.host, id) {
 		return dht.peerstore.PeerInfo(id)
-	default:
-		return peer.AddrInfo{}
 	}
+	return peer.AddrInfo{}
 }
 
 // nearestPeersToQuery returns the routing tables closest peers.
@@ -926,7 +926,7 @@ func (dht *IpfsDHT) newContextWithLocalTags(ctx context.Context, extraTags ...ta
 
 func (dht *IpfsDHT) maybeAddAddrs(p peer.ID, addrs []ma.Multiaddr, ttl time.Duration) {
 	// Don't add addresses for self or our connected peers. We have better ones.
-	if p == dht.self || dht.host.Network().Connectedness(p) == network.Connected {
+	if p == dht.self || hasValidConnectedness(dht.host, p) {
 		return
 	}
 	dht.peerstore.AddAddrs(p, dht.filterAddrs(addrs), ttl)

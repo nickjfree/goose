@@ -28,7 +28,7 @@ import (
 	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
-	"github.com/libp2p/go-libp2p/p2p/net/swarm"
+	// "github.com/libp2p/go-libp2p/p2p/net/swarm"
 	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
 	quic_transport "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	ma "github.com/multiformats/go-multiaddr"
@@ -544,6 +544,7 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 	if err != nil {
 		return nil, nil, errors.WithStack(err)
 	}
+
 	var idht *dht.IpfsDHT
 	opts := []libp2p.Option{
 		libp2p.ListenAddrStrings("/ip4/0.0.0.0/udp/4001/quic-v1"),
@@ -559,10 +560,8 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		// must disable metrics, because metrics is buggy
 		libp2p.DisableMetrics(),
 		// disable blackhole detector
-		libp2p.SwarmOpts(
-			swarm.WithUDPBlackHoleConfig(false, 0, 0),
-			swarm.WithIPv6BlackHoleConfig(false, 0, 0),
-		),
+		libp2p.UDPBlackHoleSuccessCounter(nil),
+		libp2p.IPv6BlackHoleSuccessCounter(nil),
 		libp2p.Transport(quic_transport.NewTransport),
 		// libp2p.DefaultTransports,
 		libp2p.DefaultMuxers,
