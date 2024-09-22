@@ -5,16 +5,16 @@ REPO ?= goose
 all: linux windows
 
 linux:
-	GOOS=linux GOARCH=amd64 go build -ldflags "-w -s" -o bin/goose cmd/main.go
+	GODEBUG=asynctimerchan=1 GOOS=linux GOARCH=amd64 go build -ldflags "-w -s" -o bin/goose cmd/main.go
 
 windows:
-	GOOS=windows GOARCH=amd64 go build -ldflags "-w -s" -o bin/goose.exe cmd/main.go
+	GODEBUG=asynctimerchan=1 GOOS=windows GOARCH=amd64 go build -ldflags "-w -s" -o bin/goose.exe cmd/main.go
 
 arm32:
-	GOOS=linux GOARCH=arm GOARM=7 go build -ldflags "-w -s" -o bin/goose cmd/main.go
+	GODEBUG=asynctimerchan=1 GOOS=linux GOARCH=arm GOARM=7 go build -ldflags "-w -s" -o bin/goose cmd/main.go
 
 mipsle:
-	GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -ldflags "-w -s" -o bin/goose cmd/main.go
+	GODEBUG=asynctimerchan=1 GOOS=linux GOARCH=mipsle GOMIPS=softfloat go build -ldflags "-w -s" -o bin/goose cmd/main.go
 
 docker-build:
 	docker build -t $(REGISTRY)/$(REPO):$(VERSION) .
