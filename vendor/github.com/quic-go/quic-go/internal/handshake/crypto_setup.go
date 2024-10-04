@@ -229,6 +229,9 @@ func (h *cryptoSetup) handleMessage(data []byte, encLevel protocol.EncryptionLev
 }
 
 func (h *cryptoSetup) handleEvent(ev tls.QUICEvent) (done bool, err error) {
+	//nolint:exhaustive
+	// Go 1.23 added new 0-RTT events, see https://github.com/quic-go/quic-go/issues/4272.
+	// We will start using these events when dropping support for Go 1.22.
 	switch ev.Kind {
 	case tls.QUICNoEvent:
 		return true, nil
@@ -253,7 +256,10 @@ func (h *cryptoSetup) handleEvent(ev tls.QUICEvent) (done bool, err error) {
 		h.handshakeComplete()
 		return false, nil
 	default:
-		return false, fmt.Errorf("unexpected event: %d", ev.Kind)
+		// Unknown events should be ignored.
+		// crypto/tls will ensure that this is safe to do.
+		// See the discussion following https://github.com/golang/go/issues/68124#issuecomment-2187042510 for details.
+		return false, nil
 	}
 }
 
@@ -621,8 +627,7 @@ func (h *cryptoSetup) ConnectionState() ConnectionState {
 }
 
 func wrapError(err error) error {
-	// alert 80 is an internal error
-	if alertErr := tls.AlertError(0); errors.As(err, &alertErr) && alertErr != 80 {
+	if alertErr := tls.AlertError(0); errors.As(err, &alertErr) {
 		return qerr.NewLocalCryptoError(uint8(alertErr), err)
 	}
 	return &qerr.TransportError{ErrorCode: qerr.InternalError, ErrorMessage: err.Error()}

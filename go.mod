@@ -1,19 +1,19 @@
 module github.com/nickjfree/goose
 
-go 1.22
+go 1.23.2
 
 require (
 	github.com/google/gopacket v1.1.19
 	github.com/google/uuid v1.6.0
 	github.com/ipfs/go-ipns v0.3.1
-	github.com/jedib0t/go-pretty/v6 v6.5.9
-	github.com/libp2p/go-libp2p v0.36.3
+	github.com/jedib0t/go-pretty/v6 v6.6.0
+	github.com/libp2p/go-libp2p v0.36.5
 	github.com/libp2p/go-libp2p-kad-dht v0.26.1
 	github.com/multiformats/go-multiaddr v0.13.0
 	github.com/oschwald/geoip2-golang v1.11.0
 	github.com/pbnjay/memory v0.0.0-20210728143218-7b4eea64cf58
 	github.com/pkg/errors v0.9.1
-	github.com/quic-go/quic-go v0.45.2
+	github.com/quic-go/quic-go v0.47.0
 	github.com/robertkrimen/otto v0.4.0
 	github.com/songgao/water v0.0.0-20200317203138-2b4b6d7c09d8
 	github.com/yl2chen/cidranger v1.0.2
@@ -79,7 +79,7 @@ require (
 	github.com/mr-tron/base58 v1.2.0 // indirect
 	github.com/multiformats/go-base32 v0.1.0 // indirect
 	github.com/multiformats/go-base36 v0.2.0 // indirect
-	github.com/multiformats/go-multiaddr-dns v0.3.1 // indirect
+	github.com/multiformats/go-multiaddr-dns v0.4.0 // indirect
 	github.com/multiformats/go-multiaddr-fmt v0.1.0 // indirect
 	github.com/multiformats/go-multibase v0.2.0 // indirect
 	github.com/multiformats/go-multicodec v0.9.0 // indirect

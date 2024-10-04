@@ -145,7 +145,7 @@ github.com/jbenet/go-temp-err-catcher
 # github.com/jbenet/goprocess v0.1.4
 ## explicit; go 1.12
 github.com/jbenet/goprocess
-# github.com/jedib0t/go-pretty/v6 v6.5.9
+# github.com/jedib0t/go-pretty/v6 v6.6.0
 ## explicit; go 1.17
 github.com/jedib0t/go-pretty/v6/table
 github.com/jedib0t/go-pretty/v6/text
@@ -176,7 +176,7 @@ github.com/libp2p/go-cidranger/net
 # github.com/libp2p/go-flow-metrics v0.1.0
 ## explicit; go 1.17
 github.com/libp2p/go-flow-metrics
-# github.com/libp2p/go-libp2p v0.36.3
+# github.com/libp2p/go-libp2p v0.36.5
 ## explicit; go 1.22
 github.com/libp2p/go-libp2p
 github.com/libp2p/go-libp2p/config
@@ -325,8 +325,8 @@ github.com/multiformats/go-base36
 ## explicit; go 1.21
 github.com/multiformats/go-multiaddr
 github.com/multiformats/go-multiaddr/net
-# github.com/multiformats/go-multiaddr-dns v0.3.1
-## explicit; go 1.15
+# github.com/multiformats/go-multiaddr-dns v0.4.0
+## explicit; go 1.22
 github.com/multiformats/go-multiaddr-dns
 # github.com/multiformats/go-multiaddr-fmt v0.1.0
 ## explicit; go 1.13
@@ -520,15 +520,14 @@ github.com/prometheus/procfs/internal/util
 # github.com/quic-go/qpack v0.5.1
 ## explicit; go 1.22
 github.com/quic-go/qpack
-# github.com/quic-go/quic-go v0.45.2
-## explicit; go 1.21
+# github.com/quic-go/quic-go v0.47.0
+## explicit; go 1.22
 github.com/quic-go/quic-go
 github.com/quic-go/quic-go/http3
 github.com/quic-go/quic-go/internal/ackhandler
 github.com/quic-go/quic-go/internal/congestion
 github.com/quic-go/quic-go/internal/flowcontrol
 github.com/quic-go/quic-go/internal/handshake
-github.com/quic-go/quic-go/internal/logutils
 github.com/quic-go/quic-go/internal/protocol
 github.com/quic-go/quic-go/internal/qerr
 github.com/quic-go/quic-go/internal/qtls

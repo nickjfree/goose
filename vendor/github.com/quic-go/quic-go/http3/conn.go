@@ -3,10 +3,13 @@ package http3
 import (
 	"context"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
+	"net/http"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/internal/protocol"
@@ -51,6 +54,9 @@ type connection struct {
 
 	settings         *Settings
 	receivedSettings chan struct{}
+
+	idleTimeout time.Duration
+	idleTimer   *time.Timer
 }
 
 func newConnection(
@@ -59,17 +65,27 @@ func newConnection(
 	enableDatagrams bool,
 	perspective protocol.Perspective,
 	logger *slog.Logger,
+	idleTimeout time.Duration,
 ) *connection {
-	return &connection{
+	c := &connection{
 		ctx:              ctx,
 		Connection:       quicConn,
 		perspective:      perspective,
 		logger:           logger,
+		idleTimeout:      idleTimeout,
 		enableDatagrams:  enableDatagrams,
 		decoder:          qpack.NewDecoder(func(hf qpack.HeaderField) {}),
 		receivedSettings: make(chan struct{}),
 		streams:          make(map[protocol.StreamID]*datagrammer),
 	}
+	if idleTimeout > 0 {
+		c.idleTimer = time.AfterFunc(idleTimeout, c.onIdleTimer)
+	}
+	return c
+}
+
+func (c *connection) onIdleTimer() {
+	c.CloseWithError(quic.ApplicationErrorCode(ErrCodeNoError), "idle timeout")
 }
 
 func (c *connection) clearStream(id quic.StreamID) {
@@ -77,6 +93,9 @@ func (c *connection) clearStream(id quic.StreamID) {
 	defer c.streamMx.Unlock()
 
 	delete(c.streams, id)
+	if c.idleTimeout > 0 && len(c.streams) == 0 {
+		c.idleTimer.Reset(c.idleTimeout)
+	}
 }
 
 func (c *connection) openRequestStream(
@@ -95,8 +114,32 @@ func (c *connection) openRequestStream(
 	c.streams[str.StreamID()] = datagrams
 	c.streamMx.Unlock()
 	qstr := newStateTrackingStream(str, c, datagrams)
-	hstr := newStream(qstr, c, datagrams)
-	return newRequestStream(hstr, requestWriter, reqDone, c.decoder, disableCompression, maxHeaderBytes), nil
+	rsp := &http.Response{}
+	hstr := newStream(qstr, c, datagrams, func(r io.Reader, l uint64) error {
+		hdr, err := c.decodeTrailers(r, l, maxHeaderBytes)
+		if err != nil {
+			return err
+		}
+		rsp.Trailer = hdr
+		return nil
+	})
+	return newRequestStream(hstr, requestWriter, reqDone, c.decoder, disableCompression, maxHeaderBytes, rsp), nil
+}
+
+func (c *connection) decodeTrailers(r io.Reader, l, maxHeaderBytes uint64) (http.Header, error) {
+	if l > maxHeaderBytes {
+		return nil, fmt.Errorf("HEADERS frame too large: %d bytes (max: %d)", l, maxHeaderBytes)
+	}
+
+	b := make([]byte, l)
+	if _, err := io.ReadFull(r, b); err != nil {
+		return nil, err
+	}
+	fields, err := c.decoder.DecodeFull(b)
+	if err != nil {
+		return nil, err
+	}
+	return parseTrailers(fields)
 }
 
 func (c *connection) acceptStream(ctx context.Context) (quic.Stream, *datagrammer, error) {
@@ -109,10 +152,22 @@ func (c *connection) acceptStream(ctx context.Context) (quic.Stream, *datagramme
 		strID := str.StreamID()
 		c.streamMx.Lock()
 		c.streams[strID] = datagrams
+		if c.idleTimeout > 0 {
+			if len(c.streams) == 1 {
+				c.idleTimer.Stop()
+			}
+		}
 		c.streamMx.Unlock()
 		str = newStateTrackingStream(str, c, datagrams)
 	}
 	return str, datagrams, nil
+}
+
+func (c *connection) CloseWithError(code quic.ApplicationErrorCode, msg string) error {
+	if c.idleTimer != nil {
+		c.idleTimer.Stop()
+	}
+	return c.Connection.CloseWithError(code, msg)
 }
 
 func (c *connection) HandleUnidirectionalStreams(hijack func(StreamType, quic.ConnectionTracingID, quic.ReceiveStream, error) (hijacked bool)) {
