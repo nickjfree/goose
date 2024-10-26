@@ -23,7 +23,7 @@ const (
 	// routing interval
 	routingInterval = time.Second * 30
 	// routing entry expire time
-	routingExpire = time.Second * 90
+	routingExpire = time.Second * 180
 	// default routing
 	defaultRouting = "0.0.0.0/0"
 )
