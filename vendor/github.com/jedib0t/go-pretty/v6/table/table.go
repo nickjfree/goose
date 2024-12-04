@@ -186,6 +186,25 @@ func (t *Table) AppendSeparator() {
 	}
 }
 
+// ImportGrid helps import 1d or 2d arrays as rows.
+func (t *Table) ImportGrid(grid interface{}) bool {
+	rows := objAsSlice(grid)
+	if rows == nil {
+		return false
+	}
+	addedRows := false
+	for _, row := range rows {
+		rowAsSlice := objAsSlice(row)
+		if rowAsSlice != nil {
+			t.AppendRow(rowAsSlice)
+		} else if row != nil {
+			t.AppendRow(Row{row})
+		}
+		addedRows = true
+	}
+	return addedRows
+}
+
 // Length returns the number of rows to be rendered.
 func (t *Table) Length() int {
 	return len(t.rowsRaw)
@@ -356,6 +375,12 @@ func (t *Table) getAlign(colIdx int, hint renderHint) text.Align {
 			align = text.AlignRight
 		} else if hint.isAutoIndexRow {
 			align = text.AlignCenter
+		} else if hint.isHeaderRow {
+			align = t.style.Format.HeaderAlign
+		} else if hint.isFooterRow {
+			align = t.style.Format.FooterAlign
+		} else {
+			align = t.style.Format.RowAlign
 		}
 	}
 	return align
@@ -669,6 +694,15 @@ func (t *Table) getVAlign(colIdx int, hint renderHint) text.VAlign {
 			vAlign = cfg.VAlignFooter
 		} else {
 			vAlign = cfg.VAlign
+		}
+	}
+	if vAlign == text.VAlignDefault {
+		if hint.isHeaderRow {
+			vAlign = t.style.Format.HeaderVAlign
+		} else if hint.isFooterRow {
+			vAlign = t.style.Format.FooterVAlign
+		} else {
+			vAlign = t.style.Format.RowVAlign
 		}
 	}
 	return vAlign
