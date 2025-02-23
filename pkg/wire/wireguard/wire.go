@@ -115,7 +115,7 @@ func NewTunDevice() (*TunDevice, error) {
 }
 
 func (t *TunDevice) Endpoint() string {
-	return fmt.Sprintf("wireguard/%s/%d", t.address.String(), t.config.ListenPort)
+	return fmt.Sprintf("wireguard/%s", t.config.Filepath)
 }
 
 func (t *TunDevice) Address() net.IP {

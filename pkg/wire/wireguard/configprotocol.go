@@ -20,6 +20,7 @@ func base64ToHex(base64Str string) (string, error) {
 }
 
 type Config struct {
+	Filepath string
 	ListenPort int
 	AllowedIPs []net.IPNet
 	Protocol   string
@@ -32,7 +33,9 @@ type Config struct {
 // persistent_keepalive_interval=25
 func convertToConfigProtocol(configFile string) (*Config, error) {
 	result := strings.Builder{}
-	cfg := Config{}
+	cfg := Config{
+		Filepath: configFile,
+	}
 	// read file
 	config, err := os.Open(configFile)
 	if err != nil {
