@@ -27,6 +27,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/routing"
 	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
+	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	// "github.com/libp2p/go-libp2p/p2p/net/swarm"
 	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
@@ -554,8 +555,11 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		// enable node to use relay for wire communication
 		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerSource), autorelay.WithNumRelays(4), autorelay.WithMinCandidates(1)),
 		libp2p.EnableRelayService(),
-		// hole punching
-		libp2p.EnableHolePunching(),
+		// hole punching, new dcutr behavior
+		libp2p.EnableHolePunching(func(hps *holepunch.Service) error{
+			hps.SetLegacyBehavior(true)
+			return nil
+		}),
 		libp2p.ResourceManager(mgr),
 		// must disable metrics, because metrics is buggy
 		libp2p.DisableMetrics(),

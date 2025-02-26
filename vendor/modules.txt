@@ -146,17 +146,18 @@ github.com/jbenet/goprocess
 ## explicit; go 1.18
 github.com/jedib0t/go-pretty/v6/table
 github.com/jedib0t/go-pretty/v6/text
-# github.com/klauspost/compress v1.17.11
-## explicit; go 1.21
+# github.com/klauspost/compress v1.18.0
+## explicit; go 1.22
 github.com/klauspost/compress
 github.com/klauspost/compress/fse
 github.com/klauspost/compress/huff0
 github.com/klauspost/compress/internal/cpuinfo
+github.com/klauspost/compress/internal/le
 github.com/klauspost/compress/internal/snapref
 github.com/klauspost/compress/zstd
 github.com/klauspost/compress/zstd/internal/xxhash
-# github.com/klauspost/cpuid/v2 v2.2.9
-## explicit; go 1.20
+# github.com/klauspost/cpuid/v2 v2.2.10
+## explicit; go 1.22
 github.com/klauspost/cpuid/v2
 # github.com/koron/go-ssdp v0.0.5
 ## explicit; go 1.21.9
@@ -173,8 +174,8 @@ github.com/libp2p/go-cidranger/net
 # github.com/libp2p/go-flow-metrics v0.2.0
 ## explicit; go 1.22
 github.com/libp2p/go-flow-metrics
-# github.com/libp2p/go-libp2p v0.40.0
-## explicit; go 1.22.0
+# github.com/libp2p/go-libp2p v0.41.0
+## explicit; go 1.23.0
 github.com/libp2p/go-libp2p
 github.com/libp2p/go-libp2p/config
 github.com/libp2p/go-libp2p/core/canonicallog
@@ -218,6 +219,7 @@ github.com/libp2p/go-libp2p/p2p/metricshelper
 github.com/libp2p/go-libp2p/p2p/muxer/yamux
 github.com/libp2p/go-libp2p/p2p/net/connmgr
 github.com/libp2p/go-libp2p/p2p/net/nat
+github.com/libp2p/go-libp2p/p2p/net/nat/internal/nat
 github.com/libp2p/go-libp2p/p2p/net/pnet
 github.com/libp2p/go-libp2p/p2p/net/reuseport
 github.com/libp2p/go-libp2p/p2p/net/swarm
@@ -280,9 +282,6 @@ github.com/libp2p/go-libp2p-routing-helpers/tracing
 ## explicit; go 1.18
 github.com/libp2p/go-msgio
 github.com/libp2p/go-msgio/pbio
-# github.com/libp2p/go-nat v0.2.0
-## explicit; go 1.19
-github.com/libp2p/go-nat
 # github.com/libp2p/go-netroute v0.2.2
 ## explicit; go 1.22
 github.com/libp2p/go-netroute
@@ -322,8 +321,8 @@ github.com/multiformats/go-base32
 # github.com/multiformats/go-base36 v0.2.0
 ## explicit; go 1.18
 github.com/multiformats/go-base36
-# github.com/multiformats/go-multiaddr v0.14.0
-## explicit; go 1.22
+# github.com/multiformats/go-multiaddr v0.15.0
+## explicit; go 1.23
 github.com/multiformats/go-multiaddr
 github.com/multiformats/go-multiaddr/net
 # github.com/multiformats/go-multiaddr-dns v0.4.1
@@ -474,7 +473,7 @@ github.com/pion/rtp
 github.com/pion/rtp/codecs
 github.com/pion/rtp/codecs/av1/obu
 github.com/pion/rtp/codecs/vp9
-# github.com/pion/sctp v1.8.35
+# github.com/pion/sctp v1.8.36
 ## explicit; go 1.20
 github.com/pion/sctp
 # github.com/pion/sdp/v3 v3.0.10
@@ -519,7 +518,7 @@ github.com/pion/turn/v4/internal/client
 github.com/pion/turn/v4/internal/ipnet
 github.com/pion/turn/v4/internal/proto
 github.com/pion/turn/v4/internal/server
-# github.com/pion/webrtc/v4 v4.0.9
+# github.com/pion/webrtc/v4 v4.0.10
 ## explicit; go 1.20
 github.com/pion/webrtc/v4
 github.com/pion/webrtc/v4/internal/fmtp
@@ -678,8 +677,8 @@ go.uber.org/zap/internal/exit
 go.uber.org/zap/internal/pool
 go.uber.org/zap/internal/stacktrace
 go.uber.org/zap/zapcore
-# golang.org/x/crypto v0.33.0
-## explicit; go 1.20
+# golang.org/x/crypto v0.35.0
+## explicit; go 1.23.0
 golang.org/x/crypto/blake2b
 golang.org/x/crypto/blake2s
 golang.org/x/crypto/chacha20
@@ -842,8 +841,8 @@ google.golang.org/protobuf/types/pluginpb
 ## explicit
 gopkg.in/sourcemap.v1
 gopkg.in/sourcemap.v1/base64vlq
-# lukechampine.com/blake3 v1.3.0
-## explicit; go 1.17
+# lukechampine.com/blake3 v1.4.0
+## explicit; go 1.22
 lukechampine.com/blake3
 lukechampine.com/blake3/bao
 lukechampine.com/blake3/guts
