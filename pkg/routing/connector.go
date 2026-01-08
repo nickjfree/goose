@@ -36,6 +36,8 @@ const (
 	// rtt stats
 	rttAlphaMean     = 0.15
 	rttAlphaVariance = 0.15
+	// minimum connection duration required before route switching decisions
+	minStableDuration = time.Minute * 5
 )
 
 // Connector interface
@@ -67,8 +69,10 @@ type BaseConnector struct {
 
 // rtt stats of port
 type rttStats struct {
-	// start
+	// start of current RTT timing
 	start time.Time
+	// when the port was created (for stability check)
+	connectedAt time.Time
 	// mean rtt in ms
 	mean float32
 	// variance
@@ -221,7 +225,8 @@ func (c *BaseConnector) newPort(w wire.Wire, reconnect bool) *Port {
 		closeFunc: closeFunc,
 		ctx:       ctx,
 		rttStats: rttStats{
-			start: time.Now(),
+			start:       time.Now(),
+			connectedAt: time.Now(),
 		},
 	}
 	go func() {
@@ -426,7 +431,13 @@ func (p *Port) EndRttTiming() {
 }
 
 // return true, if port has smaller rtt. law of large number
+// requires minimum connection duration before considering this port as "faster"
 func (p *Port) Faster(base int) bool {
+	// don't allow newly connected ports to take over routes
+	// until they have been stable for at least minStableDuration
+	if time.Since(p.rttStats.connectedAt) < minStableDuration {
+		return false
+	}
 	delta := float32(base) - p.rttStats.mean
 	if delta > 0 && delta*delta > 9*p.rttStats.variance {
 		return true

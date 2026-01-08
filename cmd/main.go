@@ -20,7 +20,7 @@ func main() {
 
 	opts := []routing.Option{
 		// metric
-		routing.WithMaxMetric(4),
+		routing.WithMaxMetric(5),
 		// use base connector
 		routing.WithConnector(),
 	}
