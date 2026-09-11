@@ -1,4 +1,4 @@
-var filters = ['baidu', 'shifen', 'csdn', 'qq', 'libp2p', 'z2pyw', 'ddys.pro', 'zhihu', 'tencent', 'deepseek'];
+var filters = ['baidu', 'shifen', 'csdn', 'qq', 'libp2p', 'z2pyw', 'ddys.pro', 'zhihu', 'tencent', 'tencent-cloud', 'deepseek', 'z.ai', 'aliyun', 'd3bbv8sr76az5s'];
 var filterRegions = ['CN'];
 
 function isIPv4(str) {
