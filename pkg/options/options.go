@@ -4,6 +4,8 @@ import (
 	"flag"
 	"fmt"
 	"math/rand"
+	"testing"
+	"time"
 )
 
 const (
@@ -42,6 +44,10 @@ var (
 	Private = false
 	// router
 	Router = false
+	// top talkers to show in the traffic table, 0 disables it
+	TopN = 10
+	// traffic table render interval
+	StatsInterval = time.Second * 30
 )
 
 func init() {
@@ -60,5 +66,11 @@ func init() {
 	flag.StringVar(&Bootstraps, "b", "", "bootstraps")
 	flag.BoolVar(&Private, "private", false, "private network")
 	flag.BoolVar(&Router, "router", false, "running in routers")
-	flag.Parse()
+	flag.IntVar(&TopN, "top", 10, "show the top N talkers by traffic, 0 to disable")
+	flag.DurationVar(&StatsInterval, "stats-interval", time.Second*30, "traffic table render interval")
+	// the test harness registers its own flags after the package inits, parsing
+	// here would reject them and kill the test binary
+	if !testing.Testing() {
+		flag.Parse()
+	}
 }

@@ -89,6 +89,10 @@ type Router struct {
 	maxMetric int
 	// fake ip manager
 	fakeIP *fakeip.FakeIPManager
+	// per ip traffic counters. nil when disabled
+	stats *TrafficStats
+	// traffic table render interval
+	statsInterval time.Duration
 	// closed
 	closed chan struct{}
 }
@@ -369,6 +373,8 @@ func (r *Router) handleTraffic(p *Port) error {
 				return err
 			}
 			if target != nil {
+				// account the relayed traffic
+				r.stats.Record(&packet, p, target)
 				if err := target.WritePacket(&packet); err != nil {
 					// target port too slow or dead. we should close it. or it will slowdown everyone
 					logger.Printf("error relaying packet to port(%s). it is too slow. close port: %s", target, err)
@@ -578,6 +584,14 @@ func (r *Router) background() {
 	ticker := time.NewTicker(routingInterval)
 	defer ticker.Stop()
 
+	// traffic stats have their own interval, a nil channel blocks forever
+	var statsTick <-chan time.Time
+	if r.stats != nil {
+		statsTicker := time.NewTicker(r.statsInterval)
+		defer statsTicker.Stop()
+		statsTick = statsTicker.C
+	}
+
 	for {
 		select {
 		case <-ticker.C:
@@ -587,6 +601,9 @@ func (r *Router) background() {
 			if err := r.refreshRoutings(); err != nil {
 				logger.Printf("refresh routing failed with: %s", err)
 			}
+		case <-statsTick:
+			// show the top talkers
+			r.renderTraffic()
 		case <-r.closed:
 			logger.Println("router closed")
 			return

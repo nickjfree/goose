@@ -23,6 +23,8 @@ func main() {
 		routing.WithMaxMetric(5),
 		// use base connector
 		routing.WithConnector(),
+		// show the top talkers
+		routing.WithTrafficStats(options.TopN, options.StatsInterval),
 	}
 
 	if options.Forward != "" {

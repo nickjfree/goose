@@ -31,6 +31,8 @@ type FakeIPManager struct {
 	f2r map[string]*net.IP
 	// real to fake ip mapping
 	r2f map[string]*net.IP
+	// real ip to the domain name it was resolved from
+	r2d map[string]string
 	// ip trackings
 	trackings []ipTracking
 	// fakeip rule
@@ -54,6 +56,7 @@ func NewFakeIPManager(network, script, db string) *FakeIPManager {
 		pool:       pool,
 		f2r:        make(map[string]*net.IP),
 		r2f:        make(map[string]*net.IP),
+		r2d:        make(map[string]string),
 		trackings:  []ipTracking{},
 		nameServer: make(map[string][]dnsRecord),
 	}
@@ -96,6 +99,7 @@ func (manager *FakeIPManager) run() {
 func (manager *FakeIPManager) free_locked(tracking *ipTracking) {
 	delete(manager.r2f, string(tracking.Real.To4()))
 	delete(manager.f2r, string(tracking.Fake.To4()))
+	delete(manager.r2d, string(tracking.Real.To4()))
 }
 
 // alloc fake ip
@@ -106,6 +110,10 @@ func (manager *FakeIPManager) alloc(domain string, real net.IP) (net.IP, error) 
 	var fake net.IP
 	var err error
 
+	// remember the domain this ip was resolved from. the newest one wins
+	if domain != "" {
+		manager.r2d[string(real.To4())] = domain
+	}
 	// find fakeip from mapping
 	if f, ok := manager.r2f[string(real.To4())]; ok {
 		fake = *f
@@ -134,6 +142,13 @@ func (manager *FakeIPManager) toFake(real net.IP) *net.IP {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 	return manager.r2f[string(real.To4())]
+}
+
+// get the domain name the ip was resolved from. empty if unknown
+func (manager *FakeIPManager) Domain(ip net.IP) string {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+	return manager.r2d[string(ip.To4())]
 }
 
 // dns traffice routing

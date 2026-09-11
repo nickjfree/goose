@@ -3,6 +3,7 @@ package routing
 import (
 	"github.com/pkg/errors"
 	"net"
+	"time"
 
 	"github.com/nickjfree/goose/pkg/routing/discovery"
 	"github.com/nickjfree/goose/pkg/routing/fakeip"
@@ -73,6 +74,21 @@ func WithDiscovery(namespace string) Option {
 func WithFakeIP(network, script, db string) Option {
 	return func(r *Router) error {
 		r.fakeIP = fakeip.NewFakeIPManager(network, script, db)
+		return nil
+	}
+}
+
+// per ip traffic stats. topN <= 0 disables them
+func WithTrafficStats(topN int, interval time.Duration) Option {
+	return func(r *Router) error {
+		if topN <= 0 {
+			return nil
+		}
+		if interval <= 0 {
+			return errors.Errorf("invalid traffic stats interval %s", interval)
+		}
+		r.stats = newTrafficStats(topN)
+		r.statsInterval = interval
 		return nil
 	}
 }
