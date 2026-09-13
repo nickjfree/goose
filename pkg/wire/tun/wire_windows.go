@@ -28,7 +28,7 @@ func NewTunWire(name string, addr string) (wire.Wire, error) {
 	config := water.Config{
 		DeviceType: water.TUN,
 		PlatformSpecificParams: water.PlatformSpecificParams{
-			ComponentID: "tap0901",
+			ComponentID: "root\\tap0901",
 			Network:     addr,
 		},
 	}
