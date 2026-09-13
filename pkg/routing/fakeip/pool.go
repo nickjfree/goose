@@ -37,7 +37,7 @@ type FakeIPManager struct {
 	trackings []ipTracking
 	// fakeip rule
 	rule *rule.Rule
-	// fale name server cache
+	// fake name server cache
 	nameServer map[string][]dnsRecord
 	// lock
 	mu sync.Mutex
@@ -88,7 +88,7 @@ func (manager *FakeIPManager) run() {
 					manager.trackings = append(manager.trackings, item)
 				} else {
 					// free the expired item
-					manager.free_locked(&item)
+					manager.freeLocked(&item)
 				}
 			}
 			manager.mu.Unlock()
@@ -96,7 +96,7 @@ func (manager *FakeIPManager) run() {
 	}
 }
 
-func (manager *FakeIPManager) free_locked(tracking *ipTracking) {
+func (manager *FakeIPManager) freeLocked(tracking *ipTracking) {
 	delete(manager.r2f, string(tracking.Real.To4()))
 	delete(manager.f2r, string(tracking.Fake.To4()))
 	delete(manager.r2d, string(tracking.Real.To4()))
