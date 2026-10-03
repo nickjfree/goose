@@ -76,11 +76,12 @@ type GaugeVecOpts struct {
 // scenarios for Gauges and Counters, where the former tends to be Set-heavy and
 // the latter Inc-heavy.
 func NewGauge(opts GaugeOpts) Gauge {
-	desc := NewDesc(
+	desc := V2.NewDesc(
 		BuildFQName(opts.Namespace, opts.Subsystem, opts.Name),
 		opts.Help,
-		nil,
+		UnconstrainedLabels(nil),
 		opts.ConstLabels,
+		WithUnit(opts.Unit),
 	)
 	result := &gauge{desc: desc, labelPairs: desc.constLabelPairs}
 	result.init(result) // Init self-collection.
@@ -120,9 +121,13 @@ func (g *gauge) Dec() {
 }
 
 func (g *gauge) Add(val float64) {
-	atomicUpdateFloat(&g.valBits, func(oldVal float64) float64 {
-		return oldVal + val
-	})
+	for {
+		oldBits := atomic.LoadUint64(&g.valBits)
+		newBits := math.Float64bits(math.Float64frombits(oldBits) + val)
+		if atomic.CompareAndSwapUint64(&g.valBits, oldBits, newBits) {
+			return
+		}
+	}
 }
 
 func (g *gauge) Sub(val float64) {
@@ -159,6 +164,7 @@ func (v2) NewGaugeVec(opts GaugeVecOpts) *GaugeVec {
 		opts.Help,
 		opts.VariableLabels,
 		opts.ConstLabels,
+		WithUnit(opts.Unit),
 	)
 	return &GaugeVec{
 		MetricVec: NewMetricVec(desc, func(lvs ...string) Metric {
@@ -298,10 +304,11 @@ type GaugeFunc interface {
 // value of 1. Example:
 // https://github.com/prometheus/common/blob/8558a5b7db3c84fa38b4766966059a7bd5bfa2ee/version/info.go#L36-L56
 func NewGaugeFunc(opts GaugeOpts, function func() float64) GaugeFunc {
-	return newValueFunc(NewDesc(
+	return newValueFunc(V2.NewDesc(
 		BuildFQName(opts.Namespace, opts.Subsystem, opts.Name),
 		opts.Help,
-		nil,
+		UnconstrainedLabels(nil),
 		opts.ConstLabels,
+		WithUnit(opts.Unit),
 	), GaugeValue, function)
 }

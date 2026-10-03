@@ -3,7 +3,6 @@
 package udpmux
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -12,10 +11,10 @@ import (
 	"strings"
 	"sync"
 
-	logging "github.com/ipfs/go-log/v2"
 	pool "github.com/libp2p/go-buffer-pool"
+	logging "github.com/libp2p/go-libp2p/gologshim"
 	"github.com/pion/ice/v4"
-	"github.com/pion/stun"
+	"github.com/pion/stun/v3"
 )
 
 var log = logging.Logger("webrtc-udpmux")
@@ -25,9 +24,26 @@ var log = logging.Logger("webrtc-udpmux")
 // used to decide the packet size on the write path.
 const ReceiveBufSize = 1500
 
+// maxAddrsPerUfrag bounds the number of remote addresses we will track for a
+// single ufrag. ICE typically advertises a handful of candidates per session
+// (host + server-reflexive + relay, per IP family); 32 leaves comfortable
+// headroom while keeping the per-ufrag bookkeeping bounded.
+const maxAddrsPerUfrag = 32
+
 type Candidate struct {
-	Ufrag string
-	Addr  *net.UDPAddr
+	// LocalUfrag is the local (server) ICE ufrag, parsed from the part of the
+	// STUN USERNAME attribute before the ':'. pion retrieves a muxed connection
+	// by its local ufrag, so the mux is keyed on this value.
+	LocalUfrag string
+	// RemoteUfrag is the dialing peer's (client) ICE ufrag, parsed from the part
+	// of the STUN USERNAME attribute after the ':'. In WebRTC Direct v1 it is
+	// identical to LocalUfrag; in v2 the two differ.
+	RemoteUfrag string
+	// RemotePwd is the dialing peer's (client) ICE password. The listener needs
+	// it to infer the client's SDP offer. In v1 it equals RemoteUfrag; in v2 it
+	// is recovered from the server ufrag ("libp2p+webrtc+v2/<remote_pwd>").
+	RemotePwd string
+	Addr      *net.UDPAddr
 }
 
 // UDPMux multiplexes multiple ICE connections over a single net.PacketConn,
@@ -50,13 +66,14 @@ type UDPMux struct {
 	queue chan Candidate
 
 	mx sync.Mutex
-	// ufragMap allows us to multiplex incoming STUN packets based on ufrag
+	// ufragMap allows us to multiplex incoming STUN packets based on the local
+	// (server) ufrag, which is the ufrag pion uses to retrieve a muxed connection.
 	ufragMap map[ufragConnKey]*muxedConnection
 	// addrMap allows us to correctly direct incoming packets after the connection
 	// is established and ufrag isn't available on all packets
 	addrMap map[string]*muxedConnection
 	// ufragAddrMap allows cleaning up all addresses from the addrMap once the connection is closed
-	// During the ICE connectivity checks, the same ufrag might be used on multiple addresses.
+	// During the ICE connectivity checks, the same local ufrag might be used on multiple addresses.
 	ufragAddrMap map[ufragConnKey][]net.Addr
 
 	// the context controls the lifecycle of the mux
@@ -83,11 +100,9 @@ func NewUDPMux(socket net.PacketConn) *UDPMux {
 }
 
 func (mux *UDPMux) Start() {
-	mux.wg.Add(1)
-	go func() {
-		defer mux.wg.Done()
+	mux.wg.Go(func() {
 		mux.readLoop()
-	}()
+	})
 }
 
 // GetListenAddresses implements ice.UDPMux
@@ -99,7 +114,7 @@ func (mux *UDPMux) GetListenAddresses() []net.Addr {
 // It creates a net.PacketConn for a given ufrag if an existing one cannot be found.
 // We differentiate IPv4 and IPv6 addresses, since a remote is can be reachable at multiple different
 // UDP addresses of the same IP address family (eg. server-reflexive addresses and peer-reflexive addresses).
-func (mux *UDPMux) GetConn(ufrag string, addr net.Addr) (net.PacketConn, error) {
+func (mux *UDPMux) GetConn(localUfrag string, addr net.Addr) (net.PacketConn, error) {
 	a, ok := addr.(*net.UDPAddr)
 	if !ok {
 		return nil, fmt.Errorf("unexpected address type: %T", addr)
@@ -109,7 +124,7 @@ func (mux *UDPMux) GetConn(ufrag string, addr net.Addr) (net.PacketConn, error) 
 		return nil, io.ErrClosedPipe
 	default:
 		isIPv6 := ok && a.IP.To4() == nil
-		_, conn := mux.getOrCreateConn(ufrag, isIPv6, mux, addr)
+		_, conn := mux.getOrCreateConn(localUfrag, isIPv6, mux, addr)
 		return conn, nil
 	}
 }
@@ -145,9 +160,9 @@ func (mux *UDPMux) readLoop() {
 		n, addr, err := mux.socket.ReadFrom(buf)
 		if err != nil {
 			if strings.Contains(err.Error(), "use of closed network connection") || errors.Is(err, context.Canceled) {
-				log.Debugf("readLoop exiting: socket %s closed", mux.socket.LocalAddr())
+				log.Debug("readLoop exiting: socket closed", "local_addr", mux.socket.LocalAddr())
 			} else {
-				log.Errorf("error reading from socket %s: %v", mux.socket.LocalAddr(), err)
+				log.Error("error reading from socket", "local_addr", mux.socket.LocalAddr(), "error", err)
 			}
 			pool.Put(buf)
 			return
@@ -163,7 +178,7 @@ func (mux *UDPMux) readLoop() {
 func (mux *UDPMux) processPacket(buf []byte, addr net.Addr) (processed bool) {
 	udpAddr, ok := addr.(*net.UDPAddr)
 	if !ok {
-		log.Errorf("received a non-UDP address: %s", addr)
+		log.Error("received a non-UDP address", "addr", addr)
 		return false
 	}
 	isIPv6 := udpAddr.IP.To4() == nil
@@ -176,7 +191,7 @@ func (mux *UDPMux) processPacket(buf []byte, addr net.Addr) (processed bool) {
 	mux.mx.Unlock()
 	if ok {
 		if err := conn.Push(buf, addr); err != nil {
-			log.Debugf("could not push packet: %v", err)
+			log.Debug("could not push packet", "error", err)
 			return false
 		}
 		return true
@@ -189,33 +204,33 @@ func (mux *UDPMux) processPacket(buf []byte, addr net.Addr) (processed bool) {
 
 	msg := &stun.Message{Raw: buf}
 	if err := msg.Decode(); err != nil {
-		log.Debugf("failed to decode STUN message: %s", err)
+		log.Debug("failed to decode STUN message", "error", err)
 		return false
 	}
 	if msg.Type != stun.BindingRequest {
-		log.Debugf("incoming message should be a STUN binding request, got %s", msg.Type)
+		log.Debug("incoming message should be a STUN binding request", "got_type", msg.Type)
 		return false
 	}
 
-	ufrag, err := ufragFromSTUNMessage(msg)
+	localUfrag, remoteUfrag, remotePwd, err := credentialsFromSTUNMessage(msg)
 	if err != nil {
-		log.Debugf("could not find STUN username: %s", err)
+		log.Debug("dropping STUN binding request with invalid credentials", "error", err)
 		return false
 	}
 
-	connCreated, conn := mux.getOrCreateConn(ufrag, isIPv6, mux, udpAddr)
+	connCreated, conn := mux.getOrCreateConn(localUfrag, isIPv6, mux, udpAddr)
 	if connCreated {
 		select {
-		case mux.queue <- Candidate{Addr: udpAddr, Ufrag: ufrag}:
+		case mux.queue <- Candidate{Addr: udpAddr, LocalUfrag: localUfrag, RemoteUfrag: remoteUfrag, RemotePwd: remotePwd}:
 		default:
-			log.Debugw("queue full, dropping incoming candidate", "ufrag", ufrag, "addr", udpAddr)
+			log.Debug("queue full, dropping incoming candidate", "ufrag", localUfrag, "addr", udpAddr)
 			conn.Close()
 			return false
 		}
 	}
 
 	if err := conn.Push(buf, addr); err != nil {
-		log.Debugf("could not push packet: %v", err)
+		log.Debug("could not push packet", "error", err)
 		return false
 	}
 	return true
@@ -233,67 +248,103 @@ func (mux *UDPMux) Accept(ctx context.Context) (Candidate, error) {
 }
 
 type ufragConnKey struct {
-	ufrag  string
-	isIPv6 bool
+	// localUfrag is the local (server) ICE ufrag. pion retrieves a muxed
+	// connection by its local ufrag, so the mux keys on it.
+	localUfrag string
+	isIPv6     bool
 }
 
-// ufragFromSTUNMessage returns the local or ufrag
-// from the STUN username attribute. Local ufrag is the ufrag of the
-// peer which initiated the connectivity check, e.g in a connectivity
-// check from A to B, the username attribute will be B_ufrag:A_ufrag
-// with the local ufrag value being A_ufrag. In case of ice-lite, the
-// localUfrag value will always be the remote peer's ufrag since ICE-lite
-// implementations do not generate connectivity checks. In our specific
-// case, since the local and remote ufrag is equal, we can return
-// either value.
-func ufragFromSTUNMessage(msg *stun.Message) (string, error) {
+// credentialsFromSTUNMessage parses and validates the ICE credentials carried in
+// a STUN binding request's USERNAME attribute. For a connectivity check from
+// client A to server B the USERNAME is "B_ufrag:A_ufrag" (RFC 8445 section 7.2.2,
+// "<remote-ufrag>:<local-ufrag>" from the sender's perspective). B's pion ICE
+// agent retrieves a muxed connection by its local (server) ufrag, so the mux
+// keys on B_ufrag (the part before the ':'). An ufrag never contains a ':' (it
+// is not an ice-char), so splitting on the first ':' is unambiguous.
+//
+// Both ufrags come from an attacker-controlled STUN packet and are later
+// templated into the inferred SDP offer and pion's ICE credentials. They are
+// validated here, before the mux allocates any connection state or queues a
+// candidate, so a malformed or unsupported request never reaches the listener:
+//
+//   - both ufrags must be valid ICE username fragments (ice-char, length 4..256,
+//     RFC 8839 section 5.4);
+//   - the WebRTC Direct version is selected from the server ufrag prefix. It also
+//     determines how the client's ICE password (needed to render the client's SDP
+//     offer) is recovered: v1 shares one value (client password == client ufrag),
+//     v2 encodes the password into the server ufrag as "libp2p+webrtc+v2/<pwd>".
+//     An unrecognized version is rejected, never treated as v1.
+//
+// See https://github.com/libp2p/specs/blob/master/webrtc/webrtc-direct.md.
+func credentialsFromSTUNMessage(msg *stun.Message) (localUfrag, remoteUfrag, remotePwd string, err error) {
 	attr, err := msg.Get(stun.AttrUsername)
 	if err != nil {
-		return "", err
+		return "", "", "", err
 	}
-	index := bytes.Index(attr, []byte{':'})
-	if index == -1 {
-		return "", fmt.Errorf("invalid STUN username attribute")
+	local, remote, found := strings.Cut(string(attr), ":")
+	if !found {
+		return "", "", "", fmt.Errorf("invalid STUN username attribute")
 	}
-	return string(attr[index+1:]), nil
+	if !isICEUfrag(local) || !isICEUfrag(remote) {
+		return "", "", "", fmt.Errorf("invalid ICE ufrag in STUN username")
+	}
+	switch {
+	case strings.HasPrefix(local, UfragPrefixV2):
+		pwd := strings.TrimPrefix(local, UfragPrefixV2)
+		// The recovered value becomes the inferred offer's ice-pwd, so it must be
+		// a valid ICE password (ice-char, length 22..256) per RFC 8839 section 5.4.
+		if !isICEPwd(pwd) {
+			return "", "", "", fmt.Errorf("invalid v2 ufrag %q: recovered client password is not a valid ICE password", local)
+		}
+		return local, remote, pwd, nil
+	case strings.HasPrefix(local, UfragPrefixV1):
+		return local, remote, remote, nil
+	default:
+		return "", "", "", fmt.Errorf("unsupported WebRTC Direct version in ufrag %q", local)
+	}
 }
 
-// RemoveConnByUfrag removes the connection associated with the ufrag and all the
-// addresses associated with that connection. This method is called by pion when
-// a peerconnection is closed.
-func (mux *UDPMux) RemoveConnByUfrag(ufrag string) {
-	if ufrag == "" {
-		return
-	}
-
+// RemoveConnByUfrag removes the connection associated with the local (server)
+// ufrag and all the addresses associated with that connection. This method is
+// called by pion when a peerconnection is closed, always with the connection's
+// local ufrag, which credentialsFromSTUNMessage has already validated as
+// non-empty.
+func (mux *UDPMux) RemoveConnByUfrag(localUfrag string) {
 	mux.mx.Lock()
 	defer mux.mx.Unlock()
 
 	for _, isIPv6 := range [...]bool{true, false} {
-		key := ufragConnKey{ufrag: ufrag, isIPv6: isIPv6}
-		if _, ok := mux.ufragMap[key]; ok {
+		key := ufragConnKey{localUfrag: localUfrag, isIPv6: isIPv6}
+		if conn, ok := mux.ufragMap[key]; ok {
 			delete(mux.ufragMap, key)
 			for _, addr := range mux.ufragAddrMap[key] {
 				delete(mux.addrMap, addr.String())
 			}
 			delete(mux.ufragAddrMap, key)
+			conn.close()
 		}
 	}
 }
 
-func (mux *UDPMux) getOrCreateConn(ufrag string, isIPv6 bool, _ *UDPMux, addr net.Addr) (created bool, _ *muxedConnection) {
-	key := ufragConnKey{ufrag: ufrag, isIPv6: isIPv6}
+func (mux *UDPMux) getOrCreateConn(localUfrag string, isIPv6 bool, _ *UDPMux, addr net.Addr) (created bool, _ *muxedConnection) {
+	key := ufragConnKey{localUfrag: localUfrag, isIPv6: isIPv6}
 
 	mux.mx.Lock()
 	defer mux.mx.Unlock()
 
 	if conn, ok := mux.ufragMap[key]; ok {
+		// Cap per-ufrag address tracking. Once we have already associated
+		// maxAddrsPerUfrag addresses with this connection, ignore further
+		// candidates rather than letting the bookkeeping grow unbounded.
+		if len(mux.ufragAddrMap[key]) >= maxAddrsPerUfrag {
+			return false, conn
+		}
 		mux.addrMap[addr.String()] = conn
 		mux.ufragAddrMap[key] = append(mux.ufragAddrMap[key], addr)
 		return false, conn
 	}
 
-	conn := newMuxedConnection(mux, func() { mux.RemoveConnByUfrag(ufrag) })
+	conn := newMuxedConnection(mux, localUfrag)
 	mux.ufragMap[key] = conn
 	mux.addrMap[addr.String()] = conn
 	mux.ufragAddrMap[key] = append(mux.ufragAddrMap[key], addr)

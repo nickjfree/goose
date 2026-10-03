@@ -51,14 +51,6 @@ func init() {
 	manet.RegisterToNetAddr(ConvertWebsocketMultiaddrToNetAddr, "wss")
 }
 
-// Default gorilla upgrader
-var upgrader = ws.Upgrader{
-	// Allow requests from *all* origins.
-	CheckOrigin: func(r *http.Request) bool {
-		return true
-	},
-}
-
 type Option func(*WebsocketTransport) error
 
 // WithTLSClientConfig sets a TLS client configuration on the WebSocket Dialer. Only
@@ -81,15 +73,75 @@ func WithTLSConfig(conf *tls.Config) Option {
 	}
 }
 
+var defaultHandshakeTimeout = 15 * time.Second
+
+// defaultHTTPIdleTimeout bounds how long an idle fallback HTTP connection is
+// kept open. It applies whenever a fallback handler is configured via
+// [WithHTTPHandler], unless overridden with [WithHTTPServerConfig].
+var defaultHTTPIdleTimeout = 30 * time.Second
+
+// WithHandshakeTimeout sets a timeout for the websocket upgrade.
+func WithHandshakeTimeout(timeout time.Duration) Option {
+	return func(t *WebsocketTransport) error {
+		t.handshakeTimeout = timeout
+		return nil
+	}
+}
+
+// WithHTTPHandler installs an http.Handler for requests that are not WebSocket
+// upgrades, letting a libp2p node share its WebSocket port with an ordinary
+// HTTP service behind the same TLS certificate.
+//
+// WebSocket upgrades go to the libp2p transport. Every other request
+// reaches the handler, over HTTP/1.1 or HTTP/2 on TLS listeners and over
+// HTTP/1.1 or HTTP/2 cleartext (h2c) on plaintext listeners. Without a handler,
+// non-upgrade requests get a 404.
+//
+// The handler is invoked from many goroutines concurrently and must be safe for
+// concurrent use. Use [WithHTTPServerConfig] to set timeouts and HTTP/2
+// options on the underlying http.Server.
+func WithHTTPHandler(h http.Handler) Option {
+	return func(t *WebsocketTransport) error {
+		t.httpHandler = h
+		return nil
+	}
+}
+
+// WithHTTPServerConfig configures the [http.Server] that serves the fallback
+// handler set with [WithHTTPHandler], following the http2.ConfigureServer
+// pattern: the function tunes a server the transport owns. It runs once per
+// listener before the server starts, so callers can set timeouts and HTTP/2
+// settings:
+//
+//	websocket.WithHTTPServerConfig(func(s *http.Server) {
+//		s.IdleTimeout = 30 * time.Second
+//		s.ReadHeaderTimeout = 10 * time.Second
+//		s.HTTP2 = &http.HTTP2Config{MaxConcurrentStreams: 256}
+//	})
+//
+// The transport sets Handler, ConnContext, and TLSConfig (the latter from
+// [WithTLSConfig]) after the function runs and overwrites any change to them.
+// Avoid setting WriteTimeout or ReadTimeout if the handler streams large
+// responses, as they apply per request and would truncate it.
+//
+// This option has no effect unless [WithHTTPHandler] is also set.
+func WithHTTPServerConfig(fn func(*http.Server)) Option {
+	return func(t *WebsocketTransport) error {
+		t.httpServerConfig = fn
+		return nil
+	}
+}
+
 // WebsocketTransport is the actual go-libp2p transport
 type WebsocketTransport struct {
-	upgrader transport.Upgrader
-	rcmgr    network.ResourceManager
-
-	tlsClientConf *tls.Config
-	tlsConf       *tls.Config
-
-	sharedTcp *tcpreuse.ConnMgr
+	upgrader         transport.Upgrader
+	rcmgr            network.ResourceManager
+	tlsClientConf    *tls.Config
+	tlsConf          *tls.Config
+	sharedTcp        *tcpreuse.ConnMgr
+	handshakeTimeout time.Duration
+	httpHandler      http.Handler
+	httpServerConfig func(*http.Server)
 }
 
 var _ transport.Transport = (*WebsocketTransport)(nil)
@@ -99,10 +151,11 @@ func New(u transport.Upgrader, rcmgr network.ResourceManager, sharedTCP *tcpreus
 		rcmgr = &network.NullResourceManager{}
 	}
 	t := &WebsocketTransport{
-		upgrader:      u,
-		rcmgr:         rcmgr,
-		tlsClientConf: &tls.Config{},
-		sharedTcp:     sharedTCP,
+		upgrader:         u,
+		rcmgr:            rcmgr,
+		tlsClientConf:    &tls.Config{},
+		sharedTcp:        sharedTCP,
+		handshakeTimeout: defaultHandshakeTimeout,
 	}
 	for _, opt := range opts {
 		if err := opt(t); err != nil {
@@ -176,7 +229,7 @@ func (t *WebsocketTransport) Dial(ctx context.Context, raddr ma.Multiaddr, p pee
 }
 
 func (t *WebsocketTransport) dialWithScope(ctx context.Context, raddr ma.Multiaddr, p peer.ID, connScope network.ConnManagementScope) (transport.CapableConn, error) {
-	macon, err := t.maDial(ctx, raddr)
+	macon, err := t.maDial(ctx, raddr, connScope)
 	if err != nil {
 		return nil, err
 	}
@@ -187,14 +240,14 @@ func (t *WebsocketTransport) dialWithScope(ctx context.Context, raddr ma.Multiad
 	return &capableConn{CapableConn: conn}, nil
 }
 
-func (t *WebsocketTransport) maDial(ctx context.Context, raddr ma.Multiaddr) (manet.Conn, error) {
+func (t *WebsocketTransport) maDial(ctx context.Context, raddr ma.Multiaddr, scope network.ConnManagementScope) (manet.Conn, error) {
 	wsurl, err := parseMultiaddr(raddr)
 	if err != nil {
 		return nil, err
 	}
 	isWss := wsurl.Scheme == "wss"
 	dialer := ws.Dialer{
-		HandshakeTimeout: 30 * time.Second,
+		HandshakeTimeout: t.handshakeTimeout,
 		// Inherit the default proxy behavior
 		Proxy: ws.DefaultDialer.Proxy,
 	}
@@ -236,7 +289,7 @@ func (t *WebsocketTransport) maDial(ctx context.Context, raddr ma.Multiaddr) (ma
 		return nil, err
 	}
 
-	mnc, err := manet.WrapNetConn(NewConn(wscon, isWss))
+	mnc, err := manet.WrapNetConn(newConn(wscon, isWss, scope))
 	if err != nil {
 		wscon.Close()
 		return nil, err
@@ -244,12 +297,12 @@ func (t *WebsocketTransport) maDial(ctx context.Context, raddr ma.Multiaddr) (ma
 	return mnc, nil
 }
 
-func (t *WebsocketTransport) maListen(a ma.Multiaddr) (manet.Listener, error) {
+func (t *WebsocketTransport) gatedMaListen(a ma.Multiaddr) (transport.GatedMaListener, error) {
 	var tlsConf *tls.Config
 	if t.tlsConf != nil {
 		tlsConf = t.tlsConf.Clone()
 	}
-	l, err := newListener(a, tlsConf, t.sharedTcp)
+	l, err := newListener(a, tlsConf, t.sharedTcp, t.upgrader, t.handshakeTimeout, t.httpHandler, t.httpServerConfig)
 	if err != nil {
 		return nil, err
 	}
@@ -258,9 +311,32 @@ func (t *WebsocketTransport) maListen(a ma.Multiaddr) (manet.Listener, error) {
 }
 
 func (t *WebsocketTransport) Listen(a ma.Multiaddr) (transport.Listener, error) {
-	malist, err := t.maListen(a)
+	gmal, err := t.gatedMaListen(a)
 	if err != nil {
 		return nil, err
 	}
-	return &transportListener{Listener: t.upgrader.UpgradeListener(t, malist)}, nil
+	return &transportListener{Listener: t.upgrader.UpgradeGatedMaListener(t, gmal)}, nil
+}
+
+// transportListener wraps a transport.Listener to provide connections with a `ConnState() network.ConnectionState` method.
+type transportListener struct {
+	transport.Listener
+}
+
+type capableConn struct {
+	transport.CapableConn
+}
+
+func (c *capableConn) ConnState() network.ConnectionState {
+	cs := c.CapableConn.ConnState()
+	cs.Transport = "websocket"
+	return cs
+}
+
+func (l *transportListener) Accept() (transport.CapableConn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	return &capableConn{CapableConn: conn}, nil
 }

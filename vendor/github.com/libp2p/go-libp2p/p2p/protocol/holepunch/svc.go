@@ -7,11 +7,11 @@ import (
 	"sync"
 	"time"
 
-	logging "github.com/ipfs/go-log/v2"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	logging "github.com/libp2p/go-libp2p/gologshim"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch/pb"
 	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
 	"github.com/libp2p/go-msgio/pbio"
@@ -71,17 +71,6 @@ type Service struct {
 	filter AddrFilter
 
 	refCount sync.WaitGroup
-
-	// Prior to https://github.com/libp2p/go-libp2p/pull/3044, go-libp2p would
-	// pick the opposite roles for client/server a hole punch. Setting this to
-	// true preserves that behavior
-	legacyBehavior bool
-}
-
-// SetLegacyBehavior is only exposed for testing purposes.
-// Do not set this unless you know what you are doing.
-func (s *Service) SetLegacyBehavior(legacyBehavior bool) {
-	s.legacyBehavior = legacyBehavior
 }
 
 // NewService creates a new service that can be used for hole punching
@@ -105,7 +94,6 @@ func NewService(h host.Host, ids identify.IDService, listenAddrs func() []ma.Mul
 		listenAddrs:        listenAddrs,
 		hasPublicAddrsChan: make(chan struct{}),
 		directDialTimeout:  defaultDirectDialTimeout,
-		legacyBehavior:     true,
 	}
 
 	for _, opt := range opts {
@@ -125,7 +113,7 @@ func NewService(h host.Host, ids identify.IDService, listenAddrs func() []ma.Mul
 func (s *Service) waitForPublicAddr() {
 	defer s.refCount.Done()
 
-	log.Debugw("waiting until we have at least one public address", "peer", s.host.ID())
+	log.Debug("waiting until we have at least one public address", "peer", s.host.ID())
 
 	// TODO: We should have an event here that fires when identify discovers a new
 	// address.
@@ -137,7 +125,7 @@ func (s *Service) waitForPublicAddr() {
 	defer t.Stop()
 	for {
 		if len(s.listenAddrs()) > 0 {
-			log.Debugf("Host %s now has a public address (%s). Starting holepunch protocol.", s.host.ID(), s.host.Addrs())
+			log.Debug("Host now has a public address", "hostID", s.host.ID(), "addresses", s.host.Addrs())
 			s.host.SetStreamHandler(Protocol, s.handleNewStream)
 			break
 		}
@@ -155,14 +143,12 @@ func (s *Service) waitForPublicAddr() {
 	}
 
 	s.holePuncherMx.Lock()
+	defer s.holePuncherMx.Unlock()
 	if s.ctx.Err() != nil {
 		// service is closed
 		return
 	}
-	s.holePuncher = newHolePuncher(s.host, s.ids, s.listenAddrs, s.tracer, s.filter)
-	s.holePuncher.directDialTimeout = s.directDialTimeout
-	s.holePuncher.legacyBehavior = s.legacyBehavior
-	s.holePuncherMx.Unlock()
+	s.holePuncher = newHolePuncher(s.host, s.ids, s.listenAddrs, s.directDialTimeout, s.tracer, s.filter)
 	close(s.hasPublicAddrsChan)
 }
 
@@ -197,7 +183,7 @@ func (s *Service) incomingHolePunch(str network.Stream) (rtt time.Duration, remo
 	}
 
 	if err := str.Scope().ReserveMemory(maxMsgSize, network.ReservationPriorityAlways); err != nil {
-		log.Debugf("error reserving memory for stream: %s", err)
+		log.Debug("error reserving memory for stream", "err", err)
 		return 0, nil, nil, err
 	}
 	defer str.Scope().ReleaseMemory(maxMsgSize)
@@ -222,7 +208,7 @@ func (s *Service) incomingHolePunch(str network.Stream) (rtt time.Duration, remo
 		obsDial = s.filter.FilterRemote(str.Conn().RemotePeer(), obsDial)
 	}
 
-	log.Debugw("received hole punch request", "peer", str.Conn().RemotePeer(), "addrs", obsDial)
+	log.Debug("received hole punch request", "peer", str.Conn().RemotePeer(), "addrs", obsDial)
 	if len(obsDial) == 0 {
 		return 0, nil, nil, errors.New("expected CONNECT message to contain at least one address")
 	}
@@ -259,7 +245,7 @@ func (s *Service) handleNewStream(str network.Stream) {
 	}
 
 	if err := str.Scope().SetService(ServiceName); err != nil {
-		log.Debugf("error attaching stream to holepunch service: %s", err)
+		log.Debug("error attaching stream to holepunch service", "err", err)
 		str.Reset()
 		return
 	}
@@ -268,7 +254,7 @@ func (s *Service) handleNewStream(str network.Stream) {
 	rtt, addrs, ownAddrs, err := s.incomingHolePunch(str)
 	if err != nil {
 		s.tracer.ProtocolError(rp, err)
-		log.Debugw("error handling holepunching stream from", "peer", rp, "error", err)
+		log.Debug("error handling holepunching stream", "peer", rp, "err", err)
 		str.Reset()
 		return
 	}
@@ -280,15 +266,11 @@ func (s *Service) handleNewStream(str network.Stream) {
 		Addrs: addrs,
 	}
 	s.tracer.StartHolePunch(rp, addrs, rtt)
-	log.Debugw("starting hole punch", "peer", rp)
+	log.Debug("starting hole punch", "peer", rp)
 	start := time.Now()
 	s.tracer.HolePunchAttempt(pi.ID)
 	ctx, cancel := context.WithTimeout(s.ctx, s.directDialTimeout)
-	isClient := false
-	if s.legacyBehavior {
-		isClient = true
-	}
-	err = holePunchConnect(ctx, s.host, pi, isClient)
+	err = holePunchConnect(ctx, s.host, pi, true) // true (Client)
 	cancel()
 	dt := time.Since(start)
 	s.tracer.EndHolePunch(rp, dt, err)

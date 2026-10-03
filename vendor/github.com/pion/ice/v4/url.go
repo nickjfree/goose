@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ice
 
-import "github.com/pion/stun/v3"
+import "github.com/pion/stun/v4"
 
 type (
 	// URL represents a STUN (rfc7064) or TURN (rfc7065) URI.

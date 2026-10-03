@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package rtcp
@@ -7,10 +7,12 @@ import (
 	"encoding/binary"
 )
 
-// PacketType specifies the type of an RTCP packet
+// PacketType specifies the type of an RTCP packet.
 type PacketType uint8
 
-// RTCP packet types registered with IANA. See: https://www.iana.org/assignments/rtp-parameters/rtp-parameters.xhtml#rtp-parameters-4
+// RTCP packet types registered with IANA. See:
+//
+//	https://www.iana.org/assignments/rtp-parameters/rtp-parameters.xhtml#rtp-parameters-4
 const (
 	TypeSenderReport              PacketType = 200 // RFC 3550, 6.4.1
 	TypeReceiverReport            PacketType = 201 // RFC 3550, 6.4.2
@@ -23,7 +25,8 @@ const (
 
 )
 
-// Transport and Payload specific feedback messages overload the count field to act as a message type. those are listed here
+// Transport and Payload specific feedback messages overload the count field to act as a message type.
+// those are listed here.
 const (
 	FormatSLI  uint8 = 2
 	FormatPLI  uint8 = 1
@@ -62,7 +65,7 @@ func (p PacketType) String() string {
 
 const rtpVersion = 2
 
-// A Header is the common header shared by all RTCP packets
+// A Header is the common header shared by all RTCP packets.
 type Header struct {
 	// If the padding bit is set, this individual RTCP packet contains
 	// some additional padding octets at the end which are not part of
@@ -88,7 +91,7 @@ const (
 	countMax     = (1 << 5) - 1
 )
 
-// Marshal encodes the Header in binary
+// Marshal encodes the Header in binary.
 func (h Header) Marshal() ([]byte, error) {
 	/*
 	 *  0                   1                   2                   3
@@ -108,16 +111,16 @@ func (h Header) Marshal() ([]byte, error) {
 	if h.Count > 31 {
 		return nil, errInvalidHeader
 	}
-	rawPacket[0] |= h.Count << countShift
+	rawPacket[0] |= h.Count << countShift //nolint:gosec // rawPacket is created with length headerLength (4)
 
-	rawPacket[1] = uint8(h.Type)
+	rawPacket[1] = uint8(h.Type) //nolint:gosec // rawPacket is created with length headerLength (4)
 
 	binary.BigEndian.PutUint16(rawPacket[2:], h.Length)
 
 	return rawPacket, nil
 }
 
-// Unmarshal decodes the Header from binary
+// Unmarshal decodes the Header from binary.
 func (h *Header) Unmarshal(rawPacket []byte) error {
 	if len(rawPacket) < headerLength {
 		return errPacketTooShort

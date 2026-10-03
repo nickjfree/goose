@@ -4,6 +4,7 @@ import (
 	"crypto"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/fips140"
 	"crypto/tls"
 	"fmt"
 
@@ -18,25 +19,34 @@ type cipherSuite struct {
 	ID     uint16
 	Hash   crypto.Hash
 	KeyLen int
-	AEAD   func(key, nonceMask []byte) *xorNonceAEAD
+	AEAD   func(key, nonceMask []byte) cipher.AEAD
 }
 
 func (s cipherSuite) IVLen() int { return aeadNonceLength }
 
-func getCipherSuite(id uint16) *cipherSuite {
+func getCipherSuite(id uint16) cipherSuite {
 	switch id {
 	case tls.TLS_AES_128_GCM_SHA256:
-		return &cipherSuite{ID: tls.TLS_AES_128_GCM_SHA256, Hash: crypto.SHA256, KeyLen: 16, AEAD: aeadAESGCMTLS13}
+		return cipherSuite{ID: tls.TLS_AES_128_GCM_SHA256, Hash: crypto.SHA256, KeyLen: 16, AEAD: aeadAESGCMTLS13}
 	case tls.TLS_CHACHA20_POLY1305_SHA256:
-		return &cipherSuite{ID: tls.TLS_CHACHA20_POLY1305_SHA256, Hash: crypto.SHA256, KeyLen: 32, AEAD: aeadChaCha20Poly1305}
+		// The usual convention is to only panic on fips140.Enforced (and not on fips140.Enabled),
+		// but this function panics in the default case anyway, so we might as well panic here.
+		if fips140.Enabled() {
+			panic("tls: TLS_CHACHA20_POLY1305_SHA256 is not allowed in FIPS 140-3 mode")
+		}
+		return cipherSuite{ID: tls.TLS_CHACHA20_POLY1305_SHA256, Hash: crypto.SHA256, KeyLen: 32, AEAD: aeadChaCha20Poly1305}
 	case tls.TLS_AES_256_GCM_SHA384:
-		return &cipherSuite{ID: tls.TLS_AES_256_GCM_SHA384, Hash: crypto.SHA384, KeyLen: 32, AEAD: aeadAESGCMTLS13}
+		return cipherSuite{ID: tls.TLS_AES_256_GCM_SHA384, Hash: crypto.SHA384, KeyLen: 32, AEAD: aeadAESGCMTLS13}
 	default:
 		panic(fmt.Sprintf("unknown cypher suite: %d", id))
 	}
 }
 
-func aeadAESGCMTLS13(key, nonceMask []byte) *xorNonceAEAD {
+func aeadAESGCMTLS13(key, nonceMask []byte) cipher.AEAD {
+	if fips140.Enabled() {
+		return aeadAESGCMTLS13FIPS140(key, nonceMask)
+	}
+
 	if len(nonceMask) != aeadNonceLength {
 		panic("tls: internal error: wrong nonce length")
 	}
@@ -54,7 +64,7 @@ func aeadAESGCMTLS13(key, nonceMask []byte) *xorNonceAEAD {
 	return ret
 }
 
-func aeadChaCha20Poly1305(key, nonceMask []byte) *xorNonceAEAD {
+func aeadChaCha20Poly1305(key, nonceMask []byte) cipher.AEAD {
 	if len(nonceMask) != aeadNonceLength {
 		panic("tls: internal error: wrong nonce length")
 	}

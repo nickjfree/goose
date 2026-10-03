@@ -1,22 +1,31 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
 import (
+	"fmt"
+	"io"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/pion/interceptor"
 	"github.com/pion/rtp"
 )
 
+type peekedPacket struct {
+	payload    []byte
+	attributes interceptor.Attributes
+}
+
 // TrackRemote represents a single inbound source of media.
 type TrackRemote struct {
-	mu sync.RWMutex
+	mu                  sync.RWMutex
+	repairReadRequested atomic.Bool
 
 	id       string
 	streamID string
@@ -29,9 +38,11 @@ type TrackRemote struct {
 	params      RTPParameters
 	rid         string
 
-	receiver         *RTPReceiver
-	peeked           []byte
-	peekedAttributes interceptor.Attributes
+	receiver *RTPReceiver
+
+	peekedPackets []*peekedPacket
+
+	audioPlayoutStatsProviders []AudioPlayoutStatsProvider
 }
 
 func newTrackRemote(kind RTPCodecType, ssrc, rtxSsrc SSRC, rid string, receiver *RTPReceiver) *TrackRemote {
@@ -80,7 +91,7 @@ func (t *TrackRemote) Kind() RTPCodecType {
 	return t.kind
 }
 
-// StreamID is the group this track belongs too. This must be unique.
+// StreamID is the group this track belongs to. This must be unique.
 func (t *TrackRemote) StreamID() string {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
@@ -111,27 +122,32 @@ func (t *TrackRemote) Codec() RTPCodecParameters {
 
 // Read reads data from the track.
 func (t *TrackRemote) Read(b []byte) (n int, attributes interceptor.Attributes, err error) {
-	t.mu.RLock()
+	if t.repairReadRequested.CompareAndSwap(false, true) {
+		t.receiver.requestRepairStreamReader(t)
+	}
+
+	return t.read(b)
+}
+
+func (t *TrackRemote) read(b []byte) (n int, attributes interceptor.Attributes, err error) {
+	t.mu.Lock()
 	receiver := t.receiver
-	peeked := t.peeked != nil
-	t.mu.RUnlock()
+	var peekedPkt *peekedPacket
+	if len(t.peekedPackets) != 0 {
+		peekedPkt = t.peekedPackets[0]
+		t.peekedPackets = t.peekedPackets[1:]
+	}
+	t.mu.Unlock()
 
-	if peeked {
-		t.mu.Lock()
-		data := t.peeked
-		attributes = t.peekedAttributes
+	if receiver.haveClosed() {
+		return 0, nil, io.EOF
+	}
 
-		t.peeked = nil
-		t.peekedAttributes = nil
-		t.mu.Unlock()
-		// someone else may have stolen our packet when we
-		// released the lock.  Deal with it.
-		if data != nil {
-			n = copy(b, data)
-			err = t.checkAndUpdateTrack(b)
+	if peekedPkt != nil {
+		n = copy(b, peekedPkt.payload)
+		err = t.checkAndUpdateTrack(b)
 
-			return n, attributes, err
-		}
+		return n, peekedPkt.attributes, err
 	}
 
 	// If there's a separate RTX track and an RTX packet is available, return that
@@ -139,17 +155,15 @@ func (t *TrackRemote) Read(b []byte) (n int, attributes interceptor.Attributes, 
 		n = copy(b, rtxPacketReceived.pkt)
 		attributes = rtxPacketReceived.attributes
 		rtxPacketReceived.release()
-		err = nil
-	} else {
-		// If there's no separate RTX track (or there's a separate RTX track but no RTX packet waiting), wait for and return
-		// a packet from the main track
-		n, attributes, err = receiver.readRTP(b, t)
-		if err != nil {
-			return n, attributes, err
-		}
 
-		err = t.checkAndUpdateTrack(b)
+		return n, attributes, nil
 	}
+
+	n, attributes, err = receiver.readRTP(b, t)
+	if err != nil {
+		return n, attributes, err
+	}
+	err = t.checkAndUpdateTrack(b)
 
 	return n, attributes, err
 }
@@ -197,8 +211,9 @@ func (t *TrackRemote) ReadRTP() (*rtp.Packet, interceptor.Attributes, error) {
 }
 
 // peek is like Read, but it doesn't discard the packet read.
-func (t *TrackRemote) peek(b []byte) (n int, a interceptor.Attributes, err error) {
-	n, a, err = t.Read(b)
+func (t *TrackRemote) peek(b []byte) (n int, err error) {
+	var attr interceptor.Attributes
+	n, attr, err = t.read(b)
 	if err != nil {
 		return
 	}
@@ -209,8 +224,7 @@ func (t *TrackRemote) peek(b []byte) (n int, a interceptor.Attributes, err error
 	// that case.
 	data := make([]byte, n)
 	n = copy(data, b[:n])
-	t.peeked = data
-	t.peekedAttributes = a
+	t.peekedPackets = append(t.peekedPackets, &peekedPacket{payload: data, attributes: attr})
 	t.mu.Unlock()
 
 	return
@@ -235,6 +249,68 @@ func (t *TrackRemote) HasRTX() bool {
 	defer t.mu.RUnlock()
 
 	return t.rtxSsrc != 0
+}
+
+func (t *TrackRemote) addProvider(provider AudioPlayoutStatsProvider) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	if slices.Contains(t.audioPlayoutStatsProviders, provider) {
+		return
+	}
+
+	t.audioPlayoutStatsProviders = append(t.audioPlayoutStatsProviders, provider)
+}
+
+func (t *TrackRemote) removeProvider(provider AudioPlayoutStatsProvider) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for i, p := range t.audioPlayoutStatsProviders {
+		if p == provider {
+			t.audioPlayoutStatsProviders = append(t.audioPlayoutStatsProviders[:i], t.audioPlayoutStatsProviders[i+1:]...)
+
+			return
+		}
+	}
+}
+
+func (t *TrackRemote) pullAudioPlayoutStats(now time.Time) []AudioPlayoutStats {
+	t.mu.RLock()
+	providers := t.audioPlayoutStatsProviders
+	t.mu.RUnlock()
+
+	if len(providers) == 0 {
+		return nil
+	}
+
+	var allStats []AudioPlayoutStats
+	for _, provider := range providers {
+		stats, ok := provider.Snapshot(now)
+		if !ok {
+			continue
+		}
+
+		if stats.ID == "" {
+			stats.ID = fmt.Sprintf("media-playout-%d", uint32(t.SSRC()))
+		}
+
+		if stats.Type == "" {
+			stats.Type = StatsTypeMediaPlayout
+		}
+
+		if stats.Kind == "" {
+			stats.Kind = string(MediaKindAudio)
+		}
+
+		if stats.Timestamp == 0 {
+			stats.Timestamp = statsTimestampFrom(now)
+		}
+
+		allStats = append(allStats, stats)
+	}
+
+	return allStats
 }
 
 func (t *TrackRemote) setRtxSSRC(ssrc SSRC) {

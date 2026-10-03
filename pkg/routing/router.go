@@ -495,16 +495,16 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 					Metric:  entry.metric,
 					Rtt:     entry.rtt,
 				})
-			} else if r.fakeIP != nil {
-				// if fakeip is enabled, route dns traffics to the tunnel
-				for _, network := range r.fakeIP.DNSRoutings() {
-					routings = append(routings, message.RoutingEntry{
-						Network: network,
-						Metric:  entry.metric,
-						Rtt:     entry.rtt,
-					})
-				}
 			}
+		}
+	}
+	// -p keeps 8.8.8.8/32 and the fake range on the host even when
+	// no peer is advertising 0.0.0.0/0
+	if p.IsTunnel() && r.fakeIP != nil {
+		for _, network := range r.fakeIP.DNSRoutings() {
+			routings = append(routings, message.RoutingEntry{
+				Network: network,
+			})
 		}
 	}
 	return routings, nil

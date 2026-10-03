@@ -42,11 +42,40 @@ const (
 	// is also known as Provider Record Expiration Interval.
 	DefaultProvideValidity = 48 * time.Hour
 
+	// DefaultMaxRecordAge is the default time that a value record (PutValue
+	// record, such as /pk or /ipns) is kept before it needs to be republished.
+	// It is independent of DefaultProvideValidity, which governs provider
+	// records.
+	DefaultMaxRecordAge = 48 * time.Hour
+
+	// DefaultValueGCInterval is the default interval between background sweeps
+	// that delete value records older than MaxRecordAge. It only bounds how long
+	// expired records linger on disk before being reclaimed; expired records are
+	// never served, since reads age-check independently of the sweep.
+	DefaultValueGCInterval = 24 * time.Hour
+
 	// DefaultProviderAddrTTL is the TTL to keep the multi addresses of
 	// provider peers around. Those addresses are returned alongside provider.
 	// After it expires, the returned records will require an extra lookup, to
 	// find the multiaddress associated with the returned peer id.
 	DefaultProviderAddrTTL = 24 * time.Hour
+
+	// DefaultReprovideInterval is the default interval at which the keys should
+	// be reprovided to the DHT swarm to ensure there are enough live records in
+	// the swarm.
+	DefaultReprovideInterval = 22 * time.Hour
+
+	// DefaultMaxPeersPerIPGroup is the maximal number of peers with addresses in
+	// the same IP group allowed in the routing table. Once this limit is
+	// reached, newly discovered peers with addresses in the same IP group will
+	// not be added to the routing table.
+	DefaultMaxPeersPerIPGroup = 3
+
+	// DefaultMaxPeersPerIPGroupPerCpl is maximal number of peers with addresses
+	// in the same IP group allowed in each routing table bucket, defined by its
+	// common prefix length to self peer id.
+	// also see: `DefaultMaxPeersPerIPGroup`.
+	DefaultMaxPeersPerIPGroupPerCpl = 2
 )
 
 // Protocols is a slice containing all supported protocol IDs for Amino DHT.

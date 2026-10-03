@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
@@ -33,6 +32,8 @@ type TrackLocalStaticRTP struct {
 	codec             RTPCodecCapability
 	payloader         func(RTPCodecCapability) (rtp.Payloader, error)
 	id, rid, streamID string
+	initalTimestamp   *uint32
+	initialSeqNumber  *uint16
 }
 
 // NewTrackLocalStaticRTP returns a TrackLocalStaticRTP.
@@ -66,6 +67,20 @@ func WithRTPStreamID(rid string) func(*TrackLocalStaticRTP) {
 func WithPayloader(h func(RTPCodecCapability) (rtp.Payloader, error)) func(*TrackLocalStaticRTP) {
 	return func(s *TrackLocalStaticRTP) {
 		s.payloader = h
+	}
+}
+
+// WithRTPTimestamp set the initial RTP timestamp for the track.
+func WithRTPTimestamp(timestamp uint32) func(*TrackLocalStaticRTP) {
+	return func(s *TrackLocalStaticRTP) {
+		s.initalTimestamp = &timestamp
+	}
+}
+
+// WithRTPSequenceNumber sets the initial RTP sequence number for the track.
+func WithRTPSequenceNumber(sequenceNumber uint16) func(*TrackLocalStaticRTP) {
+	return func(s *TrackLocalStaticRTP) {
+		s.initialSeqNumber = &sequenceNumber
 	}
 }
 
@@ -146,7 +161,7 @@ func (s *TrackLocalStaticRTP) Codec() RTPCodecCapability {
 // packetPool is a pool of packets used by WriteRTP and Write below
 // nolint:gochecknoglobals
 var rtpPacketPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		return &rtp.Packet{}
 	},
 }
@@ -186,6 +201,11 @@ func (s *TrackLocalStaticRTP) writeRTP(packet *rtp.Packet) error {
 	for _, b := range s.bindings {
 		packet.Header.SSRC = uint32(b.ssrc)
 		packet.Header.PayloadType = uint8(b.payloadType)
+		// b.writeStream.WriteRTP below expects header and payload separately, so value of Packet.PaddingSize
+		// would be lost. Copy it to Packet.Header.PaddingSize to avoid that problem.
+		if packet.PaddingSize != 0 && packet.Header.PaddingSize == 0 {
+			packet.Header.PaddingSize = packet.PaddingSize
+		}
 		if _, err := b.writeStream.WriteRTP(&packet.Header, packet.Payload); err != nil {
 			writeErrs = append(writeErrs, err)
 		}
@@ -213,10 +233,12 @@ func (s *TrackLocalStaticRTP) Write(b []byte) (n int, err error) {
 // TrackLocalStaticSample is a TrackLocal that has a pre-set codec and accepts Samples.
 // If you wish to send a RTP Packet use TrackLocalStaticRTP.
 type TrackLocalStaticSample struct {
+	mu         sync.Mutex
 	packetizer rtp.Packetizer
 	sequencer  rtp.Sequencer
 	rtpTrack   *TrackLocalStaticRTP
 	clockRate  float64
+	remainder  float64
 }
 
 // NewTrackLocalStaticSample returns a TrackLocalStaticSample.
@@ -281,15 +303,28 @@ func (s *TrackLocalStaticSample) Bind(t TrackLocalContext) (RTPCodecParameters, 
 		return codec, err
 	}
 
-	s.sequencer = rtp.NewRandomSequencer()
-	s.packetizer = rtp.NewPacketizer(
-		rtpOutboundMTU,
-		0, // Value is handled when writing
-		0, // Value is handled when writing
+	options := []rtp.PacketizerOption{}
+
+	if s.rtpTrack.initalTimestamp != nil {
+		options = append(options, rtp.WithTimestamp(*s.rtpTrack.initalTimestamp))
+	}
+
+	if s.rtpTrack.initialSeqNumber != nil {
+		s.sequencer = rtp.NewFixedSequencer(*s.rtpTrack.initialSeqNumber)
+	}
+
+	if s.sequencer == nil {
+		s.sequencer = rtp.NewRandomSequencer()
+	}
+
+	s.packetizer = rtp.NewPacketizerWithOptions(
+		outboundMTU,
 		payloader,
 		s.sequencer,
 		codec.ClockRate,
+		options...,
 	)
+
 	s.clockRate = float64(codec.RTPCodecCapability.ClockRate)
 
 	return codec, nil
@@ -309,22 +344,36 @@ func (s *TrackLocalStaticSample) WriteSample(sample media.Sample) error {
 	s.rtpTrack.mu.RLock()
 	packetizer := s.packetizer
 	clockRate := s.clockRate
+	sequencer := s.sequencer
 	s.rtpTrack.mu.RUnlock()
-
 	if packetizer == nil {
 		return nil
 	}
 
+	s.mu.Lock()
+	remainder := s.remainder
+
 	// skip packets by the number of previously dropped packets
 	for i := uint16(0); i < sample.PrevDroppedPackets; i++ {
-		s.sequencer.NextSequenceNumber()
+		sequencer.NextSequenceNumber()
 	}
 
-	samples := uint32(sample.Duration.Seconds() * clockRate)
+	tickF := sample.Duration.Seconds() * clockRate
+
 	if sample.PrevDroppedPackets > 0 {
-		packetizer.SkipSamples(samples * uint32(sample.PrevDroppedPackets))
+		dropTotal := tickF*float64(sample.PrevDroppedPackets) + remainder
+		dropTicks := uint32(dropTotal)
+		remainder = dropTotal - float64(dropTicks)
+		packetizer.SkipSamples(dropTicks)
 	}
-	packets := packetizer.Packetize(sample.Data, samples)
+
+	curTotal := tickF + remainder
+	curTicks := uint32(curTotal)
+	remainder = curTotal - float64(curTicks)
+
+	s.remainder = remainder
+	packets := packetizer.Packetize(sample.Data, curTicks)
+	s.mu.Unlock()
 
 	writeErrs := []error{}
 	for _, p := range packets {

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ice
@@ -8,8 +8,8 @@ import (
 	"net"
 
 	"github.com/pion/logging"
-	"github.com/pion/transport/v3"
-	"github.com/pion/transport/v3/stdnet"
+	"github.com/pion/transport/v5"
+	"github.com/pion/transport/v5/stdnet"
 )
 
 // MultiUDPMuxDefault implements both UDPMux and AllConnsGetter,
@@ -90,7 +90,7 @@ func NewMultiUDPMuxFromPort(port int, opts ...UDPMuxFromPortOption) (*MultiUDPMu
 	if params.net == nil {
 		var err error
 		if params.net, err = stdnet.NewNet(); err != nil {
-			return nil, fmt.Errorf("failed to get create network: %w", err)
+			return nil, fmt.Errorf("failed to create network: %w", err)
 		}
 	}
 
@@ -102,9 +102,9 @@ func NewMultiUDPMuxFromPort(port int, opts ...UDPMuxFromPortOption) (*MultiUDPMu
 	conns := make([]net.PacketConn, 0, len(addrs))
 	for _, addr := range addrs {
 		conn, listenErr := params.net.ListenUDP("udp", &net.UDPAddr{
-			IP:   addr.AsSlice(),
+			IP:   addr.addr.AsSlice(),
 			Port: port,
-			Zone: addr.Zone(),
+			Zone: addr.addr.Zone(),
 		})
 		if listenErr != nil {
 			err = listenErr

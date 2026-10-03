@@ -6,9 +6,9 @@ import (
 	"slices"
 	"time"
 
-	"github.com/libp2p/go-libp2p/core/canonicallog"
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/transport"
+	"github.com/libp2p/go-libp2p/p2p/canonicallog"
 
 	ma "github.com/multiformats/go-multiaddr"
 )
@@ -59,7 +59,7 @@ func (s *Swarm) Listen(addrs ...ma.Multiaddr) error {
 
 	for i, e := range errs {
 		if e != nil {
-			log.Warnw("listening failed", "on", sortedAddrsAndTpts[i].addr, "error", errs[i])
+			log.Warn("listening failed", "on", sortedAddrsAndTpts[i].addr, "err", errs[i])
 		}
 	}
 
@@ -148,7 +148,7 @@ func (s *Swarm) AddListenAddr(a ma.Multiaddr) error {
 
 			if ok {
 				list.Close()
-				log.Errorf("swarm listener unintentionally closed")
+				log.Error("swarm listener unintentionally closed")
 			}
 
 			// signal to our notifiees on listen close.
@@ -161,7 +161,7 @@ func (s *Swarm) AddListenAddr(a ma.Multiaddr) error {
 			c, err := list.Accept()
 			if err != nil {
 				if !errors.Is(err, transport.ErrListenerClosed) {
-					log.Errorf("swarm listener for %s accept error: %s", a, err)
+					log.Error("swarm listener accept error", "addr", a, "err", err)
 				}
 				return
 			}
@@ -170,10 +170,8 @@ func (s *Swarm) AddListenAddr(a ma.Multiaddr) error {
 				c = wrapWithMetrics(c, s.metricsTracer, time.Now(), network.DirInbound)
 			}
 
-			log.Debugf("swarm listener accepted connection: %s <-> %s", c.LocalMultiaddr(), c.RemoteMultiaddr())
-			s.refs.Add(1)
-			go func() {
-				defer s.refs.Done()
+			log.Debug("swarm listener accepted connection", "local_multiaddr", c.LocalMultiaddr(), "remote_multiaddr", c.RemoteMultiaddr())
+			s.refs.Go(func() {
 				_, err := s.addConn(c, network.DirInbound)
 				switch err {
 				case nil:
@@ -181,20 +179,15 @@ func (s *Swarm) AddListenAddr(a ma.Multiaddr) error {
 					// ignore.
 					return
 				default:
-					log.Warnw("adding connection failed", "to", a, "error", err)
+					log.Warn("adding connection failed", "to", a, "err", err)
 					return
 				}
-			}()
+			})
 		}
 	}()
 	return nil
 }
 
 func containsMultiaddr(addrs []ma.Multiaddr, addr ma.Multiaddr) bool {
-	for _, a := range addrs {
-		if addr.Equal(a) {
-			return true
-		}
-	}
-	return false
+	return slices.ContainsFunc(addrs, addr.Equal)
 }

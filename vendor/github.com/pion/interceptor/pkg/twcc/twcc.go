@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 // Package twcc provides interceptors to implement transport wide congestion control.
@@ -52,7 +52,7 @@ func (r *Recorder) Record(mediaSSRC uint32, sequenceNumber uint16, arrivalTime i
 	unwrappedSN := r.sequenceUnwrapper.Unwrap(sequenceNumber)
 	r.maybeCullOldPackets(unwrappedSN, arrivalTime)
 	if r.startSequenceNumber == nil || unwrappedSN < *r.startSequenceNumber {
-		r.startSequenceNumber = &unwrappedSN
+		r.setStartSequenceNumber(unwrappedSN)
 	}
 
 	// We are only interested in the first time a packet is received.
@@ -65,18 +65,28 @@ func (r *Recorder) Record(mediaSSRC uint32, sequenceNumber uint16, arrivalTime i
 
 	// Limit the range of sequence numbers to send feedback for.
 	if *r.startSequenceNumber < r.arrivalTimeMap.BeginSequenceNumber() {
-		sn := r.arrivalTimeMap.BeginSequenceNumber()
-		r.startSequenceNumber = &sn
+		r.setStartSequenceNumber(r.arrivalTimeMap.BeginSequenceNumber())
 	}
 }
 
+// setStartSequenceNumber stores sequenceNumber in a single reused allocation;
+// storing the address of a stack value instead would heap-allocate it on every
+// call.
+func (r *Recorder) setStartSequenceNumber(sequenceNumber int64) {
+	if r.startSequenceNumber == nil {
+		r.startSequenceNumber = new(int64)
+	}
+	*r.startSequenceNumber = sequenceNumber
+}
+
 func (r *Recorder) maybeCullOldPackets(sequenceNumber int64, arrivalTime int64) {
-	if r.startSequenceNumber != nil && *r.startSequenceNumber >= r.arrivalTimeMap.EndSequenceNumber() && arrivalTime >= packetWindowMicroseconds {
+	if r.startSequenceNumber != nil && *r.startSequenceNumber >= r.arrivalTimeMap.EndSequenceNumber() &&
+		arrivalTime >= packetWindowMicroseconds {
 		r.arrivalTimeMap.RemoveOldPackets(sequenceNumber, arrivalTime-packetWindowMicroseconds)
 	}
 }
 
-// PacketsHeld returns the number of received packets currently held by the recorder
+// PacketsHeld returns the number of received packets currently held by the recorder.
 func (r *Recorder) PacketsHeld() int {
 	return r.packetsHeld
 }
@@ -101,6 +111,7 @@ func (r *Recorder) BuildFeedbackPacket() []rtcp.Packet {
 		// old.
 	}
 	r.packetsHeld = 0
+
 	return feedbacks
 }
 
@@ -109,6 +120,7 @@ func (r *Recorder) BuildFeedbackPacket() []rtcp.Packet {
 func (r *Recorder) maybeBuildFeedbackPacket(beginSeqNumInclusive, endSeqNumExclusive int64) *feedback {
 	// NOTE: The logic of this method is inspired by the implementation in Chrome.
 	// See https://source.chromium.org/chromium/chromium/src/+/refs/heads/main:third_party/webrtc/modules/remote_bitrate_estimator/remote_estimator_proxy.cc;l=276;drc=b5cd13bb6d5d157a5fbe3628b2dd1c1e106203c6
+	//nolint:lll
 	startSNInclusive, endSNExclusive := r.arrivalTimeMap.Clamp(beginSeqNumInclusive), r.arrivalTimeMap.Clamp(endSeqNumExclusive)
 
 	// Create feedback on demand, as we don't yet know if there are packets in the range that have been
@@ -131,23 +143,24 @@ func (r *Recorder) maybeBuildFeedbackPacket(beginSeqNumInclusive, endSeqNumExclu
 			// It should be possible to add seq to this new packet.
 			// If the difference between seq and beginSeqNumInclusive is too large, discard
 			// reporting too old missing packets.
-			baseSequenceNumber := max64(beginSeqNumInclusive, seq-maxMissingSequenceNumbers)
+			baseSequenceNumber := max(beginSeqNumInclusive, seq-maxMissingSequenceNumbers)
 
 			// baseSequenceNumber is the expected first sequence number. This is known,
 			// but we may not have actually received it, so the base time should be the time
 			// of the first received packet in the feedback.
-			fb.setBase(uint16(baseSequenceNumber), arrivalTime)
+			fb.setBase(uint16(baseSequenceNumber), arrivalTime) //nolint:gosec // G115
 
-			if !fb.addReceived(uint16(seq), arrivalTime) {
+			if !fb.addReceived(uint16(seq), arrivalTime) { //nolint:gosec // G115
 				// Could not add a single received packet to the feedback.
 				// This is unexpected to actually occur, but if it does, we'll
 				// try again after skipping any missing packets.
 				// NOTE: It's fine that we already incremented fbPktCnt, as in essence
 				// we did actually "skip" a feedback (and this matches Chrome's behavior).
-				r.startSequenceNumber = &seq
+				r.setStartSequenceNumber(seq)
+
 				return nil
 			}
-		} else if !fb.addReceived(uint16(seq), arrivalTime) {
+		} else if !fb.addReceived(uint16(seq), arrivalTime) { //nolint:gosec // G115
 			// Could not add timestamp. Packet may be full. Return
 			// and try again with a fresh packet.
 			break
@@ -156,7 +169,8 @@ func (r *Recorder) maybeBuildFeedbackPacket(beginSeqNumInclusive, endSeqNumExclu
 		nextSequenceNumber = seq + 1
 	}
 
-	r.startSequenceNumber = &nextSequenceNumber
+	r.setStartSequenceNumber(nextSequenceNumber)
+
 	return fb
 }
 
@@ -170,7 +184,7 @@ type feedback struct {
 	len                 int
 	lastChunk           chunk
 	chunks              []rtcp.PacketStatusChunk
-	deltas              []*rtcp.RecvDelta
+	deltas              []rtcp.RecvDelta
 }
 
 func newFeedback(senderSSRC, mediaSSRC uint32, count uint8) *feedback {
@@ -190,17 +204,26 @@ func (f *feedback) setBase(sequenceNumber uint16, timeUS int64) {
 	f.lastTimestampUS = f.refTimestamp64MS * 64e3
 }
 
+// getRTCP finalizes the feedback and returns it as an RTCP packet. It consumes
+// the accumulated state and must be called at most once.
 func (f *feedback) getRTCP() *rtcp.TransportLayerCC {
 	f.rtcp.PacketStatusCount = f.sequenceNumberCount
-	f.rtcp.ReferenceTime = uint32(f.refTimestamp64MS)
+	f.rtcp.ReferenceTime = uint32(f.refTimestamp64MS) //nolint:gosec // G115
 	f.rtcp.BaseSequenceNumber = f.baseSequenceNumber
 	for len(f.lastChunk.deltas) > 0 {
 		f.chunks = append(f.chunks, f.lastChunk.encode())
 	}
 	f.rtcp.PacketChunks = append(f.rtcp.PacketChunks, f.chunks...)
-	f.rtcp.RecvDeltas = f.deltas
+	// The pointers alias f.deltas entries, which is cleared so that the packet
+	// becomes their sole owner.
+	f.rtcp.RecvDeltas = make([]*rtcp.RecvDelta, len(f.deltas))
+	for i := range f.deltas {
+		f.rtcp.RecvDeltas[i] = &f.deltas[i]
+	}
+	f.deltas = nil
 
-	padLen := 20 + len(f.rtcp.PacketChunks)*2 + f.len // 4 bytes header + 16 bytes twcc header + 2 bytes for each chunk + length of deltas
+	// 4 bytes header + 16 bytes twcc header + 2 bytes for each chunk + length of deltas
+	padLen := 20 + len(f.rtcp.PacketChunks)*2 + f.len
 	padding := padLen%4 != 0
 	for padLen%4 != 0 {
 		padLen++
@@ -209,7 +232,7 @@ func (f *feedback) getRTCP() *rtcp.TransportLayerCC {
 		Count:   rtcp.FormatTCC,
 		Type:    rtcp.TypeTransportSpecificFeedback,
 		Padding: padding,
-		Length:  uint16((padLen / 4) - 1),
+		Length:  uint16((padLen / 4) - 1), //nolint:gosec // G115
 	}
 
 	return f.rtcp
@@ -223,7 +246,8 @@ func (f *feedback) addReceived(sequenceNumber uint16, timestampUS int64) bool {
 	} else {
 		delta250US = (deltaUS - rtcp.TypeTCCDeltaScaleFactor/2) / rtcp.TypeTCCDeltaScaleFactor
 	}
-	if delta250US < math.MinInt16 || delta250US > math.MaxInt16 { // delta doesn't fit into 16 bit, need to create new packet
+	// delta doesn't fit into 16 bit, need to create new packet
+	if delta250US < math.MinInt16 || delta250US > math.MaxInt16 {
 		return false
 	}
 	deltaUSRounded := delta250US * rtcp.TypeTCCDeltaScaleFactor
@@ -250,13 +274,14 @@ func (f *feedback) addReceived(sequenceNumber uint16, timestampUS int64) bool {
 		f.chunks = append(f.chunks, f.lastChunk.encode())
 	}
 	f.lastChunk.add(recvDelta)
-	f.deltas = append(f.deltas, &rtcp.RecvDelta{
+	f.deltas = append(f.deltas, rtcp.RecvDelta{
 		Type:  recvDelta,
 		Delta: deltaUSRounded,
 	})
 	f.lastTimestampUS += deltaUSRounded
 	f.sequenceNumberCount++
 	f.nextSequenceNumber++
+
 	return true
 }
 
@@ -282,6 +307,7 @@ func (c *chunk) canAdd(delta uint16) bool {
 	if len(c.deltas) < maxRunLengthCap && !c.hasDifferentTypes && delta == c.deltas[0] {
 		return true
 	}
+
 	return false
 }
 
@@ -294,20 +320,22 @@ func (c *chunk) add(delta uint16) {
 func (c *chunk) encode() rtcp.PacketStatusChunk {
 	if !c.hasDifferentTypes {
 		defer c.reset()
+
 		return &rtcp.RunLengthChunk{
 			PacketStatusSymbol: c.deltas[0],
-			RunLength:          uint16(len(c.deltas)),
+			RunLength:          uint16(len(c.deltas)), //nolint:gosec // G115
 		}
 	}
 	if len(c.deltas) == maxOneBitCap {
 		defer c.reset()
+
 		return &rtcp.StatusVectorChunk{
 			SymbolSize: rtcp.TypeTCCSymbolSizeOneBit,
 			SymbolList: c.deltas,
 		}
 	}
 
-	minCap := minInt(maxTwoBitCap, len(c.deltas))
+	minCap := min(maxTwoBitCap, len(c.deltas))
 	svc := &rtcp.StatusVectorChunk{
 		SymbolSize: rtcp.TypeTCCSymbolSizeTwoBit,
 		SymbolList: c.deltas[:minCap],
@@ -335,32 +363,4 @@ func (c *chunk) reset() {
 	c.deltas = []uint16{}
 	c.hasLargeDelta = false
 	c.hasDifferentTypes = false
-}
-
-func maxInt(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func minInt(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-func max64(a, b int64) int64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func min64(a, b int64) int64 {
-	if a < b {
-		return a
-	}
-	return b
 }

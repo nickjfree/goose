@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package rtcp
@@ -22,7 +22,7 @@ type SLIEntry struct {
 	Picture uint8
 }
 
-// The SliceLossIndication packet informs the encoder about the loss of a picture slice
+// The SliceLossIndication packet informs the encoder about the loss of a picture slice.
 type SliceLossIndication struct {
 	// SSRC of sender
 	SenderSSRC uint32
@@ -38,7 +38,7 @@ const (
 	sliOffset = 8
 )
 
-// Marshal encodes the SliceLossIndication in binary
+// Marshal encodes the SliceLossIndication in binary.
 func (p SliceLossIndication) Marshal() ([]byte, error) {
 	if len(p.SLI)+sliLength > math.MaxUint8 {
 		return nil, errTooManyReports
@@ -61,39 +61,40 @@ func (p SliceLossIndication) Marshal() ([]byte, error) {
 	return append(hData, rawPacket...), nil
 }
 
-// Unmarshal decodes the SliceLossIndication from binary
+// Unmarshal decodes the SliceLossIndication from binary.
 func (p *SliceLossIndication) Unmarshal(rawPacket []byte) error {
-	if len(rawPacket) < (headerLength + ssrcLength) {
+	if len(rawPacket) < (headerLength + (ssrcLength * 2)) {
 		return errPacketTooShort
 	}
 
-	var h Header
-	if err := h.Unmarshal(rawPacket); err != nil {
+	var header Header
+	if err := header.Unmarshal(rawPacket); err != nil {
 		return err
 	}
 
-	if len(rawPacket) < (headerLength + int(4*h.Length)) {
+	if len(rawPacket) < (headerLength + 4*int(header.Length)) {
 		return errPacketTooShort
 	}
 
-	if h.Type != TypeTransportSpecificFeedback || h.Count != FormatSLI {
+	if header.Type != TypePayloadSpecificFeedback || header.Count != FormatSLI {
 		return errWrongType
 	}
 
 	p.SenderSSRC = binary.BigEndian.Uint32(rawPacket[headerLength:])
 	p.MediaSSRC = binary.BigEndian.Uint32(rawPacket[headerLength+ssrcLength:])
-	for i := headerLength + sliOffset; i < (headerLength + int(h.Length*4)); i += 4 {
+	for i := headerLength + sliOffset; i < (headerLength + 4*int(header.Length)); i += 4 {
 		sli := binary.BigEndian.Uint32(rawPacket[i:])
 		p.SLI = append(p.SLI, SLIEntry{
-			First:   uint16((sli >> 19) & 0x1FFF),
-			Number:  uint16((sli >> 6) & 0x1FFF),
-			Picture: uint8(sli & 0x3F),
+			First:   uint16((sli >> 19) & 0x1FFF), //nolint:gosec // G115
+			Number:  uint16((sli >> 6) & 0x1FFF),  //nolint:gosec // G115
+			Picture: uint8(sli & 0x3F),            //nolint:gosec // G115
 		})
 	}
+
 	return nil
 }
 
-// MarshalSize returns the size of the packet once marshaled
+// MarshalSize returns the size of the packet once marshaled.
 func (p *SliceLossIndication) MarshalSize() int {
 	return headerLength + sliOffset + (len(p.SLI) * 4)
 }
@@ -102,8 +103,8 @@ func (p *SliceLossIndication) MarshalSize() int {
 func (p *SliceLossIndication) Header() Header {
 	return Header{
 		Count:  FormatSLI,
-		Type:   TypeTransportSpecificFeedback,
-		Length: uint16((p.MarshalSize() / 4) - 1),
+		Type:   TypePayloadSpecificFeedback,
+		Length: uint16((p.MarshalSize() / 4) - 1), //nolint:gosec // G115
 	}
 }
 

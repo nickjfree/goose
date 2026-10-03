@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package sctp
@@ -94,13 +94,4 @@ func (t *ackTimer) close() {
 		t.pending--
 	}
 	t.state = ackTimerClosed
-}
-
-// isRunning tests if the timer is running.
-// Debug purpose only.
-func (t *ackTimer) isRunning() bool {
-	t.mutex.Lock()
-	defer t.mutex.Unlock()
-
-	return t.state == ackTimerStarted
 }

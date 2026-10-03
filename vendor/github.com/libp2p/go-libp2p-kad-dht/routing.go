@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"fmt"
 	"sync"
 	"time"
 
@@ -26,6 +25,9 @@ import (
 
 // This file implements the Routing interface for the IpfsDHT struct.
 
+// putOperationTimeout is the per-peer timeout for PUT_VALUE and ADD_PROVIDER operations.
+const putOperationTimeout = 30 * time.Second
+
 // Basic Put/Get
 
 // PutValue adds value corresponding to given Key.
@@ -34,7 +36,7 @@ func (dht *IpfsDHT) PutValue(ctx context.Context, key string, value []byte, opts
 	ctx, end := tracer.PutValue(dhtName, ctx, key, value, opts...)
 	defer func() { end(err) }()
 
-	if !dht.enableValues {
+	if dht.valueStore == nil {
 		return routing.ErrNotSupported
 	}
 
@@ -59,7 +61,7 @@ func (dht *IpfsDHT) PutValue(ctx context.Context, key string, value []byte, opts
 			return err
 		}
 		if i != 0 {
-			return fmt.Errorf("can't replace a newer value with an older value")
+			return errors.New("can't replace a newer value with an older value")
 		}
 	}
 
@@ -79,7 +81,7 @@ func (dht *IpfsDHT) PutValue(ctx context.Context, key string, value []byte, opts
 	for _, p := range peers {
 		wg.Add(1)
 		go func(p peer.ID) {
-			ctx, cancel := context.WithCancel(ctx)
+			ctx, cancel := context.WithTimeout(ctx, putOperationTimeout)
 			defer cancel()
 			defer wg.Done()
 			routing.PublishQueryEvent(ctx, &routing.QueryEvent{
@@ -109,7 +111,7 @@ func (dht *IpfsDHT) GetValue(ctx context.Context, key string, opts ...routing.Op
 	ctx, end := tracer.GetValue(dhtName, ctx, key, opts...)
 	defer func() { end(result, err) }()
 
-	if !dht.enableValues {
+	if dht.valueStore == nil {
 		return nil, routing.ErrNotSupported
 	}
 
@@ -146,7 +148,7 @@ func (dht *IpfsDHT) SearchValue(ctx context.Context, key string, opts ...routing
 	ctx, end := tracer.SearchValue(dhtName, ctx, key, opts...)
 	defer func() { ch, err = end(ch, err) }()
 
-	if !dht.enableValues {
+	if dht.valueStore == nil {
 		return nil, routing.ErrNotSupported
 	}
 
@@ -187,7 +189,7 @@ func (dht *IpfsDHT) SearchValue(ctx context.Context, key string, opts ...routing
 			return
 		}
 
-		dht.updatePeerValues(dht.Context(), key, best, updatePeers)
+		dht.updatePeerValues(dht.ctx, key, best, updatePeers)
 	}()
 
 	return out, nil
@@ -272,7 +274,7 @@ func (dht *IpfsDHT) updatePeerValues(ctx context.Context, key string, val []byte
 				}
 				return
 			}
-			ctx, cancel := context.WithTimeout(ctx, time.Second*30)
+			ctx, cancel := context.WithTimeout(ctx, putOperationTimeout)
 			defer cancel()
 			err := dht.protoMessenger.PutValue(ctx, p, fixupRec)
 			if err != nil {
@@ -289,12 +291,22 @@ func (dht *IpfsDHT) getValues(ctx context.Context, key string, stopQuery chan st
 	logger.Debugw("finding value", "key", internal.LoggableRecordKeyString(key))
 
 	if rec, err := dht.getLocal(ctx, key); rec != nil && err == nil {
-		select {
-		case valCh <- recvdVal{
-			Val:  rec.GetValue(),
-			From: dht.self,
-		}:
-		case <-ctx.Done():
+		// The value store only age-checks records on read; run the validator so
+		// the local record enters the search under the same rules as records
+		// received from the network (getValues discards those on Validate
+		// failure below). Without this check, a locally stored record that has
+		// since expired by the validator's rules (e.g. IPNS EOL) would be
+		// emitted to SearchValue callers as if valid.
+		if err := dht.Validator.Validate(key, rec.GetValue()); err != nil {
+			logger.Debugw("local record verify failed", "key", internal.LoggableRecordKeyString(key), "error", err)
+		} else {
+			select {
+			case valCh <- recvdVal{
+				Val:  rec.GetValue(),
+				From: dht.self,
+			}:
+			case <-ctx.Done():
+			}
 		}
 	}
 
@@ -387,16 +399,18 @@ func (dht *IpfsDHT) Provide(ctx context.Context, key cid.Cid, brdcst bool) (err 
 	ctx, end := tracer.Provide(dhtName, ctx, key, brdcst)
 	defer func() { end(err) }()
 
-	if !dht.enableProviders {
+	if dht.providerStore == nil {
 		return routing.ErrNotSupported
 	} else if !key.Defined() {
-		return fmt.Errorf("invalid cid: undefined")
+		return errors.New("invalid cid: undefined")
 	}
 	keyMH := key.Hash()
 	logger.Debugw("providing", "cid", key, "mh", internal.LoggableProviderRecordBytes(keyMH))
 
 	// add self locally
-	dht.providerStore.AddProvider(ctx, keyMH, peer.AddrInfo{ID: dht.self})
+	if err := dht.providerStore.AddProvider(ctx, keyMH, peer.AddrInfo{ID: dht.self}); err != nil {
+		logger.Warnw("failed to add self as provider", "mh", internal.LoggableProviderRecordBytes(keyMH), "error", err)
+	}
 	if !brdcst {
 		return nil
 	}
@@ -455,10 +469,12 @@ func (dht *IpfsDHT) classicProvide(ctx context.Context, keyMH multihash.Multihas
 		wg.Add(1)
 		go func(p peer.ID) {
 			defer wg.Done()
+			ctx, cancel := context.WithTimeout(ctx, putOperationTimeout)
+			defer cancel()
 			logger.Debugf("putProvider(%s, %s)", internal.LoggableProviderRecordBytes(keyMH), p)
 			err := dht.protoMessenger.PutProviderAddrs(ctx, p, keyMH, peer.AddrInfo{
 				ID:    dht.self,
-				Addrs: dht.filterAddrs(dht.host.Addrs()),
+				Addrs: dht.FilteredAddrs(),
 			})
 			if err != nil {
 				logger.Debug(err)
@@ -474,10 +490,10 @@ func (dht *IpfsDHT) classicProvide(ctx context.Context, keyMH multihash.Multihas
 
 // FindProviders searches until the context expires.
 func (dht *IpfsDHT) FindProviders(ctx context.Context, c cid.Cid) ([]peer.AddrInfo, error) {
-	if !dht.enableProviders {
+	if dht.providerStore == nil {
 		return nil, routing.ErrNotSupported
 	} else if !c.Defined() {
-		return nil, fmt.Errorf("invalid cid: undefined")
+		return nil, errors.New("invalid cid: undefined")
 	}
 
 	var providers []peer.AddrInfo
@@ -497,7 +513,7 @@ func (dht *IpfsDHT) FindProvidersAsync(ctx context.Context, key cid.Cid, count i
 	defer func() { ch = end(ch, nil) }()
 
 	peerOut := make(chan peer.AddrInfo)
-	if !dht.enableProviders || !key.Defined() {
+	if dht.providerStore == nil || !key.Defined() {
 		close(peerOut)
 		return peerOut
 	}
@@ -578,6 +594,12 @@ func (dht *IpfsDHT) findProvidersAsyncRoutine(ctx context.Context, key multihash
 			}
 
 			logger.Debugf("%d provider entries", len(provs))
+
+			// The remote returns providers in an unspecified order. Shuffle
+			// before the count-capped loop below so the subset we keep and
+			// surface is spread across the returned providers rather than
+			// always the first ones the remote happened to list.
+			dht.shuffle(len(provs), func(i, j int) { provs[i], provs[j] = provs[j], provs[i] })
 
 			// Add unique providers from request, up to 'count'
 			for _, prov := range provs {

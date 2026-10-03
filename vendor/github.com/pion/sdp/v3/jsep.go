@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package sdp
@@ -23,6 +23,7 @@ const (
 	AttrKeyConnectionSetup  = "setup"
 	AttrKeyMID              = "mid"
 	AttrKeyICELite          = "ice-lite"
+	AttrKeyICEOptions       = "ice-options"
 	AttrKeyRTCPMux          = "rtcp-mux"
 	AttrKeyRTCPRsize        = "rtcp-rsize"
 	AttrKeyInactive         = "inactive"
@@ -31,6 +32,7 @@ const (
 	AttrKeySendRecv         = "sendrecv"
 	AttrKeyExtMap           = "extmap"
 	AttrKeyExtMapAllowMixed = "extmap-allow-mixed"
+	AttrKeyCryptex          = "cryptex"
 )
 
 // Constants for semantic tokens used in JSEP.
@@ -38,7 +40,9 @@ const (
 	SemanticTokenLipSynchronization     = "LS"
 	SemanticTokenFlowIdentification     = "FID"
 	SemanticTokenForwardErrorCorrection = "FEC"
-	SemanticTokenWebRTCMediaStreams     = "WMS"
+	// https://datatracker.ietf.org/doc/html/rfc5956#section-4.1
+	SemanticTokenForwardErrorCorrectionFramework = "FEC-FR"
+	SemanticTokenWebRTCMediaStreams              = "WMS"
 )
 
 // Constants for extmap key.
@@ -111,6 +115,42 @@ func (s *SessionDescription) WithValueAttribute(key, value string) *SessionDescr
 	s.Attributes = append(s.Attributes, NewAttribute(key, value))
 
 	return s
+}
+
+// addOrUpdateICEOption adds or updates the ice-options attribute with the given value.
+func (s *SessionDescription) addOrUpdateICEOption(value string) *SessionDescription {
+	for i := range s.Attributes {
+		if s.Attributes[i].Key == AttrKeyICEOptions {
+			prefix := " "
+			if s.Attributes[i].Value == "" {
+				prefix = ""
+			}
+
+			s.Attributes[i].Value += prefix + value
+
+			return s
+		}
+	}
+
+	return s.WithValueAttribute(AttrKeyICEOptions, value)
+}
+
+// WithICETrickleAdvertised advertises ICE trickle support in the session description.
+// See https://datatracker.ietf.org/doc/html/rfc9429#section-5.2.1
+func (s *SessionDescription) WithICETrickleAdvertised() *SessionDescription {
+	return s.addOrUpdateICEOption("trickle")
+}
+
+// WithICERenomination advertises ICE renomination support in the session description.
+// See https://datatracker.ietf.org/doc/html/draft-thatcher-ice-renomination-01#section-3
+func (s *SessionDescription) WithICERenomination() *SessionDescription {
+	return s.addOrUpdateICEOption("renomination")
+}
+
+// WithICESped advertises support for embedding the DTLS handshake into STUN
+// in the session description.
+func (s *SessionDescription) WithICESped() *SessionDescription {
+	return s.addOrUpdateICEOption("sped")
 }
 
 // WithFingerprint adds a fingerprint to the session description.
@@ -201,6 +241,7 @@ func (d *MediaDescription) WithMediaSource(ssrc uint32, cname, streamLabel, labe
 }
 
 // WithCandidate adds an ICE candidate to the media description.
+//
 // Deprecated: use WithICECandidate instead.
 func (d *MediaDescription) WithCandidate(value string) *MediaDescription {
 	return d.WithValueAttribute("candidate", value)

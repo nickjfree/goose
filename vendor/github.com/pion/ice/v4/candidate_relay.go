@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ice
@@ -6,6 +6,16 @@ package ice
 import (
 	"net"
 	"net/netip"
+)
+
+const (
+	// These preference values come from libwebrtc
+	//nolint:lll
+	// https://source.chromium.org/chromium/chromium/src/+/main:third_party/webrtc/p2p/base/p2p_constants.h;l=126;drc=bf712ec1a13783224debb691ba88ad5c15b93194
+	preferenceRelayTLS  = 0
+	preferenceRelayTCP  = 1
+	preferenceRelayDTLS = 2
+	preferenceRelayUDP  = 3
 )
 
 // CandidateRelay ...
@@ -49,18 +59,13 @@ func NewCandidateRelay(config *CandidateRelayConfig) (*CandidateRelay, error) {
 		return nil, err
 	}
 
-	return &CandidateRelay{
+	candidate := &CandidateRelay{
 		candidateBase: candidateBase{
-			id:            candidateID,
-			networkType:   networkType,
-			candidateType: CandidateTypeRelay,
-			address:       config.Address,
-			port:          config.Port,
-			resolvedAddr: &net.UDPAddr{
-				IP:   ipAddr.AsSlice(),
-				Port: config.Port,
-				Zone: ipAddr.Zone(),
-			},
+			id:                 candidateID,
+			networkType:        networkType,
+			candidateType:      CandidateTypeRelay,
+			address:            config.Address,
+			port:               config.Port,
 			component:          config.Component,
 			foundationOverride: config.Foundation,
 			priorityOverride:   config.Priority,
@@ -68,28 +73,18 @@ func NewCandidateRelay(config *CandidateRelayConfig) (*CandidateRelay, error) {
 				Address: config.RelAddr,
 				Port:    config.RelPort,
 			},
-			remoteCandidateCaches: map[AddrPort]Candidate{},
+			relayLocalPreference: relayProtocolPreference(config.RelayProtocol),
 		},
 		relayProtocol: config.RelayProtocol,
 		onClose:       config.OnClose,
-	}, nil
-}
-
-// LocalPreference returns the local preference for this candidate.
-func (c *CandidateRelay) LocalPreference() uint16 {
-	// These preference values come from libwebrtc
-	// https://github.com/mozilla/libwebrtc/blob/1389c76d9c79839a2ca069df1db48aa3f2e6a1ac/p2p/base/turn_port.cc#L61
-	var relayPreference uint16
-	switch c.relayProtocol {
-	case relayProtocolTLS, relayProtocolDTLS:
-		relayPreference = 2
-	case tcp:
-		relayPreference = 1
-	default:
-		relayPreference = 0
 	}
+	candidate.setResolvedAddr(&net.UDPAddr{
+		IP:   ipAddr.AsSlice(),
+		Port: config.Port,
+		Zone: ipAddr.Zone(),
+	})
 
-	return c.candidateBase.LocalPreference() + relayPreference
+	return candidate, nil
 }
 
 // RelayProtocol returns the protocol used between the endpoint and the relay server.
@@ -118,4 +113,18 @@ func (c *CandidateRelay) copy() (Candidate, error) {
 	}
 
 	return cc, nil
+}
+
+// relayProtocolPreference returns the preference for the relay protocol.
+func relayProtocolPreference(relayProtocol string) uint16 {
+	switch relayProtocol {
+	case relayProtocolTLS:
+		return preferenceRelayTLS
+	case tcp:
+		return preferenceRelayTCP
+	case relayProtocolDTLS:
+		return preferenceRelayDTLS
+	default:
+		return preferenceRelayUDP
+	}
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package rtcp
@@ -6,6 +6,7 @@ package rtcp
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 // A FIREntry is a (SSRC, seqno) pair, as carried by FullIntraRequest.
@@ -30,7 +31,7 @@ const (
 
 var _ Packet = (*FullIntraRequest)(nil)
 
-// Marshal encodes the FullIntraRequest
+// Marshal encodes the FullIntraRequest.
 func (p FullIntraRequest) Marshal() ([]byte, error) {
 	rawPacket := make([]byte, firOffset+(len(p.FIR)*8))
 	binary.BigEndian.PutUint32(rawPacket, p.SenderSSRC)
@@ -48,39 +49,56 @@ func (p FullIntraRequest) Marshal() ([]byte, error) {
 	return append(hData, rawPacket...), nil
 }
 
-// Unmarshal decodes the TransportLayerNack
+// Unmarshal decodes the TransportLayerNack.
 func (p *FullIntraRequest) Unmarshal(rawPacket []byte) error {
 	if len(rawPacket) < (headerLength + ssrcLength) {
 		return errPacketTooShort
 	}
 
-	var h Header
-	if err := h.Unmarshal(rawPacket); err != nil {
+	var header Header
+	if err := header.Unmarshal(rawPacket); err != nil {
 		return err
 	}
 
-	if len(rawPacket) < (headerLength + int(4*h.Length)) {
+	if len(rawPacket) < (headerLength + 4*int(header.Length)) {
 		return errPacketTooShort
 	}
 
-	if h.Type != TypePayloadSpecificFeedback || h.Count != FormatFIR {
+	if header.Type != TypePayloadSpecificFeedback || header.Count != FormatFIR {
 		return errWrongType
 	}
 
 	// The FCI field MUST contain one or more FIR entries
-	if 4*h.Length-firOffset <= 0 || (4*h.Length)%8 != 0 {
+	if 4*int(header.Length)-firOffset <= 0 || (4*int(header.Length))%8 != 0 {
 		return errBadLength
 	}
 
 	p.SenderSSRC = binary.BigEndian.Uint32(rawPacket[headerLength:])
 	p.MediaSSRC = binary.BigEndian.Uint32(rawPacket[headerLength+ssrcLength:])
-	for i := headerLength + firOffset; i < (headerLength + int(h.Length*4)); i += 8 {
+	for i := headerLength + firOffset; i < (headerLength + 4*int(header.Length)); i += 8 {
+		entry := rawPacket[i : i+8]
 		p.FIR = append(p.FIR, FIREntry{
-			binary.BigEndian.Uint32(rawPacket[i:]),
-			rawPacket[i+4],
+			binary.BigEndian.Uint32(entry),
+			entry[4],
 		})
 	}
+
 	return nil
+}
+
+func appendFIRSSRCs(dst []uint32, header Header, pkt []byte) ([]uint32, error) {
+	if header.Type != TypePayloadSpecificFeedback || header.Count != FormatFIR {
+		return dst, errWrongType
+	}
+	if 4*int(header.Length)-firOffset <= 0 || (4*int(header.Length))%8 != 0 {
+		return dst, errBadLength
+	}
+	for i := headerLength + firOffset; i < (headerLength + 4*int(header.Length)); i += 8 {
+		entry := pkt[i : i+8]
+		dst = append(dst, binary.BigEndian.Uint32(entry))
+	}
+
+	return dst, nil
 }
 
 // Header returns the Header associated with this packet.
@@ -88,22 +106,24 @@ func (p *FullIntraRequest) Header() Header {
 	return Header{
 		Count:  FormatFIR,
 		Type:   TypePayloadSpecificFeedback,
-		Length: uint16((p.MarshalSize() / 4) - 1),
+		Length: uint16((p.MarshalSize() / 4) - 1), //nolint:gosec // G115
 	}
 }
 
-// MarshalSize returns the size of the packet once marshaled
+// MarshalSize returns the size of the packet once marshaled.
 func (p *FullIntraRequest) MarshalSize() int {
 	return headerLength + firOffset + len(p.FIR)*8
 }
 
 func (p *FullIntraRequest) String() string {
-	out := fmt.Sprintf("FullIntraRequest %x %x",
+	var out strings.Builder
+	fmt.Fprintf(&out, "FullIntraRequest %x %x",
 		p.SenderSSRC, p.MediaSSRC)
 	for _, e := range p.FIR {
-		out += fmt.Sprintf(" (%x %v)", e.SSRC, e.SequenceNumber)
+		fmt.Fprintf(&out, " (%x %v)", e.SSRC, e.SequenceNumber)
 	}
-	return out
+
+	return out.String()
 }
 
 // DestinationSSRC returns an array of SSRC values that this packet refers to.
@@ -112,5 +132,6 @@ func (p *FullIntraRequest) DestinationSSRC() []uint32 {
 	for _, entry := range p.FIR {
 		ssrcs = append(ssrcs, entry.SSRC)
 	}
+
 	return ssrcs
 }

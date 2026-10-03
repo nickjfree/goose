@@ -2,6 +2,7 @@ package config
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
@@ -11,7 +12,7 @@ import (
 	"github.com/libp2p/go-libp2p-kad-dht/amino"
 	"github.com/libp2p/go-libp2p-kad-dht/internal/net"
 	pb "github.com/libp2p/go-libp2p-kad-dht/pb"
-	"github.com/libp2p/go-libp2p-kad-dht/providers"
+	"github.com/libp2p/go-libp2p-kad-dht/records"
 	"github.com/libp2p/go-libp2p-kbucket/peerdiversity"
 	record "github.com/libp2p/go-libp2p-record"
 	"github.com/libp2p/go-libp2p/core/host"
@@ -28,27 +29,34 @@ const DefaultPrefix protocol.ID = amino.ProtocolPrefix
 type ModeOpt int
 
 // QueryFilterFunc is a filter applied when considering peers to dial when querying
-type QueryFilterFunc func(dht interface{}, ai peer.AddrInfo) bool
+type QueryFilterFunc func(dht any, ai peer.AddrInfo) bool
 
 // RouteTableFilterFunc is a filter applied when considering connections to keep in
 // the local route table.
-type RouteTableFilterFunc func(dht interface{}, p peer.ID) bool
+type RouteTableFilterFunc func(dht any, p peer.ID) bool
 
 // Config is a structure containing all the options that can be used when constructing a DHT.
 type Config struct {
-	Datastore              ds.Batching
-	Validator              record.Validator
-	ValidatorChanged       bool // if true implies that the validator has been changed and that Defaults should not be used
-	Mode                   ModeOpt
-	ProtocolPrefix         protocol.ID
-	V1ProtocolOverride     protocol.ID
-	BucketSize             int
-	Concurrency            int
-	Resiliency             int
-	MaxRecordAge           time.Duration
-	EnableProviders        bool
-	EnableValues           bool
-	ProviderStore          providers.ProviderStore
+	Datastore           ds.Batching
+	Validator           record.Validator
+	ValidatorChanged    bool // if true implies that the validator has been changed and that Defaults should not be used
+	Mode                ModeOpt
+	ProtocolPrefix      protocol.ID
+	V1ProtocolOverride  protocol.ID
+	BucketSize          int
+	Concurrency         int
+	Resiliency          int
+	MaxRecordAge        time.Duration
+	ValueGCInterval     time.Duration
+	EnableProviders     bool
+	EnableValues        bool
+	ProviderManagerOpts []records.Option
+	// ValueDatastore and ProviderDatastore optionally give the value store and
+	// the provider store their own physical datastore. When nil, each falls back
+	// to Datastore. Record keys are namespaced by a per-record-type prefix, so a
+	// shared Datastore stays collision-free.
+	ValueDatastore         ds.Batching
+	ProviderDatastore      ds.Batching
 	QueryPeerFilter        QueryFilterFunc
 	LookupCheckConcurrency int
 	MsgSenderBuilder       func(h host.Host, protos []protocol.ID) pb.MessageSenderWithDisconnect
@@ -75,8 +83,26 @@ type Config struct {
 	OptimisticProvideJobsPoolSize int
 }
 
-func EmptyQueryFilter(_ interface{}, ai peer.AddrInfo) bool { return true }
-func EmptyRTFilter(_ interface{}, p peer.ID) bool           { return true }
+func EmptyQueryFilter(_ any, ai peer.AddrInfo) bool { return true }
+func EmptyRTFilter(_ any, p peer.ID) bool           { return true }
+
+// ValueDS returns the datastore backing the value store: the ValueDatastore
+// override when set, else the shared Datastore.
+func (c *Config) ValueDS() ds.Batching {
+	if c.ValueDatastore != nil {
+		return c.ValueDatastore
+	}
+	return c.Datastore
+}
+
+// ProviderDS returns the datastore backing the provider store: the
+// ProviderDatastore override when set, else the shared Datastore.
+func (c *Config) ProviderDS() ds.Batching {
+	if c.ProviderDatastore != nil {
+		return c.ProviderDatastore
+	}
+	return c.Datastore
+}
 
 // Apply applies the given options to this Option
 func (c *Config) Apply(opts ...Option) error {
@@ -101,7 +127,7 @@ func (c *Config) ApplyFallbacks(h host.Host) error {
 				nsval["ipns"] = ipns.Validator{KeyBook: h.Peerstore()}
 			}
 		} else {
-			return fmt.Errorf("the default Validator was changed without being marked as changed")
+			return errors.New("the default Validator was changed without being marked as changed")
 		}
 	}
 	return nil
@@ -127,7 +153,8 @@ var Defaults = func(o *Config) error {
 	o.RoutingTable.AutoRefresh = true
 	o.RoutingTable.PeerFilter = EmptyRTFilter
 
-	o.MaxRecordAge = providers.ProvideValidity
+	o.MaxRecordAge = amino.DefaultMaxRecordAge
+	o.ValueGCInterval = amino.DefaultValueGCInterval
 
 	o.BucketSize = amino.DefaultBucketSize
 	o.Concurrency = amino.DefaultConcurrency

@@ -12,7 +12,7 @@ import (
 func (dht *IpfsDHT) startNetworkSubscriber() error {
 	bufSize := eventbus.BufSize(256)
 
-	evts := []interface{}{
+	evts := []any{
 		// register for event bus notifications of when peers successfully complete identification in order to update
 		// the routing table
 		new(event.EvtPeerIdentificationCompleted),
@@ -39,9 +39,7 @@ func (dht *IpfsDHT) startNetworkSubscriber() error {
 		return fmt.Errorf("dht could not subscribe to eventbus events: %w", err)
 	}
 
-	dht.wg.Add(1)
-	go func() {
-		defer dht.wg.Done()
+	dht.wg.Go(func() {
 		defer subs.Close()
 
 		for {
@@ -84,7 +82,7 @@ func (dht *IpfsDHT) startNetworkSubscriber() error {
 				return
 			}
 		}
-	}()
+	})
 
 	return nil
 }

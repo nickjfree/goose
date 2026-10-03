@@ -2,7 +2,9 @@ package rcmgr
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net"
 	"net/netip"
 	"strings"
 	"sync"
@@ -11,8 +13,9 @@ import (
 	"github.com/libp2p/go-libp2p/core/network"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
+	"github.com/libp2p/go-libp2p/x/rate"
 
-	logging "github.com/ipfs/go-log/v2"
+	logging "github.com/libp2p/go-libp2p/gologshim"
 	"github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
 )
@@ -22,7 +25,9 @@ var log = logging.Logger("rcmgr")
 type resourceManager struct {
 	limits Limiter
 
-	connLimiter *connLimiter
+	connLimiter                    *connLimiter
+	connRateLimiter                *rate.Limiter
+	verifySourceAddressRateLimiter *rate.Limiter
 
 	trace          *trace
 	metrics        *metrics
@@ -134,12 +139,13 @@ type Option func(*resourceManager) error
 func NewResourceManager(limits Limiter, opts ...Option) (network.ResourceManager, error) {
 	allowlist := newAllowlist()
 	r := &resourceManager{
-		limits:      limits,
-		connLimiter: newConnLimiter(),
-		allowlist:   &allowlist,
-		svc:         make(map[string]*serviceScope),
-		proto:       make(map[protocol.ID]*protocolScope),
-		peer:        make(map[peer.ID]*peerScope),
+		limits:          limits,
+		connLimiter:     newConnLimiter(),
+		allowlist:       &allowlist,
+		svc:             make(map[string]*serviceScope),
+		proto:           make(map[protocol.ID]*protocolScope),
+		peer:            make(map[peer.ID]*peerScope),
+		connRateLimiter: newConnRateLimiter(),
 	}
 
 	for _, opt := range opts {
@@ -158,7 +164,7 @@ func NewResourceManager(limits Limiter, opts ...Option) (network.ResourceManager
 	for _, network := range allowlist.allowedNetworks {
 		prefix, err := netip.ParsePrefix(network.String())
 		if err != nil {
-			log.Debugf("failed to parse prefix from allowlist %s, %s", network, err)
+			log.Debug("failed to parse prefix from allowlist", "network", network.String(), "err", err)
 			continue
 		}
 		if _, ok := registeredConnLimiterPrefixes[prefix.String()]; !ok {
@@ -169,19 +175,23 @@ func NewResourceManager(limits Limiter, opts ...Option) (network.ResourceManager
 			})
 		}
 	}
+	r.verifySourceAddressRateLimiter = newVerifySourceAddressRateLimiter(r.connLimiter)
 
 	if !r.disableMetrics {
-		var sr TraceReporter
 		sr, err := NewStatsTraceReporter()
 		if err != nil {
-			log.Errorf("failed to initialise StatsTraceReporter %s", err)
+			log.Error("failed to initialise StatsTraceReporter", "err", err)
 		} else {
+			// Report system limits to Prometheus
+			sr.ReportSystemLimits(limits)
+
 			if r.trace == nil {
 				r.trace = &trace{}
 			}
 			found := false
 			for _, rep := range r.trace.reporters {
-				if rep == sr {
+				// Compare the actual reporter, not the interface
+				if _, ok := rep.(StatsTraceReporter); ok {
 					found = true
 					break
 				}
@@ -338,7 +348,22 @@ func (r *resourceManager) nextStreamId() int64 {
 	return r.streamId
 }
 
+// VerifySourceAddress tells the transport to verify the peer's IP address before
+// initiating a handshake.
+func (r *resourceManager) VerifySourceAddress(addr net.Addr) bool {
+	if r.verifySourceAddressRateLimiter == nil {
+		return false
+	}
+	ipPort, err := netip.ParseAddrPort(addr.String())
+	if err != nil {
+		return true
+	}
+	return !r.verifySourceAddressRateLimiter.Allow(ipPort.Addr())
+}
+
 // OpenConnectionNoIP is deprecated and will be removed in the next release
+//
+// Deprecated: Use OpenConnection instead
 func (r *resourceManager) OpenConnectionNoIP(dir network.Direction, usefd bool, endpoint multiaddr.Multiaddr) (network.ConnManagementScope, error) {
 	return r.openConnection(dir, usefd, endpoint, netip.Addr{})
 }
@@ -358,6 +383,10 @@ func (r *resourceManager) OpenConnection(dir network.Direction, usefd bool, endp
 }
 
 func (r *resourceManager) openConnection(dir network.Direction, usefd bool, endpoint multiaddr.Multiaddr, ip netip.Addr) (network.ConnManagementScope, error) {
+	if !r.connRateLimiter.Allow(ip) {
+		return nil, errors.New("rate limit exceeded")
+	}
+
 	if ip.IsValid() {
 		if ok := r.connLimiter.addConn(ip); !ok {
 			return nil, fmt.Errorf("connections per ip limit exceeded for %s", endpoint)
@@ -600,11 +629,11 @@ func PeerStrInScopeName(name string) string {
 		return ""
 	}
 	// Index to avoid allocating a new string
-	peerSplitIdx := strings.Index(name, "peer:")
-	if peerSplitIdx == -1 {
+	_, after, ok := strings.Cut(name, "peer:")
+	if !ok {
 		return ""
 	}
-	p := (name[peerSplitIdx+len("peer:"):])
+	p := (after)
 	return p
 }
 
@@ -618,11 +647,11 @@ func ParseProtocolScopeName(name string) string {
 		}
 
 		// Index to avoid allocating a new string
-		separatorIdx := strings.Index(name, ":")
-		if separatorIdx == -1 {
+		_, after, ok := strings.Cut(name, ":")
+		if !ok {
 			return ""
 		}
-		return name[separatorIdx+1:]
+		return after
 	}
 	return ""
 }

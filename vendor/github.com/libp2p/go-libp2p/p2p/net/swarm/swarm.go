@@ -20,7 +20,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peerstore"
 	"github.com/libp2p/go-libp2p/core/transport"
 
-	logging "github.com/ipfs/go-log/v2"
+	logging "github.com/libp2p/go-libp2p/gologshim"
 	ma "github.com/multiformats/go-multiaddr"
 	madns "github.com/multiformats/go-multiaddr-dns"
 )
@@ -217,11 +217,11 @@ type Swarm struct {
 
 	dialRanker network.DialRanker
 
-	connectednessEventEmitter *connectednessEventEmitter
-	udpBHF                    *BlackHoleSuccessCounter
-	ipv6BHF                   *BlackHoleSuccessCounter
-	bhd                       *blackHoleDetector
-	readOnlyBHD               bool
+	connectionEventsEmitter *connectionEventsEmitter
+	udpBHF                  *BlackHoleSuccessCounter
+	ipv6BHF                 *BlackHoleSuccessCounter
+	bhd                     *blackHoleDetector
+	readOnlyBHD             bool
 }
 
 // NewSwarm constructs a Swarm.
@@ -254,7 +254,11 @@ func NewSwarm(local peer.ID, peers peerstore.Peerstore, eventBus event.Bus, opts
 	s.transports.m = make(map[int]transport.Transport)
 	s.notifs.m = make(map[network.Notifiee]struct{})
 	s.directConnNotifs.m = make(map[peer.ID][]chan struct{})
-	s.connectednessEventEmitter = newConnectednessEventEmitter(s.Connectedness, emitter)
+	s.connectionEventsEmitter = newConnectionEventsEmitter(
+		s.Connectedness, emitter,
+		func(c *Conn) { s.notifyAll(func(f network.Notifiee) { f.Connected(s, c) }) },
+		func(c *Conn) { s.notifyAll(func(f network.Notifiee) { f.Disconnected(s, c) }) },
+	)
 
 	for _, opt := range opts {
 		if err := opt(s); err != nil {
@@ -310,7 +314,7 @@ func (s *Swarm) close() {
 		go func(l transport.Listener) {
 			defer s.refs.Done()
 			if err := l.Close(); err != nil && err != transport.ErrListenerClosed {
-				log.Errorf("error when shutting down listener: %s", err)
+				log.Error("error when shutting down listener", "err", err)
 			}
 		}(l)
 	}
@@ -319,15 +323,17 @@ func (s *Swarm) close() {
 		for _, c := range cs {
 			go func(c *Conn) {
 				if err := c.Close(); err != nil {
-					log.Errorf("error when shutting down connection: %s", err)
+					log.Error("error when shutting down connection", "err", err)
 				}
 			}(c)
 		}
 	}
 
 	// Wait for everything to finish.
+	// We must wait for all the connection notifications to complete before
+	// closing the events emitter.
 	s.refs.Wait()
-	s.connectednessEventEmitter.Close()
+	s.connectionEventsEmitter.Close()
 	s.emitter.Close()
 
 	// Now close out any transports (if necessary). Do this after closing
@@ -349,8 +355,8 @@ func (s *Swarm) close() {
 			wg.Add(1)
 			go func(c io.Closer) {
 				defer wg.Done()
-				if err := closer.Close(); err != nil {
-					log.Errorf("error when closing down transport %T: %s", c, err)
+				if err := c.Close(); err != nil {
+					log.Error("error when closing down transport", "transport_type", fmt.Sprintf("%T", c), "err", err)
 				}
 			}(closer)
 		}
@@ -387,7 +393,7 @@ func (s *Swarm) addConn(tc transport.CapableConn, dir network.Direction) (*Conn,
 		if allow, _ := s.gater.InterceptUpgraded(c); !allow {
 			err := tc.CloseWithError(network.ConnGated)
 			if err != nil {
-				log.Warnf("failed to close connection with peer %s and addr %s; err: %s", p, addr, err)
+				log.Warn("failed to close connection with peer and addr", "peer", p, "addr", addr, "err", err)
 			}
 			return nil, ErrGaterDisallowedConnection
 		}
@@ -416,18 +422,12 @@ func (s *Swarm) addConn(tc transport.CapableConn, dir network.Direction) (*Conn,
 	// * One will be decremented after the close notifications fire in Conn.doClose
 	// * The other will be decremented when Conn.start exits.
 	s.refs.Add(2)
-	// Take the notification lock before releasing the conns lock to block
-	// Disconnect notifications until after the Connect notifications done.
-	// This lock also ensures that swarm.refs.Wait() exits after we have
-	// enqueued the peer connectedness changed notification.
-	// TODO: Fix this fragility by taking a swarm ref for dial worker loop
-	c.notifyLk.Lock()
 	s.conns.Unlock()
-
-	s.connectednessEventEmitter.AddConn(p)
 
 	if !isLimited {
 		// Notify goroutines waiting for a direct connection
+		// do this before connected events, as there's no reason to stall this
+		// notification for the events.
 		//
 		// Go routines interested in waiting for direct connection first acquire this lock
 		// and then acquire s.conns.RLock. Do not acquire this lock before conns.Unlock to
@@ -439,10 +439,11 @@ func (s *Swarm) addConn(tc transport.CapableConn, dir network.Direction) (*Conn,
 		delete(s.directConnNotifs.m, p)
 		s.directConnNotifs.Unlock()
 	}
-	s.notifyAll(func(f network.Notifiee) {
-		f.Connected(s, c)
-	})
-	c.notifyLk.Unlock()
+
+	// AddConn dispatches PeerConnectednessChanged and Notifiee.Connected before
+	// c.start() spawns the AcceptStream loop, so handlers see the conn before
+	// any inbound stream arrives.
+	s.connectionEventsEmitter.AddConn(c)
 
 	c.start()
 	return c, nil
@@ -472,7 +473,7 @@ func (s *Swarm) StreamHandler() network.StreamHandler {
 // Use network.WithAllowLimitedConn to open a stream over a limited(relayed)
 // connection.
 func (s *Swarm) NewStream(ctx context.Context, p peer.ID) (network.Stream, error) {
-	log.Debugf("[%s] opening stream to peer [%s]", s.local, p)
+	log.Debug("opening stream to peer", "source_peer", s.local, "destination_peer", p)
 
 	// Algorithm:
 	// 1. Find the best connection, otherwise, dial.
@@ -510,7 +511,7 @@ func (s *Swarm) NewStream(ctx context.Context, p peer.ID) (network.Stream, error
 			var err error
 			c, err = s.waitForDirectConn(ctx, p)
 			if err != nil {
-				log.Debugf("failed to get direct connection to a limited peer %s: %s", p, err)
+				log.Debug("failed to get direct connection to a limited peer", "destination_peer", p, "err", err)
 				return nil, err
 			}
 		}
@@ -785,6 +786,8 @@ func (s *Swarm) removeConn(c *Conn) {
 	p := c.RemotePeer()
 
 	s.conns.Lock()
+	defer s.conns.Unlock()
+
 	cs := s.conns.m[p]
 	for i, ci := range cs {
 		if ci == c {
@@ -800,7 +803,6 @@ func (s *Swarm) removeConn(c *Conn) {
 	if len(s.conns.m[p]) == 0 {
 		delete(s.conns.m, p)
 	}
-	s.conns.Unlock()
 }
 
 // String returns a string representation of Network.
@@ -831,6 +833,10 @@ func wrapWithMetrics(capableConn transport.CapableConn, metricsTracer MetricsTra
 	c := &connWithMetrics{CapableConn: capableConn, opened: opened, dir: dir, metricsTracer: metricsTracer}
 	c.metricsTracer.OpenedConnection(c.dir, capableConn.RemotePublicKey(), capableConn.ConnState(), capableConn.LocalMultiaddr())
 	return c
+}
+
+func (c *connWithMetrics) As(target any) bool {
+	return c.CapableConn.As(target)
 }
 
 func (c *connWithMetrics) completedHandshake() {
@@ -918,7 +924,7 @@ func (r ResolverFromMaDNS) ResolveDNSAddr(ctx context.Context, expectedPeerID pe
 		nextOutputLimit := outputLimit - len(resolved) - (len(toResolve) - i) + 1
 		resolvedAddrs, err := r.ResolveDNSAddr(ctx, expectedPeerID, addr, recursionLimit-1, nextOutputLimit)
 		if err != nil {
-			log.Warnf("failed to resolve dnsaddr %v %s: ", addr, err)
+			log.Warn("failed to resolve dnsaddr", "addr", addr, "err", err)
 			// Dropping this address
 			continue
 		}
@@ -960,4 +966,32 @@ func (r ResolverFromMaDNS) ResolveDNSComponent(ctx context.Context, maddr ma.Mul
 		addrs = addrs[:outputLimit]
 	}
 	return addrs, nil
+}
+
+// AddCertHashes adds certificate hashes to relevant transport addresses, if there
+// are no certhashes already present on the method. It mutates `listenAddrs`.
+// This method is useful for adding certhashes to public addresses discovered
+// via identify, nat mapping, or provided by the user.
+func (s *Swarm) AddCertHashes(listenAddrs []ma.Multiaddr) []ma.Multiaddr {
+	type addCertHasher interface {
+		AddCertHashes(m ma.Multiaddr) (ma.Multiaddr, bool)
+	}
+
+	for i, addr := range listenAddrs {
+		t := s.TransportForListening(addr)
+		if t == nil {
+			continue
+		}
+		tpt, ok := t.(addCertHasher)
+		if !ok {
+			continue
+		}
+		addrWithCerthash, added := tpt.AddCertHashes(addr)
+		if !added {
+			log.Warn("Couldn't add certhashes to multiaddr", "addr", addr)
+			continue
+		}
+		listenAddrs[i] = addrWithCerthash
+	}
+	return listenAddrs
 }

@@ -9,9 +9,10 @@ import (
 	"github.com/libp2p/go-libp2p/core/event"
 	"github.com/libp2p/go-libp2p/core/host"
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/host/eventbus"
 
-	logging "github.com/ipfs/go-log/v2"
+	logging "github.com/libp2p/go-libp2p/gologshim"
 )
 
 var log = logging.Logger("autorelay")
@@ -53,12 +54,19 @@ func NewAutoRelay(host host.Host, opts ...Option) (*AutoRelay, error) {
 	return r, nil
 }
 
+// IsPeerInBackoff return true if the peer in backoff list currently
+func (r *AutoRelay) IsPeerInBackoff(peerID peer.ID) bool {
+	r.relayFinder.candidateMx.Lock()
+	defer r.relayFinder.candidateMx.Unlock()
+
+	_, ok := r.relayFinder.backoff[peerID]
+	return ok
+}
+
 func (r *AutoRelay) Start() {
-	r.refCount.Add(1)
-	go func() {
-		defer r.refCount.Done()
+	r.refCount.Go(func() {
 		r.background()
-	}()
+	})
 }
 
 func (r *AutoRelay) background() {
@@ -84,7 +92,7 @@ func (r *AutoRelay) background() {
 				if errors.Is(err, errAlreadyRunning) {
 					log.Debug("tried to start already running relay finder")
 				} else if err != nil {
-					log.Errorw("failed to start relay finder", "error", err)
+					log.Error("failed to start relay finder", "err", err)
 				} else {
 					r.metricsTracer.RelayFinderStatus(true)
 				}

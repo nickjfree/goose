@@ -2,6 +2,7 @@ package autonat
 
 import (
 	"context"
+	"fmt"
 	"math/rand"
 	"slices"
 	"sync/atomic"
@@ -13,7 +14,7 @@ import (
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/p2p/host/eventbus"
 
-	logging "github.com/ipfs/go-log/v2"
+	logging "github.com/libp2p/go-libp2p/gologshim"
 	ma "github.com/multiformats/go-multiaddr"
 	manet "github.com/multiformats/go-multiaddr/net"
 )
@@ -202,7 +203,7 @@ func (as *AmbientAutoNAT) background() {
 			case event.EvtLocalAddressesUpdated:
 				// schedule a new probe if addresses have changed
 			default:
-				log.Errorf("unknown event type: %T", e)
+				log.Error("unknown event type", "event_type", fmt.Sprintf("%T", e))
 			}
 		case obs := <-as.observations:
 			as.recordObservation(obs)
@@ -270,7 +271,6 @@ func (as *AmbientAutoNAT) scheduleProbe(forceProbe bool) time.Duration {
 		// retry very quicky if forceProbe is true *and* we don't know our reachability
 		// limit all peers fetch from peerstore to 1 per second.
 		nextProbeAfter = 2 * time.Second
-		nextProbeAfter = 2 * time.Second
 	case currentStatus == network.ReachabilityUnknown,
 		as.confidence < maxConfidence,
 		currentStatus != network.ReachabilityPublic && receivedInbound:
@@ -320,7 +320,7 @@ func (as *AmbientAutoNAT) recordObservation(observation network.Reachability) {
 		changed := false
 		if currentStatus != network.ReachabilityPublic {
 			// Aggressively switch to public from other states ignoring confidence
-			log.Debugf("NAT status is public")
+			log.Debug("NAT status is public")
 
 			// we are flipping our NATStatus, so confidence drops to 0
 			as.confidence = 0
@@ -340,7 +340,7 @@ func (as *AmbientAutoNAT) recordObservation(observation network.Reachability) {
 			if as.confidence > 0 {
 				as.confidence--
 			} else {
-				log.Debugf("NAT status is private")
+				log.Debug("NAT status is private")
 
 				// we are flipping our NATStatus, so confidence drops to 0
 				as.confidence = 0
@@ -358,7 +358,7 @@ func (as *AmbientAutoNAT) recordObservation(observation network.Reachability) {
 		// don't just flip to unknown, reduce confidence first
 		as.confidence--
 	} else {
-		log.Debugf("NAT status is unknown")
+		log.Debug("NAT status is unknown")
 		as.status.Store(&observation)
 		if currentStatus != network.ReachabilityUnknown {
 			if as.service != nil {
@@ -388,7 +388,7 @@ func (as *AmbientAutoNAT) probe(pi *peer.AddrInfo) {
 	defer cancel()
 
 	err := cli.DialBack(ctx, pi.ID)
-	log.Debugf("Dialback through peer %s completed: err: %s", pi.ID, err)
+	log.Debug("Dialback through peer completed", "peer", pi.ID, "err", err)
 
 	select {
 	case as.dialResponses <- err:

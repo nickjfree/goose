@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 // Package ice ...
@@ -45,14 +45,13 @@ func NewCandidatePeerReflexive(config *CandidatePeerReflexiveConfig) (*Candidate
 		candidateID = globalCandidateIDGenerator.Generate()
 	}
 
-	return &CandidatePeerReflexive{
+	candidate := &CandidatePeerReflexive{
 		candidateBase: candidateBase{
 			id:                 candidateID,
 			networkType:        networkType,
 			candidateType:      CandidateTypePeerReflexive,
 			address:            config.Address,
 			port:               config.Port,
-			resolvedAddr:       createAddr(networkType, ipAddr, config.Port),
 			component:          config.Component,
 			foundationOverride: config.Foundation,
 			priorityOverride:   config.Priority,
@@ -60,7 +59,9 @@ func NewCandidatePeerReflexive(config *CandidatePeerReflexiveConfig) (*Candidate
 				Address: config.RelAddr,
 				Port:    config.RelPort,
 			},
-			remoteCandidateCaches: map[AddrPort]Candidate{},
 		},
-	}, nil
+	}
+	candidate.setResolvedAddr(createAddr(networkType, ipAddr, config.Port))
+
+	return candidate, nil
 }

@@ -28,6 +28,8 @@ type Table struct {
 	// columnConfigMap stores the custom-configuration by column
 	// number and is generated before rendering
 	columnConfigMap map[int]ColumnConfig
+	// directionModifier caches the direction modifier string to avoid repeated calls
+	directionModifier string
 	// firstRowOfPage tells if the renderer is on the first row of a page?
 	firstRowOfPage bool
 	// htmlCSSClass stores the HTML CSS Class to use on the <table> node
@@ -50,6 +52,8 @@ type Table struct {
 	outputMirror io.Writer
 	// pager controls how the output is separated into pages
 	pager pager
+	// renderMode contains the type of table to render
+	renderMode renderMode
 	// rows stores the rows that make up the body (in string form)
 	rows []rowStr
 	// rowsColors stores the text.Colors over-rides for each row as defined by
@@ -59,6 +63,8 @@ type Table struct {
 	rowsConfigMap map[int]RowConfig
 	// rowsRaw stores the rows that make up the body
 	rowsRaw []Row
+	// rowsRawFiltered is the filtered version of rowsRaw
+	rowsRawFiltered []Row
 	// rowsFooter stores the rows that make up the footer (in string form)
 	rowsFooter []rowStr
 	// rowsFooterConfigs stores RowConfig for each footer row
@@ -76,9 +82,11 @@ type Table struct {
 	rowPainter RowPainter
 	// rowPainterWithAttributes is same as rowPainter, but with attributes
 	rowPainterWithAttributes RowPainterWithAttributes
-	// rowSeparator is a dummy row that contains the separator columns (dashes
-	// that make up the separator between header/body/footer
-	rowSeparator rowStr
+	// rowSeparators contains the separator columns (dashes that make up the
+	// separators between title/header/body/footer
+	rowSeparators map[string]rowStr
+	// rowSeparatorStrings contains the separator strings for each separator type
+	rowSeparatorStrings map[separatorType]string
 	// separators is used to keep track of all rowIndices after which a
 	// separator has to be rendered
 	separators map[int]bool
@@ -86,6 +94,8 @@ type Table struct {
 	sortBy []SortBy
 	// sortedRowIndices is the output of sorting
 	sortedRowIndices []int
+	// filterBy stores the filter criteria
+	filterBy []FilterBy
 	// style contains all the strings used to draw the table, and more
 	style *Style
 	// suppressEmptyColumns hides columns which have no content on all regular
@@ -127,12 +137,16 @@ func (t *Table) AppendHeader(row Row, config ...RowConfig) {
 //
 // Only the first item in the "config" will be tagged against this row.
 func (t *Table) AppendRow(row Row, config ...RowConfig) {
-	t.rowsRaw = append(t.rowsRaw, row)
+	t.rowsRawFiltered = append(t.rowsRawFiltered, row)
+	// Keep original rows in sync for filtering
+	rowCopy := make(Row, len(row))
+	copy(rowCopy, row)
+	t.rowsRaw = append(t.rowsRaw, rowCopy)
 	if len(config) > 0 {
 		if t.rowsConfigMap == nil {
 			t.rowsConfigMap = make(map[int]RowConfig)
 		}
-		t.rowsConfigMap[len(t.rowsRaw)-1] = config[0]
+		t.rowsConfigMap[len(t.rowsRawFiltered)-1] = config[0]
 	}
 }
 
@@ -164,9 +178,15 @@ func (t *Table) AppendSeparator() {
 	if t.separators == nil {
 		t.separators = make(map[int]bool)
 	}
-	if len(t.rowsRaw) > 0 {
-		t.separators[len(t.rowsRaw)-1] = true
+	if len(t.rowsRawFiltered) > 0 {
+		t.separators[len(t.rowsRawFiltered)-1] = true
 	}
+}
+
+// FilterBy sets the rules for filtering the Rows. All filters are applied with
+// AND logic (all must match). Filters are applied before sorting.
+func (t *Table) FilterBy(filterBy []FilterBy) {
+	t.filterBy = filterBy
 }
 
 // ImportGrid helps import 1d or 2d arrays as rows.
@@ -190,7 +210,7 @@ func (t *Table) ImportGrid(grid interface{}) bool {
 
 // Length returns the number of rows to be rendered.
 func (t *Table) Length() int {
-	return len(t.rowsRaw)
+	return len(t.rowsRawFiltered)
 }
 
 // Pager returns an object that splits the table output into pages and
@@ -231,6 +251,7 @@ func (t *Table) ResetHeaders() {
 
 // ResetRows resets and clears all the rows appended earlier.
 func (t *Table) ResetRows() {
+	t.rowsRawFiltered = nil
 	t.rowsRaw = nil
 	t.separators = nil
 }
@@ -305,12 +326,12 @@ func (t *Table) SetRowPainter(painter interface{}) {
 	t.rowPainterWithAttributes = nil
 
 	// if called as SetRowPainter(RowPainter(func...))
-	switch painter.(type) {
+	switch p := painter.(type) {
 	case RowPainter:
-		t.rowPainter = painter.(RowPainter)
+		t.rowPainter = p
 		return
 	case RowPainterWithAttributes:
-		t.rowPainterWithAttributes = painter.(RowPainterWithAttributes)
+		t.rowPainterWithAttributes = p
 		return
 	}
 
@@ -365,6 +386,31 @@ func (t *Table) SuppressEmptyColumns() {
 // SuppressTrailingSpaces removes all trailing spaces from the output.
 func (t *Table) SuppressTrailingSpaces() {
 	t.suppressTrailingSpaces = true
+}
+
+// calculateNumColumnsFromRaw calculates the number of columns from raw rows and headers
+func (t *Table) calculateNumColumnsFromRaw() {
+	t.numColumns = 0
+	// Check headers first
+	if len(t.rowsHeaderRaw) > 0 {
+		for _, headerRow := range t.rowsHeaderRaw {
+			if len(headerRow) > t.numColumns {
+				t.numColumns = len(headerRow)
+			}
+		}
+	}
+	// Check data rows
+	for _, row := range t.rowsRawFiltered {
+		if len(row) > t.numColumns {
+			t.numColumns = len(row)
+		}
+	}
+	// Check footer rows
+	for _, footerRow := range t.rowsFooterRaw {
+		if len(footerRow) > t.numColumns {
+			t.numColumns = len(footerRow)
+		}
+	}
 }
 
 func (t *Table) getAlign(colIdx int, hint renderHint) text.Align {
@@ -434,7 +480,7 @@ func (t *Table) getBorderLeft(hint renderHint) string {
 	} else if hint.isSeparatorRow {
 		if t.autoIndex && hint.isHeaderOrFooterSeparator() {
 			border = t.style.Box.Left
-		} else if !t.autoIndex && t.shouldMergeCellsVertically(0, hint) {
+		} else if !t.autoIndex && t.shouldMergeCellsVerticallyAbove(0, hint) {
 			border = t.style.Box.Left
 		} else {
 			border = t.style.Box.LeftSeparator
@@ -454,7 +500,7 @@ func (t *Table) getBorderRight(hint renderHint) string {
 	} else if hint.isBorderBottom {
 		border = t.style.Box.BottomRight
 	} else if hint.isSeparatorRow {
-		if t.shouldMergeCellsVertically(t.numColumns-1, hint) {
+		if t.shouldMergeCellsVerticallyAbove(t.numColumns-1, hint) {
 			border = t.style.Box.Right
 		} else {
 			border = t.style.Box.RightSeparator
@@ -505,13 +551,13 @@ func (t *Table) getColumnSeparator(row rowStr, colIdx int, hint renderHint) stri
 	if hint.isSeparatorRow {
 		if hint.isBorderTop {
 			if t.shouldMergeCellsHorizontallyBelow(row, colIdx, hint) {
-				separator = t.style.Box.MiddleHorizontal
+				separator = t.style.Box.middleHorizontal(hint.separatorType)
 			} else {
 				separator = t.style.Box.TopSeparator
 			}
 		} else if hint.isBorderBottom {
 			if t.shouldMergeCellsHorizontallyAbove(row, colIdx, hint) {
-				separator = t.style.Box.MiddleHorizontal
+				separator = t.style.Box.middleHorizontal(hint.separatorType)
 			} else {
 				separator = t.style.Box.BottomSeparator
 			}
@@ -525,13 +571,13 @@ func (t *Table) getColumnSeparator(row rowStr, colIdx int, hint renderHint) stri
 }
 
 func (t *Table) getColumnSeparatorNonBorder(mergeCellsAbove bool, mergeCellsBelow bool, colIdx int, hint renderHint) string {
-	mergeNextCol := t.shouldMergeCellsVertically(colIdx, hint)
+	mergeNextCol := t.shouldMergeCellsVerticallyAbove(colIdx, hint)
 	if hint.isAutoIndexColumn {
 		return t.getColumnSeparatorNonBorderAutoIndex(mergeNextCol, hint)
 	}
 
-	mergeCurrCol := t.shouldMergeCellsVertically(colIdx-1, hint)
-	return t.getColumnSeparatorNonBorderNonAutoIndex(mergeCellsAbove, mergeCellsBelow, mergeCurrCol, mergeNextCol)
+	mergeCurrCol := t.shouldMergeCellsVerticallyAbove(colIdx-1, hint)
+	return t.getColumnSeparatorNonBorderNonAutoIndex(mergeCellsAbove, mergeCellsBelow, mergeCurrCol, mergeNextCol, hint)
 }
 
 func (t *Table) getColumnSeparatorNonBorderAutoIndex(mergeNextCol bool, hint renderHint) string {
@@ -546,11 +592,11 @@ func (t *Table) getColumnSeparatorNonBorderAutoIndex(mergeNextCol bool, hint ren
 	return t.style.Box.MiddleSeparator
 }
 
-func (t *Table) getColumnSeparatorNonBorderNonAutoIndex(mergeCellsAbove bool, mergeCellsBelow bool, mergeCurrCol bool, mergeNextCol bool) string {
+func (t *Table) getColumnSeparatorNonBorderNonAutoIndex(mergeCellsAbove bool, mergeCellsBelow bool, mergeCurrCol bool, mergeNextCol bool, hint renderHint) string {
 	if mergeCellsAbove && mergeCellsBelow && mergeCurrCol && mergeNextCol {
 		return t.style.Box.EmptySeparator
 	} else if mergeCellsAbove && mergeCellsBelow {
-		return t.style.Box.MiddleHorizontal
+		return t.style.Box.middleHorizontal(hint.separatorType)
 	} else if mergeCellsAbove {
 		return t.style.Box.TopSeparator
 	} else if mergeCellsBelow {
@@ -766,6 +812,13 @@ func (t *Table) isIndexColumn(colIdx int, hint renderHint) bool {
 	return t.indexColumn == colIdx+1 || hint.isAutoIndexColumn
 }
 
+// estimatedRenderLength approximates the rendered output size, to pre-size
+// the output builder and avoid repeated re-allocations while rendering.
+func (t *Table) estimatedRenderLength() int {
+	numRows := len(t.rows) + len(t.rowsHeader) + len(t.rowsFooter) + 1
+	return numRows * (t.maxRowLength + 1)
+}
+
 func (t *Table) render(out *strings.Builder) string {
 	outStr := out.String()
 	if t.suppressTrailingSpaces {
@@ -839,7 +892,7 @@ func (t *Table) shouldMergeCellsHorizontallyBelow(row rowStr, colIdx int, hint r
 	return false
 }
 
-func (t *Table) shouldMergeCellsVertically(colIdx int, hint renderHint) bool {
+func (t *Table) shouldMergeCellsVerticallyAbove(colIdx int, hint renderHint) bool {
 	if !t.firstRowOfPage && t.columnConfigMap[colIdx].AutoMerge && colIdx < t.numColumns {
 		if hint.isSeparatorRow {
 			rowPrev := t.getRow(hint.rowNumber-1, hint)
@@ -856,6 +909,23 @@ func (t *Table) shouldMergeCellsVertically(colIdx int, hint renderHint) bool {
 		}
 	}
 	return false
+}
+
+func (t *Table) shouldMergeCellsVerticallyBelow(colIdx int, hint renderHint) int {
+	numRowsToMerge := 0
+	if t.columnConfigMap[colIdx].AutoMerge && colIdx < t.numColumns {
+		numRowsToMerge = 1
+		rowCurr := t.getRow(hint.rowNumber-1, hint)
+		for rowIdx := hint.rowNumber; rowIdx < len(t.rows); rowIdx++ {
+			rowNext := t.getRow(rowIdx, hint)
+			if colIdx < len(rowCurr) && colIdx < len(rowNext) && rowNext[colIdx] == rowCurr[colIdx] {
+				numRowsToMerge++
+			} else {
+				break
+			}
+		}
+	}
+	return numRowsToMerge
 }
 
 func (t *Table) shouldSeparateRows(rowIdx int, numRows int) bool {
@@ -877,20 +947,187 @@ func (t *Table) shouldSeparateRows(rowIdx int, numRows int) bool {
 	return true
 }
 
-func (t *Table) wrapRow(row rowStr) (int, rowStr) {
+// wrapCell fits a single column's value into its width limit (WidthMax, or the
+// column's longest line when no limit is set) using the column's enforcer.
+func (t *Table) wrapCell(colIdx int, colStr string) string {
+	widthEnforcer := t.columnConfigMap[colIdx].getWidthMaxEnforcer()
+	maxWidth := t.getColumnWidthMax(colIdx)
+	if maxWidth == 0 {
+		maxWidth = t.maxColumnLengths[colIdx]
+	}
+	return widthEnforcer(colStr, maxWidth)
+}
+
+func (t *Table) wrapRow(row rowStr, hint renderHint) (int, rowStr) {
 	colMaxLines := 0
 	rowWrapped := make(rowStr, len(row))
 	for colIdx, colStr := range row {
-		widthEnforcer := t.columnConfigMap[colIdx].getWidthMaxEnforcer()
-		maxWidth := t.getColumnWidthMax(colIdx)
-		if maxWidth == 0 {
-			maxWidth = t.maxColumnLengths[colIdx]
+		rowWrapped[colIdx] = t.wrapCell(colIdx, colStr)
+		// a cell that is being merged into the one above renders empty in this
+		// row, so its (possibly wrapped) height must not stretch the row and
+		// leave blank lines trailing the merged content; see issue #261
+		if t.shouldMergeCellsVerticallyAbove(colIdx, hint) {
+			continue
 		}
-		rowWrapped[colIdx] = widthEnforcer(colStr, maxWidth)
 		colNumLines := strings.Count(rowWrapped[colIdx], "\n") + 1
 		if colNumLines > colMaxLines {
 			colMaxLines = colNumLines
 		}
 	}
+	if colMaxLines == 0 {
+		// every column merged into the row above; keep one (blank) line so the
+		// row still occupies its place
+		colMaxLines = 1
+	}
 	return colMaxLines, rowWrapped
+}
+
+// shouldInterleaveVerticalMerge reports whether consecutive body rows that are
+// being vertically merged (ColumnConfig.AutoMerge) may be rendered as a single
+// shared block. Doing so lets the differing columns stack into the merged
+// cell's wrapped height instead of leaving blank lines below it (issue #261).
+//
+// It is intentionally restricted to the plain, unambiguous case - no row
+// separators, auto-index, or per-row coloring - so it never alters any other
+// layout and falls back to the regular row-by-row rendering everywhere else.
+func (t *Table) shouldInterleaveVerticalMerge(hint renderHint) bool {
+	if hint.isHeaderRow || hint.isFooterRow {
+		return false
+	}
+	if t.style.Options.SeparateRows || len(t.separators) > 0 {
+		return false
+	}
+	if t.autoIndex || t.pager.size > 0 {
+		return false
+	}
+	if t.rowPainter != nil || t.rowPainterWithAttributes != nil || t.style.Color.RowAlternate != nil {
+		return false
+	}
+	for colIdx := 0; colIdx < t.numColumns; colIdx++ {
+		if t.columnConfigMap[colIdx].AutoMerge {
+			return true
+		}
+	}
+	return false
+}
+
+// verticalMergeGroupEnd returns the exclusive end index of the maximal run of
+// rows starting at "start" that can be stacked into a single block: rows that
+// carry the same config and each add just one line, so they slot into the
+// wrapped height of the merged cell(s) spanning them.
+func (t *Table) verticalMergeGroupEnd(rows []rowStr, start int) int {
+	if !t.rowVerticallyStackable(rows[start]) {
+		return start + 1
+	}
+	end := start + 1
+	for end < len(rows) {
+		if t.rowsConfigMap[start] != t.rowsConfigMap[end] {
+			break
+		}
+		if !t.rowStacksBelow(rows[end-1], rows[end]) {
+			break
+		}
+		end++
+	}
+	return end
+}
+
+// rowVerticallyStackable reports whether a row's non-merged cells each render on
+// a single line, so it occupies a single line when stacked (a merged cell may
+// still wrap - it provides the vertical space the stacked rows slot into).
+func (t *Table) rowVerticallyStackable(row rowStr) bool {
+	for colIdx := 0; colIdx < t.numColumns && colIdx < len(row); colIdx++ {
+		if t.columnConfigMap[colIdx].AutoMerge {
+			continue
+		}
+		if t.cellWraps(colIdx, row[colIdx]) {
+			return false
+		}
+	}
+	return true
+}
+
+// rowStacksBelow reports whether "cur" can be stacked right below "prev" within
+// a shared merge block, i.e. it adds exactly one line. A merged column that
+// keeps its value simply continues the cell above; any column that changes must
+// fit on a single line (and a merged column that changes must also have left
+// its previous value on a single line, else its wrapped height would not line
+// up with the stacked rows).
+func (t *Table) rowStacksBelow(prev, cur rowStr) bool {
+	for colIdx := 0; colIdx < t.numColumns; colIdx++ {
+		prevVal, curVal := "", ""
+		if colIdx < len(prev) {
+			prevVal = prev[colIdx]
+		}
+		if colIdx < len(cur) {
+			curVal = cur[colIdx]
+		}
+		merged := t.columnConfigMap[colIdx].AutoMerge
+		if merged && curVal == prevVal {
+			continue
+		}
+		if t.cellWraps(colIdx, curVal) {
+			return false
+		}
+		if merged && t.cellWraps(colIdx, prevVal) {
+			return false
+		}
+	}
+	return true
+}
+
+// cellWraps reports whether a column's value renders on more than one line.
+func (t *Table) cellWraps(colIdx int, colStr string) bool {
+	return strings.Contains(t.wrapCell(colIdx, colStr), "\n")
+}
+
+// combineVerticalMergeGroup collapses rows[start:end] into a single row. A
+// merged column that never changes keeps its single (spanning) value; every
+// other column stacks the rows' values one below the other, blanking a merged
+// value that repeats so it still reads as one vertically merged cell.
+func (t *Table) combineVerticalMergeGroup(rows []rowStr, start, end int) rowStr {
+	combined := make(rowStr, t.numColumns)
+	for colIdx := 0; colIdx < t.numColumns; colIdx++ {
+		if t.columnConfigMap[colIdx].AutoMerge && t.mergedColumnIsConstant(rows, start, end, colIdx) {
+			if colIdx < len(rows[start]) {
+				combined[colIdx] = rows[start][colIdx]
+			}
+			continue
+		}
+		lines := make([]string, 0, end-start)
+		prevCell := ""
+		for rowIdx := start; rowIdx < end; rowIdx++ {
+			cell := ""
+			if colIdx < len(rows[rowIdx]) {
+				cell = rows[rowIdx][colIdx]
+			}
+			line := cell
+			if t.columnConfigMap[colIdx].AutoMerge && rowIdx > start && cell == prevCell {
+				line = ""
+			}
+			prevCell = cell
+			lines = append(lines, line)
+		}
+		combined[colIdx] = strings.Join(lines, "\n")
+	}
+	return combined
+}
+
+// mergedColumnIsConstant reports whether a merged column holds the same value
+// across every row in rows[start:end].
+func (t *Table) mergedColumnIsConstant(rows []rowStr, start, end, colIdx int) bool {
+	first := ""
+	if colIdx < len(rows[start]) {
+		first = rows[start][colIdx]
+	}
+	for rowIdx := start + 1; rowIdx < end; rowIdx++ {
+		val := ""
+		if colIdx < len(rows[rowIdx]) {
+			val = rows[rowIdx][colIdx]
+		}
+		if val != first {
+			return false
+		}
+	}
+	return true
 }

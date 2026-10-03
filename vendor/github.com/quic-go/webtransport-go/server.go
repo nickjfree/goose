@@ -2,11 +2,14 @@ package webtransport
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
+	"log"
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"sync"
 	"time"
 	"unicode/utf8"
@@ -14,12 +17,13 @@ import (
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
 	"github.com/quic-go/quic-go/quicvarint"
+
+	"github.com/dunglas/httpsfv"
 )
 
 const (
-	webTransportDraftOfferHeaderKey = "Sec-Webtransport-Http3-Draft02"
-	webTransportDraftHeaderKey      = "Sec-Webtransport-Http3-Draft"
-	webTransportDraftHeaderValue    = "draft02"
+	wtAvailableProtocolsHeader = "WT-Available-Protocols"
+	wtProtocolHeader           = "WT-Protocol"
 )
 
 const (
@@ -27,8 +31,42 @@ const (
 	webTransportUniStreamType = 0x54
 )
 
+type quicConnKeyType struct{}
+
+var quicConnKey = quicConnKeyType{}
+
+func ConfigureHTTP3Server(s *http3.Server) {
+	if s.AdditionalSettings == nil {
+		s.AdditionalSettings = make(map[uint64]uint64, 3)
+	}
+	// send the old setting for backwards compatibility with older clients
+	s.AdditionalSettings[settingsEnableWebtransportDraft06] = 1
+	s.AdditionalSettings[settingsWebTransportEnabled] = 1
+
+	// Safari requires SETTINGS_WT_MAX_SESSIONS >= 1 (draft-ietf-webtrans-http3-14)
+	s.AdditionalSettings[settingsWebTransportMaxSessions] = 1<<62 - 1
+
+	s.EnableDatagrams = true
+	origConnContext := s.ConnContext
+	s.ConnContext = func(ctx context.Context, conn *quic.Conn) context.Context {
+		if origConnContext != nil {
+			ctx = origConnContext(ctx, conn)
+		}
+		ctx = context.WithValue(ctx, quicConnKey, conn)
+		return ctx
+	}
+}
+
 type Server struct {
-	H3 http3.Server
+	H3 *http3.Server
+
+	// Config is the WebTransport configuration used for new sessions.
+	// If nil, the zero value is used.
+	Config *Config
+
+	// ApplicationProtocols is a list of application protocols that can be negotiated,
+	// see section 3.3 of https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-15 for details.
+	ApplicationProtocols []string
 
 	// ReorderingTimeout is the maximum time an incoming WebTransport stream that cannot be associated
 	// with a session is buffered. It is also the maximum time a WebTransport connection request is
@@ -50,8 +88,11 @@ type Server struct {
 
 	initOnce sync.Once
 	initErr  error
+	config   Config
 
-	conns *sessionManager
+	connsMx sync.Mutex
+	conns   map[*quic.Conn]*sessionManager
+	closed  bool
 }
 
 func (s *Server) initialize() error {
@@ -70,47 +111,19 @@ func (s *Server) timeout() time.Duration {
 }
 
 func (s *Server) init() error {
+	if s.Config != nil {
+		s.config = *s.Config
+	}
+	if s.H3 != nil {
+		ConfigureHTTP3Server(s.H3)
+		s.config.addSettings(s.H3.AdditionalSettings)
+	}
+
 	s.ctx, s.ctxCancel = context.WithCancel(context.Background())
 
-	s.conns = newSessionManager(s.timeout())
+	s.conns = make(map[*quic.Conn]*sessionManager)
 	if s.CheckOrigin == nil {
 		s.CheckOrigin = checkSameOrigin
-	}
-
-	// configure the http3.Server
-	if s.H3.AdditionalSettings == nil {
-		s.H3.AdditionalSettings = make(map[uint64]uint64, 1)
-	}
-	s.H3.AdditionalSettings[settingsEnableWebtransport] = 1
-	s.H3.EnableDatagrams = true
-	if s.H3.StreamHijacker != nil {
-		return errors.New("StreamHijacker already set")
-	}
-	s.H3.StreamHijacker = func(ft http3.FrameType, connTracingID quic.ConnectionTracingID, str quic.Stream, err error) (bool /* hijacked */, error) {
-		if isWebTransportError(err) {
-			return true, nil
-		}
-		if ft != webTransportFrameType {
-			return false, nil
-		}
-		// Reading the varint might block if the peer sends really small frames, but this is fine.
-		// This function is called from the HTTP/3 request handler, which runs in its own Go routine.
-		id, err := quicvarint.Read(quicvarint.NewReader(str))
-		if err != nil {
-			if isWebTransportError(err) {
-				return true, nil
-			}
-			return false, err
-		}
-		s.conns.AddStream(connTracingID, str, sessionID(id))
-		return true, nil
-	}
-	s.H3.UniStreamHijacker = func(st http3.StreamType, connTracingID quic.ConnectionTracingID, str quic.ReceiveStream, err error) (hijacked bool) {
-		if st != webTransportUniStreamType && !isWebTransportError(err) {
-			return false
-		}
-		s.conns.AddUniStream(connTracingID, str)
-		return true
 	}
 	return nil
 }
@@ -119,83 +132,368 @@ func (s *Server) Serve(conn net.PacketConn) error {
 	if err := s.initialize(); err != nil {
 		return err
 	}
-	return s.H3.Serve(conn)
+
+	s.refCount.Add(1)
+	defer s.refCount.Done()
+
+	return s.serve(conn)
+}
+
+func (s *Server) serve(conn net.PacketConn) error {
+	var quicConf *quic.Config
+	if s.H3.QUICConfig != nil {
+		quicConf = s.H3.QUICConfig.Clone()
+	} else {
+		quicConf = &quic.Config{}
+	}
+	quicConf.EnableDatagrams = true
+	quicConf.EnableStreamResetPartialDelivery = true
+	ln, err := quic.ListenEarly(conn, s.H3.TLSConfig, quicConf)
+	if err != nil {
+		return err
+	}
+	defer ln.Close()
+
+	for {
+		qconn, err := ln.Accept(s.ctx)
+		if err != nil {
+			return err
+		}
+
+		if s.isClosed() {
+			// Do not accept a new connection during shutdown
+			qconn.CloseWithError(0, "")
+			continue
+		}
+
+		s.refCount.Go(func() {
+			err := s.ServeQUICConn(qconn)
+			if errors.Is(err, http.ErrServerClosed) {
+				return
+			} else if err != nil {
+				log.Printf("http3: error serving QUIC connection: %v", err)
+			}
+		})
+	}
 }
 
 // ServeQUICConn serves a single QUIC connection.
-func (s *Server) ServeQUICConn(conn quic.Connection) error {
+func (s *Server) ServeQUICConn(conn *quic.Conn) error {
+	connState := conn.ConnectionState()
+	if !connState.SupportsDatagrams.Local {
+		return errors.New("webtransport: QUIC DATAGRAM support required, enable it via QUICConfig.EnableDatagrams")
+	}
+	if !connState.SupportsStreamResetPartialDelivery.Local {
+		return errors.New("webtransport: QUIC Stream Resets with Partial Delivery required, enable it via QUICConfig.EnableStreamResetPartialDelivery")
+	}
 	if err := s.initialize(); err != nil {
 		return err
 	}
-	return s.H3.ServeQUICConn(conn)
+
+	s.connsMx.Lock()
+
+	if s.closed {
+		// Shutting down, do not accept new connections
+		s.connsMx.Unlock()
+		conn.CloseWithError(0, "")
+		return http.ErrServerClosed
+	}
+
+	sessMgr, ok := s.conns[conn]
+	if !ok {
+		sessMgr = newSessionManager(s.timeout())
+		s.conns[conn] = sessMgr
+	}
+	s.connsMx.Unlock()
+
+	// Clean up when connection closes
+	context.AfterFunc(conn.Context(), func() {
+		s.connsMx.Lock()
+		delete(s.conns, conn)
+		s.connsMx.Unlock()
+		sessMgr.Close()
+	})
+
+	http3Conn, err := s.H3.NewRawServerConn(conn)
+	if err != nil {
+		return err
+	}
+
+	// Close the connection when the server context is cancelled.
+	go func() {
+		select {
+		case <-s.ctx.Done():
+			conn.CloseWithError(0, "")
+		case <-conn.Context().Done():
+			// connection already closed
+		}
+	}()
+
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+
+		for {
+			str, err := conn.AcceptStream(s.ctx)
+			if err != nil {
+				return
+			}
+
+			wg.Go(func() {
+				typ, err := quicvarint.Peek(str)
+				if err != nil {
+					return
+				}
+				if typ != webTransportFrameType {
+					http3Conn.HandleRequestStream(str)
+					return
+				}
+				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
+				// read the frame type (already peeked)
+				if _, err := quicvarint.Read(r); err != nil {
+					return
+				}
+				// read the session ID
+				id, err := quicvarint.Read(r)
+				if err != nil {
+					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					return
+				}
+				if !isValidSessionID(id) {
+					conn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
+					return
+				}
+				sessMgr.AddStream(str, sessionID(id), r.BytesRead)
+			})
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+
+		for {
+			str, err := conn.AcceptUniStream(s.ctx)
+			if err != nil {
+				return
+			}
+
+			wg.Go(func() {
+				typ, err := quicvarint.Peek(str)
+				if err != nil {
+					return
+				}
+				if typ != webTransportUniStreamType {
+					http3Conn.HandleUnidirectionalStream(str)
+					return
+				}
+				// read the stream type (already peeked) before passing to AddUniStream
+				r := &byteCountingReader{ByteReader: quicvarint.NewReader(str)}
+				if _, err := quicvarint.Read(r); err != nil {
+					return
+				}
+				// read the session ID
+				id, err := quicvarint.Read(r)
+				if err != nil {
+					str.CancelRead(quic.StreamErrorCode(http3.ErrCodeGeneralProtocolError))
+					return
+				}
+				if !isValidSessionID(id) {
+					conn.CloseWithError(quic.ApplicationErrorCode(http3.ErrCodeIDError), "")
+					return
+				}
+				sessMgr.AddUniStream(str, sessionID(id), r.BytesRead)
+			})
+		}
+	}()
+
+	wg.Wait()
+	return nil
 }
 
 func (s *Server) ListenAndServe() error {
 	if err := s.initialize(); err != nil {
 		return err
 	}
-	return s.H3.ListenAndServe()
+	s.refCount.Add(1)
+	defer s.refCount.Done()
+
+	addr := s.H3.Addr
+	if addr == "" {
+		addr = ":https"
+	}
+	udpAddr, err := net.ResolveUDPAddr("udp", addr)
+	if err != nil {
+		return err
+	}
+	conn, err := net.ListenUDP("udp", udpAddr)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+
+	return s.serve(conn)
 }
 
 func (s *Server) ListenAndServeTLS(certFile, keyFile string) error {
-	if err := s.initialize(); err != nil {
+	cert, err := tls.LoadX509KeyPair(certFile, keyFile)
+	if err != nil {
 		return err
 	}
-	return s.H3.ListenAndServeTLS(certFile, keyFile)
+	if s.H3.TLSConfig == nil {
+		s.H3.TLSConfig = &tls.Config{}
+	}
+	s.H3.TLSConfig.Certificates = []tls.Certificate{cert}
+	return s.ListenAndServe()
+}
+
+func (s *Server) isClosed() bool {
+	s.connsMx.Lock()
+	defer s.connsMx.Unlock()
+
+	return s.closed
 }
 
 func (s *Server) Close() error {
-	// Make sure that ctxCancel is defined.
-	// This is expected to be uncommon.
-	// It only happens if the server is closed without Serve / ListenAndServe having been called.
-	s.initOnce.Do(func() {})
+	_ = s.initialize()
+
+	// Close the established connections first, while the listener's socket is still
+	// open, so each CONNECTION_CLOSE frame is actually transmitted to the peer.
+	s.connsMx.Lock()
+	s.closed = true
+	if s.conns != nil {
+		for conn, mgr := range s.conns {
+			conn.CloseWithError(0, "")
+			mgr.Close()
+		}
+		s.conns = nil
+	}
+	s.connsMx.Unlock()
 
 	if s.ctxCancel != nil {
 		s.ctxCancel()
 	}
-	if s.conns != nil {
-		s.conns.Close()
-	}
+
 	err := s.H3.Close()
 	s.refCount.Wait()
 	return err
 }
 
 func (s *Server) Upgrade(w http.ResponseWriter, r *http.Request) (*Session, error) {
+	if err := s.initialize(); err != nil {
+		return nil, err
+	}
 	if r.Method != http.MethodConnect {
 		return nil, fmt.Errorf("expected CONNECT request, got %s", r.Method)
 	}
-	if r.Proto != protocolHeader {
+	if !isWebTransportProtocol(r.Proto) {
 		return nil, fmt.Errorf("unexpected protocol: %s", r.Proto)
-	}
-	if v, ok := r.Header[webTransportDraftOfferHeaderKey]; !ok || len(v) != 1 || v[0] != "1" {
-		return nil, fmt.Errorf("missing or invalid %s header", webTransportDraftOfferHeaderKey)
 	}
 	if !s.CheckOrigin(r) {
 		return nil, errors.New("webtransport: request origin not allowed")
 	}
 
+	id := r.Context().Value(quicConnKey)
+	if id == nil {
+		return nil, errors.New("webtransport: missing QUIC connection")
+	}
+	conn := id.(*quic.Conn)
+
+	selectedProtocol := s.selectProtocol(r.Header[http.CanonicalHeaderKey(wtAvailableProtocolsHeader)])
+
 	// Wait for SETTINGS
-	conn := w.(http3.Hijacker).Connection()
+	settingser := w.(http3.Settingser)
 	timer := time.NewTimer(s.timeout())
 	defer timer.Stop()
 	select {
-	case <-conn.ReceivedSettings():
+	case <-settingser.ReceivedSettings():
+	case <-conn.Context().Done():
+		return nil, context.Cause(conn.Context())
 	case <-timer.C:
 		return nil, errors.New("webtransport: didn't receive the client's SETTINGS on time")
 	}
-	settings := conn.Settings()
+	settings := settingser.Settings()
 	if !settings.EnableDatagrams {
 		return nil, errors.New("webtransport: missing datagram support")
 	}
 
-	w.Header().Add(webTransportDraftHeaderKey, webTransportDraftHeaderValue)
-	w.WriteHeader(http.StatusOK)
-	w.(http.Flusher).Flush()
+	if selectedProtocol != "" {
+		v, err := httpsfv.Marshal(httpsfv.NewItem(selectedProtocol))
+		if err != nil {
+			return nil, fmt.Errorf("failed to marshal selected protocol: %w", err)
+		}
+		w.Header().Add(wtProtocolHeader, v)
+	}
 
 	str := w.(http3.HTTPStreamer).HTTPStream()
 	sessID := sessionID(str.StreamID())
-	return s.conns.AddSession(conn, sessID, str), nil
+	fc := s.config.sessionFlowControl(settings)
+
+	// The session manager should already exist because ServeQUICConn creates it
+	// before any HTTP requests can be processed on this connection.
+	s.connsMx.Lock()
+	sessMgr, ok := s.conns[conn]
+	if !ok {
+		s.connsMx.Unlock()
+		return nil, errors.New("webtransport: connection session manager not found")
+	}
+	// Multiple sessions on one HTTP/3 connection require WebTransport flow control.
+	if !fc.Enabled {
+		sessMgr.mx.Lock()
+		for _, entry := range sessMgr.sessions {
+			if entry.Session != nil {
+				sessMgr.mx.Unlock()
+				s.connsMx.Unlock()
+				str.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+				str.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+				return nil, errors.New("webtransport: multiple sessions require flow control")
+			}
+		}
+		sessMgr.mx.Unlock()
+	}
+
+	sess := newSession(
+		context.WithoutCancel(r.Context()),
+		sessID,
+		conn,
+		str,
+		selectedProtocol,
+		fc,
+	)
+	sessMgr.AddSession(sessID, sess)
+	s.connsMx.Unlock()
+
+	w.WriteHeader(http.StatusOK)
+	w.(http.Flusher).Flush()
+	return sess, nil
+}
+
+func (s *Server) selectProtocol(theirs []string) string {
+	list, err := httpsfv.UnmarshalList(theirs)
+	if err != nil {
+		return ""
+	}
+	offered := make([]string, 0, len(list))
+	for _, item := range list {
+		i, ok := item.(httpsfv.Item)
+		if !ok {
+			return ""
+		}
+		protocol, ok := i.Value.(string)
+		if !ok {
+			return ""
+		}
+		offered = append(offered, protocol)
+	}
+	var selectedProtocol string
+	for _, p := range offered {
+		if slices.Contains(s.ApplicationProtocols, p) {
+			selectedProtocol = p
+			break
+		}
+	}
+	return selectedProtocol
 }
 
 // copied from https://github.com/gorilla/websocket

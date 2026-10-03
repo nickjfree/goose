@@ -97,11 +97,9 @@ func newListener(transport *WebRTCTransport, laddr ma.Multiaddr, socket net.Pack
 	l.mux = udpmux.NewUDPMux(socket)
 	l.mux.Start()
 
-	l.wg.Add(1)
-	go func() {
-		defer l.wg.Done()
+	l.wg.Go(func() {
 		l.listen()
-	}()
+	})
 
 	return l, err
 }
@@ -122,7 +120,7 @@ func (l *listener) listen() {
 		candidate, err := l.mux.Accept(l.ctx)
 		if err != nil {
 			if l.ctx.Err() == nil {
-				log.Debugf("accepting candidate failed: %s", err)
+				log.Debug("accepting candidate failed", "error", err)
 			}
 			return
 		}
@@ -135,8 +133,8 @@ func (l *listener) listen() {
 
 			conn, err := l.handleCandidate(ctx, candidate)
 			if err != nil {
-				l.mux.RemoveConnByUfrag(candidate.Ufrag)
-				log.Debugf("could not accept connection: %s: %v", candidate.Ufrag, err)
+				l.mux.RemoveConnByUfrag(candidate.LocalUfrag)
+				log.Debug("could not accept connection", "ufrag", candidate.LocalUfrag, "error", err)
 				return
 			}
 
@@ -196,9 +194,15 @@ func (l *listener) setupConnection(
 		}
 	}()
 
+	// The udpmux has already parsed and validated the STUN USERNAME: LocalUfrag is
+	// the server (local) ufrag, RemoteUfrag the client ufrag, and RemotePwd the
+	// client ICE password (recovered per WebRTC Direct version). See
+	// udpmux.credentialsFromSTUNMessage.
+	serverUfrag := candidate.LocalUfrag
+
 	settingEngine := webrtc.SettingEngine{LoggerFactory: pionLoggerFactory}
 	settingEngine.SetAnsweringDTLSRole(webrtc.DTLSRoleServer)
-	settingEngine.SetICECredentials(candidate.Ufrag, candidate.Ufrag)
+	settingEngine.SetICECredentials(serverUfrag, serverUfrag)
 	settingEngine.SetLite(true)
 	settingEngine.SetICEUDPMux(l.mux)
 	settingEngine.SetIncludeLoopbackCandidate(true)
@@ -224,9 +228,11 @@ func (l *listener) setupConnection(
 	}
 
 	errC := addOnConnectionStateChangeCallback(w.PeerConnection)
-	// Infer the client SDP from the incoming STUN message by setting the ice-ufrag.
+	// Infer the client SDP offer from the incoming STUN message using the client
+	// ufrag and password. pion validates the full "server_ufrag:client_ufrag"
+	// USERNAME on inbound checks, so the remote ice-ufrag must be the client ufrag.
 	if err := w.PeerConnection.SetRemoteDescription(webrtc.SessionDescription{
-		SDP:  createClientSDP(candidate.Addr, candidate.Ufrag),
+		SDP:  createClientSDP(candidate.Addr, candidate.RemoteUfrag, candidate.RemotePwd),
 		Type: webrtc.SDPTypeOffer,
 	}); err != nil {
 		return nil, err
@@ -244,7 +250,7 @@ func (l *listener) setupConnection(
 		return nil, ctx.Err()
 	case err := <-errC:
 		if err != nil {
-			return nil, fmt.Errorf("peer connection failed for ufrag: %s", candidate.Ufrag)
+			return nil, fmt.Errorf("peer connection failed for ufrag: %s", serverUfrag)
 		}
 	}
 
@@ -253,7 +259,7 @@ func (l *listener) setupConnection(
 	if err != nil {
 		return nil, err
 	}
-	handshakeChannel := newStream(w.HandshakeDataChannel, rwc, func() {})
+	handshakeChannel := newStream(w.HandshakeDataChannel, rwc, maxSendMessageSize, nil)
 	// we do not yet know A's peer ID so accept any inbound
 	remotePubKey, err := l.transport.noiseHandshake(ctx, w.PeerConnection, handshakeChannel, "", crypto.SHA256, true)
 	if err != nil {
@@ -333,7 +339,7 @@ func (l *listener) Multiaddr() ma.Multiaddr {
 func addOnConnectionStateChangeCallback(pc *webrtc.PeerConnection) <-chan error {
 	errC := make(chan error, 1)
 	var once sync.Once
-	pc.OnConnectionStateChange(func(state webrtc.PeerConnectionState) {
+	pc.OnConnectionStateChange(func(_ webrtc.PeerConnectionState) {
 		switch pc.ConnectionState() {
 		case webrtc.PeerConnectionStateConnected:
 			once.Do(func() { close(errC) })

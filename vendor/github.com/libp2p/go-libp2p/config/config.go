@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net"
 	"slices"
 	"time"
@@ -21,22 +22,25 @@ import (
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/core/routing"
 	"github.com/libp2p/go-libp2p/core/sec"
-	"github.com/libp2p/go-libp2p/core/sec/insecure"
 	"github.com/libp2p/go-libp2p/core/transport"
+	logging "github.com/libp2p/go-libp2p/gologshim"
 	"github.com/libp2p/go-libp2p/p2p/host/autonat"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
 	bhost "github.com/libp2p/go-libp2p/p2p/host/basic"
 	blankhost "github.com/libp2p/go-libp2p/p2p/host/blank"
 	"github.com/libp2p/go-libp2p/p2p/host/eventbus"
+	"github.com/libp2p/go-libp2p/p2p/host/observedaddrs"
 	"github.com/libp2p/go-libp2p/p2p/host/peerstore/pstoremem"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
 	routed "github.com/libp2p/go-libp2p/p2p/host/routed"
 	"github.com/libp2p/go-libp2p/p2p/net/swarm"
 	tptu "github.com/libp2p/go-libp2p/p2p/net/upgrader"
+	"github.com/libp2p/go-libp2p/p2p/protocol/autonatv2"
 	circuitv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/client"
 	relayv2 "github.com/libp2p/go-libp2p/p2p/protocol/circuitv2/relay"
 	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
 	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
+	"github.com/libp2p/go-libp2p/p2p/security/insecure"
 	"github.com/libp2p/go-libp2p/p2p/transport/quicreuse"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcpreuse"
 	libp2pwebrtc "github.com/libp2p/go-libp2p/p2p/transport/webrtc"
@@ -48,6 +52,8 @@ import (
 	"go.uber.org/fx"
 	"go.uber.org/fx/fxevent"
 )
+
+var log = logging.Logger("p2p-config")
 
 // AddrsFactory is a function that takes a set of multiaddrs we're listening on and
 // returns the set of multiaddrs we should advertise to the network.
@@ -69,7 +75,7 @@ type AutoNATConfig struct {
 
 type Security struct {
 	ID          protocol.ID
-	Constructor interface{}
+	Constructor any
 }
 
 // Config describes a set of settings for a libp2p node
@@ -120,6 +126,8 @@ type Config struct {
 
 	DisablePing bool
 
+	DisableNonPublicAddrPublishing bool
+
 	Routing RoutingC
 
 	EnableAutoRelay bool
@@ -157,9 +165,7 @@ func (cfg *Config) makeSwarm(eventBus event.Bus, enableMetrics bool) (*swarm.Swa
 
 	// Check this early. Prevents us from even *starting* without verifying this.
 	if pnet.ForcePrivateNetwork && len(cfg.PSK) == 0 {
-		log.Error("tried to create a libp2p node with no Private" +
-			" Network Protector but usage of Private Networks" +
-			" is forced by the environment")
+		log.Error("tried to create a libp2p node with no Private Network Protector but usage of Private Networks is forced by the environment")
 		// Note: This is *also* checked the upgrader itself, so it'll be
 		// enforced even *if* you don't use the libp2p constructor.
 		return nil, pnet.ErrNotInPrivateNetwork
@@ -286,17 +292,23 @@ func (cfg *Config) makeAutoNATV2Host() (host.Host, error) {
 
 func (cfg *Config) addTransports() ([]fx.Option, error) {
 	fxopts := []fx.Option{
-		fx.WithLogger(func() fxevent.Logger { return getFXLogger() }),
+		fx.WithLogger(func() fxevent.Logger {
+			l := &fxevent.SlogLogger{
+				Logger: log.With("system", "fx"),
+			}
+			l.UseLogLevel(slog.LevelDebug)
+			return l
+		}),
 		fx.Provide(fx.Annotate(tptu.New, fx.ParamTags(`name:"security"`))),
 		fx.Supply(cfg.Muxers),
 		fx.Provide(func() connmgr.ConnectionGater { return cfg.ConnectionGater }),
 		fx.Provide(func() pnet.PSK { return cfg.PSK }),
 		fx.Provide(func() network.ResourceManager { return cfg.ResourceManager }),
-		fx.Provide(func(gater connmgr.ConnectionGater, rcmgr network.ResourceManager) *tcpreuse.ConnMgr {
+		fx.Provide(func(upgrader transport.Upgrader) *tcpreuse.ConnMgr {
 			if !cfg.ShareTCPListener {
 				return nil
 			}
-			return tcpreuse.NewConnMgr(tcpreuse.EnvReuseportVal, gater, rcmgr)
+			return tcpreuse.NewConnMgr(tcpreuse.EnvReuseportVal, upgrader)
 		}),
 		fx.Provide(func(cm *quicreuse.ConnManager, sw *swarm.Swarm) libp2pwebrtc.ListenUDPFn {
 			hasQuicAddrPortFor := func(network string, laddr *net.UDPAddr) bool {
@@ -379,8 +391,28 @@ func (cfg *Config) addTransports() ([]fx.Option, error) {
 		fxopts = append(fxopts, cfg.QUICReuse...)
 	} else {
 		fxopts = append(fxopts,
-			fx.Provide(func(key quic.StatelessResetKey, tokenGenerator quic.TokenGeneratorKey, lifecycle fx.Lifecycle) (*quicreuse.ConnManager, error) {
-				var opts []quicreuse.Option
+			fx.Provide(func(key quic.StatelessResetKey, tokenGenerator quic.TokenGeneratorKey, rcmgr network.ResourceManager, lifecycle fx.Lifecycle) (*quicreuse.ConnManager, error) {
+				opts := []quicreuse.Option{
+					quicreuse.ConnContext(func(ctx context.Context, clientInfo *quic.ClientInfo) (context.Context, error) {
+						// even if creating the quic maddr fails, let the rcmgr decide what to do with the connection
+						addr, err := quicreuse.ToQuicMultiaddr(clientInfo.RemoteAddr, quic.Version1)
+						if err != nil {
+							addr = nil
+						}
+						scope, err := rcmgr.OpenConnection(network.DirInbound, false, addr)
+						if err != nil {
+							return ctx, err
+						}
+						ctx = network.WithConnManagementScope(ctx, scope)
+						context.AfterFunc(ctx, func() {
+							scope.Done()
+						})
+						return ctx, nil
+					}),
+					quicreuse.VerifySourceAddress(func(addr net.Addr) bool {
+						return rcmgr.VerifySourceAddress(addr)
+					}),
+				}
 				if !cfg.DisableMetrics {
 					opts = append(opts, quicreuse.EnableMetrics(cfg.PrometheusRegisterer))
 				}
@@ -413,32 +445,24 @@ func (cfg *Config) addTransports() ([]fx.Option, error) {
 	return fxopts, nil
 }
 
-func (cfg *Config) newBasicHost(swrm *swarm.Swarm, eventBus event.Bus) (*bhost.BasicHost, error) {
-	var autonatv2Dialer host.Host
-	if cfg.EnableAutoNATv2 {
-		ah, err := cfg.makeAutoNATV2Host()
-		if err != nil {
-			return nil, err
-		}
-		autonatv2Dialer = ah
-	}
+func (cfg *Config) newBasicHost(swrm *swarm.Swarm, eventBus event.Bus, an *autonatv2.AutoNAT, o bhost.ObservedAddrsManager) (*bhost.BasicHost, error) {
 	h, err := bhost.NewHost(swrm, &bhost.HostOpts{
-		EventBus:                        eventBus,
-		ConnManager:                     cfg.ConnManager,
-		AddrsFactory:                    cfg.AddrsFactory,
-		NATManager:                      cfg.NATManager,
-		EnablePing:                      !cfg.DisablePing,
-		UserAgent:                       cfg.UserAgent,
-		ProtocolVersion:                 cfg.ProtocolVersion,
-		EnableHolePunching:              cfg.EnableHolePunching,
-		HolePunchingOptions:             cfg.HolePunchingOptions,
-		EnableRelayService:              cfg.EnableRelayService,
-		RelayServiceOpts:                cfg.RelayServiceOpts,
-		EnableMetrics:                   !cfg.DisableMetrics,
-		PrometheusRegisterer:            cfg.PrometheusRegisterer,
-		DisableIdentifyAddressDiscovery: cfg.DisableIdentifyAddressDiscovery,
-		EnableAutoNATv2:                 cfg.EnableAutoNATv2,
-		AutoNATv2Dialer:                 autonatv2Dialer,
+		EventBus:                       eventBus,
+		ConnManager:                    cfg.ConnManager,
+		AddrsFactory:                   cfg.AddrsFactory,
+		NATManager:                     cfg.NATManager,
+		EnablePing:                     !cfg.DisablePing,
+		UserAgent:                      cfg.UserAgent,
+		ProtocolVersion:                cfg.ProtocolVersion,
+		EnableHolePunching:             cfg.EnableHolePunching,
+		HolePunchingOptions:            cfg.HolePunchingOptions,
+		EnableRelayService:             cfg.EnableRelayService,
+		RelayServiceOpts:               cfg.RelayServiceOpts,
+		EnableMetrics:                  !cfg.DisableMetrics,
+		PrometheusRegisterer:           cfg.PrometheusRegisterer,
+		DisableNonPublicAddrPublishing: cfg.DisableNonPublicAddrPublishing,
+		AutoNATv2:                      an,
+		ObservedAddrsManager:           o,
 	})
 	if err != nil {
 		return nil, err
@@ -455,7 +479,7 @@ func (cfg *Config) validate() error {
 	if l, ok := cfg.ResourceManager.(connmgr.GetConnLimiter); ok {
 		err := cfg.ConnManager.CheckLimit(l)
 		if err != nil {
-			log.Warn(fmt.Sprintf("rcmgr limit conflicts with connmgr limit: %v", err))
+			log.Warn("rcmgr limit conflicts with connmgr limit", "err", err)
 		}
 	}
 
@@ -516,6 +540,43 @@ func (cfg *Config) NewNode() (host.Host, error) {
 				},
 			})
 			return sw, nil
+		}),
+		fx.Provide(func(eventBus event.Bus, s *swarm.Swarm, lifecycle fx.Lifecycle) (bhost.ObservedAddrsManager, error) {
+			if cfg.DisableIdentifyAddressDiscovery {
+				return nil, nil
+			}
+			o, err := observedaddrs.NewManager(eventBus, s)
+			if err != nil {
+				return nil, err
+			}
+			lifecycle.Append(fx.Hook{
+				OnStart: func(context.Context) error {
+					o.Start(s)
+					return nil
+				},
+				OnStop: func(context.Context) error {
+					return o.Close()
+				},
+			})
+			return o, nil
+		}),
+		fx.Provide(func() (*autonatv2.AutoNAT, error) {
+			if !cfg.EnableAutoNATv2 {
+				return nil, nil
+			}
+			ah, err := cfg.makeAutoNATV2Host()
+			if err != nil {
+				return nil, err
+			}
+			var mt autonatv2.MetricsTracer
+			if !cfg.DisableMetrics {
+				mt = autonatv2.NewMetricsTracer(cfg.PrometheusRegisterer)
+			}
+			autoNATv2, err := autonatv2.New(ah, autonatv2.WithMetricsTracer(mt))
+			if err != nil {
+				return nil, fmt.Errorf("failed to create autonatv2: %w", err)
+			}
+			return autoNATv2, nil
 		}),
 		fx.Provide(cfg.newBasicHost),
 		fx.Provide(func(bh *bhost.BasicHost) identify.IDService {
@@ -593,7 +654,13 @@ func (cfg *Config) NewNode() (host.Host, error) {
 	}
 
 	if cfg.Routing != nil {
-		return &closableRoutedHost{App: app, RoutedHost: rh}, nil
+		return &closableRoutedHost{
+			closableBasicHost: closableBasicHost{
+				App:       app,
+				BasicHost: bh,
+			},
+			RoutedHost: rh,
+		}, nil
 	}
 	return &closableBasicHost{App: app, BasicHost: bh}, nil
 }

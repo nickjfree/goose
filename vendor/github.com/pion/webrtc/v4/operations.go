@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -6,6 +6,7 @@ package webrtc
 import (
 	"container/list"
 	"sync"
+	"sync/atomic"
 )
 
 // Operation is a function.
@@ -17,13 +18,13 @@ type operations struct {
 	busyCh chan struct{}
 	ops    *list.List
 
-	updateNegotiationNeededFlagOnEmptyChain *atomicBool
+	updateNegotiationNeededFlagOnEmptyChain *atomic.Bool
 	onNegotiationNeeded                     func()
 	isClosed                                bool
 }
 
 func newOperations(
-	updateNegotiationNeededFlagOnEmptyChain *atomicBool,
+	updateNegotiationNeededFlagOnEmptyChain *atomic.Bool,
 	onNegotiationNeeded func(),
 ) *operations {
 	return &operations{
@@ -150,9 +151,9 @@ func (o *operations) start() {
 		fn()
 		fn = o.pop()
 	}
-	if !o.updateNegotiationNeededFlagOnEmptyChain.get() {
+	if !o.updateNegotiationNeededFlagOnEmptyChain.Load() {
 		return
 	}
-	o.updateNegotiationNeededFlagOnEmptyChain.set(false)
+	o.updateNegotiationNeededFlagOnEmptyChain.Store(false)
 	o.onNegotiationNeeded()
 }

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ice
@@ -9,7 +9,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/pion/logging"
 	"github.com/pion/mdns/v2"
-	"github.com/pion/transport/v3"
+	"github.com/pion/transport/v5"
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 )
@@ -44,9 +44,11 @@ func createMulticastDNS(
 	networkTypes []NetworkType,
 	interfaces []*transport.Interface,
 	includeLoopback bool,
+	localAddress net.IP,
 	mDNSMode MulticastDNSMode,
 	mDNSName string,
 	log logging.LeveledLogger,
+	loggerFactory logging.LoggerFactory,
 ) (*mdns.Conn, MulticastDNSMode, error) {
 	if mDNSMode == MulticastDNSModeDisabled {
 		return nil, mDNSMode, nil
@@ -121,17 +123,23 @@ func createMulticastDNS(
 
 	switch mDNSMode {
 	case MulticastDNSModeQueryOnly:
+		//nolint:staticcheck // NewServer is unavailable in the pinned mDNS version.
 		conn, err := mdns.Server(pktConnV4, pktConnV6, &mdns.Config{
 			Interfaces:      ifcs,
 			IncludeLoopback: includeLoopback,
+			LocalAddress:    localAddress,
+			LoggerFactory:   loggerFactory,
 		})
 
 		return conn, mDNSMode, err
 	case MulticastDNSModeQueryAndGather:
+		//nolint:staticcheck // NewServer is unavailable in the pinned mDNS version.
 		conn, err := mdns.Server(pktConnV4, pktConnV6, &mdns.Config{
 			Interfaces:      ifcs,
 			IncludeLoopback: includeLoopback,
+			LocalAddress:    localAddress,
 			LocalNames:      []string{mDNSName},
+			LoggerFactory:   loggerFactory,
 		})
 
 		return conn, mDNSMode, err

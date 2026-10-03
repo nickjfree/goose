@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package sctp
@@ -27,9 +27,6 @@ const (
 
 	// Max.Init.Retransmits.
 	maxInitRetrans uint = 8
-
-	// Path.Max.Retrans.
-	pathMaxRetrans uint = 5
 
 	noMaxRetrans uint = 0
 )

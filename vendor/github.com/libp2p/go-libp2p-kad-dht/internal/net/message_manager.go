@@ -3,7 +3,7 @@ package net
 import (
 	"bufio"
 	"context"
-	"fmt"
+	"errors"
 	"io"
 	"sync"
 	"time"
@@ -18,18 +18,15 @@ import (
 	"github.com/libp2p/go-msgio/pbio"
 	"google.golang.org/protobuf/proto"
 
-	"go.opencensus.io/stats"
-	"go.opencensus.io/tag"
-
 	"github.com/libp2p/go-libp2p-kad-dht/internal"
-	"github.com/libp2p/go-libp2p-kad-dht/metrics"
+	"github.com/libp2p/go-libp2p-kad-dht/internal/metrics"
 	pb "github.com/libp2p/go-libp2p-kad-dht/pb"
 )
 
 var dhtReadMessageTimeout = 10 * time.Second
 
 // ErrReadTimeout is an error that occurs when no message is read within the timeout period.
-var ErrReadTimeout = fmt.Errorf("timed out reading response")
+var ErrReadTimeout = errors.New("timed out reading response")
 
 var logger = logging.Logger("dht")
 
@@ -72,14 +69,11 @@ func (m *messageSenderImpl) OnDisconnect(ctx context.Context, p peer.ID) {
 // SendRequest sends out a request, but also makes sure to
 // measure the RTT for latency measurements.
 func (m *messageSenderImpl) SendRequest(ctx context.Context, p peer.ID, pmes *pb.Message) (*pb.Message, error) {
-	ctx, _ = tag.New(ctx, metrics.UpsertMessageType(pmes))
+	ctx = metrics.ContextWithAttributes(ctx, metrics.UpsertMessageType(pmes))
 
 	ms, err := m.messageSenderForPeer(ctx, p)
 	if err != nil {
-		stats.Record(ctx,
-			metrics.SentRequests.M(1),
-			metrics.SentRequestErrors.M(1),
-		)
+		metrics.RecordRequestSendErr(ctx)
 		logger.Debugw("request failed to open message sender", "error", err, "to", p)
 		return nil, err
 	}
@@ -94,33 +88,25 @@ func (m *messageSenderImpl) SendRequest(ctx context.Context, p peer.ID, pmes *pb
 
 	rpmes, err := ms.SendRequest(ctx, pmes)
 	if err != nil {
-		stats.Record(ctx,
-			metrics.SentRequests.M(1),
-			metrics.SentRequestErrors.M(1),
-		)
+		metrics.RecordRequestSendErr(ctx)
 		logger.Debugw("request failed", "error", err, "to", p)
 		return nil, err
 	}
 
-	stats.Record(ctx,
-		metrics.SentRequests.M(1),
-		metrics.SentBytes.M(int64(len(marshalled))),
-		metrics.OutboundRequestLatency.M(float64(time.Since(start))/float64(time.Millisecond)),
-	)
+	outboundLatency := float64(time.Since(start)) / float64(time.Millisecond)
+	metrics.RecordRequestSendOK(ctx, int64(len(marshalled)), outboundLatency)
 	m.host.Peerstore().RecordLatency(p, time.Since(start))
 	return rpmes, nil
 }
 
 // SendMessage sends out a message
 func (m *messageSenderImpl) SendMessage(ctx context.Context, p peer.ID, pmes *pb.Message) error {
-	ctx, _ = tag.New(ctx, metrics.UpsertMessageType(pmes))
+	ctx = metrics.ContextWithAttributes(ctx, metrics.UpsertMessageType(pmes))
 
 	ms, err := m.messageSenderForPeer(ctx, p)
 	if err != nil {
-		stats.Record(ctx,
-			metrics.SentMessages.M(1),
-			metrics.SentMessageErrors.M(1),
-		)
+		metrics.RecordMessageSendErr(ctx)
+
 		logger.Debugw("message failed to open message sender", "error", err, "to", p)
 		return err
 	}
@@ -132,18 +118,12 @@ func (m *messageSenderImpl) SendMessage(ctx context.Context, p peer.ID, pmes *pb
 	}
 
 	if err := ms.SendMessage(ctx, pmes); err != nil {
-		stats.Record(ctx,
-			metrics.SentMessages.M(1),
-			metrics.SentMessageErrors.M(1),
-		)
+		metrics.RecordRequestSendErr(ctx)
 		logger.Debugw("message failed", "error", err, "to", p)
 		return err
 	}
 
-	stats.Record(ctx,
-		metrics.SentMessages.M(1),
-		metrics.SentBytes.M(int64(len(marshalled))),
-	)
+	metrics.RecordMessageSendOK(ctx, int64(len(marshalled)))
 	return nil
 }
 
@@ -217,7 +197,7 @@ func (ms *peerMessageSender) prepOrInvalidate(ctx context.Context) error {
 
 func (ms *peerMessageSender) prep(ctx context.Context) error {
 	if ms.invalid {
-		return fmt.Errorf("message sender has been invalidated")
+		return errors.New("message sender has been invalidated")
 	}
 	if ms.s != nil {
 		return nil
@@ -372,7 +352,7 @@ type bufferedDelimitedWriter struct {
 }
 
 var writerPool = sync.Pool{
-	New: func() interface{} {
+	New: func() any {
 		w := bufio.NewWriter(nil)
 		return &bufferedDelimitedWriter{
 			Writer:      w,

@@ -10,11 +10,9 @@ import (
 	"log"
 	"net"
 	"os"
-	"reflect"
 	"strings"
 	"sync"
 	"time"
-	"unsafe"
 
 	"github.com/libp2p/go-libp2p"
 
@@ -27,10 +25,8 @@ import (
 	"github.com/libp2p/go-libp2p/core/routing"
 	dis_routing "github.com/libp2p/go-libp2p/p2p/discovery/routing"
 	"github.com/libp2p/go-libp2p/p2p/host/autorelay"
-	"github.com/libp2p/go-libp2p/p2p/protocol/holepunch"
+	"github.com/libp2p/go-libp2p/p2p/host/observedaddrs"
 	rcmgr "github.com/libp2p/go-libp2p/p2p/host/resource-manager"
-	// "github.com/libp2p/go-libp2p/p2p/net/swarm"
-	"github.com/libp2p/go-libp2p/p2p/protocol/identify"
 	quic_transport "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	ma "github.com/multiformats/go-multiaddr"
 	"github.com/quic-go/quic-go"
@@ -75,7 +71,7 @@ var (
 func init() {
 
 	// only need 1 peer to get the observed address
-	identify.ActivationThresh = 1
+	observedaddrs.ActivationThresh = 1
 
 	if len(options.Bootstraps) > 0 {
 		bootstraps = strings.Split(options.Bootstraps, ",")
@@ -94,20 +90,13 @@ func isP2PCircuitAddress(addr ma.Multiaddr) bool {
 	return false
 }
 
-// hack. get quic.Connection to send datagram
-func getQuicConn(c network.Conn) quic.Connection {
-
-	// wrappedCapableConn := reflect.ValueOf(c).Elem().FieldByName("conn").Elem()
-	// capableConn := wrappedCapableConn.FieldByName("CapableConn").Elem()
-
-	// capableConn = capableConn.Elem()
-
-	// quicConn := capableConn.FieldByName("quicConn")
-	// logger.Printf("type is %s value is %+v", reflect.TypeOf(c), c)
-
-	quicConn := reflect.ValueOf(c).Elem().FieldByName("conn").Elem().Elem().FieldByName("quicConn")
-	v := reflect.NewAt(quicConn.Type(), unsafe.Pointer(quicConn.UnsafeAddr())).Elem()
-	return v.Interface().(quic.Connection)
+// get the quic connection used to send datagrams
+func getQuicConn(c network.Conn) *quic.Conn {
+	var qconn *quic.Conn
+	if c.As(&qconn) {
+		return qconn
+	}
+	return nil
 }
 
 // ipfs wire
@@ -117,7 +106,7 @@ type IPFSWire struct {
 	// stream
 	s network.Stream
 	// quic connection
-	conn quic.Connection
+	conn *quic.Conn
 	// close func
 	closeFunc func() error
 }
@@ -225,10 +214,16 @@ func newIPFSWireManager() *IPFSWireManager {
 			return
 		}
 		logger.Printf("received new stream(%s) peerId (%s) data %s", s.ID(), s.Conn().RemotePeer(), string(buf))
+		qconn := getQuicConn(s.Conn())
+		if qconn == nil {
+			close()
+			logger.Printf("peer connection is not quic: %s", s.Conn())
+			return
+		}
 		// got an inbound wire
 		m.In <- &IPFSWire{
 			s:         s,
-			conn:      getQuicConn(s.Conn()),
+			conn:      qconn,
 			closeFunc: close,
 		}
 	})
@@ -280,10 +275,15 @@ func (m *IPFSWireManager) Dial(endpoint string) error {
 			close()
 			return errors.Errorf("ignore unlimited relay %+v", s.Conn())
 		}
+		qconn := getQuicConn(s.Conn())
+		if qconn == nil {
+			close()
+			return errors.Errorf("peer connection is not quic: %s", s.Conn())
+		}
 		// got an outbound wire
 		m.Out <- &IPFSWire{
 			s:         s,
-			conn:      getQuicConn(s.Conn()),
+			conn:      qconn,
 			closeFunc: close,
 		}
 		return nil
@@ -555,11 +555,8 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		// enable node to use relay for wire communication
 		libp2p.EnableAutoRelay(autorelay.WithPeerSource(peerSource), autorelay.WithNumRelays(4), autorelay.WithMinCandidates(1)),
 		libp2p.EnableRelayService(),
-		// hole punching, new dcutr behavior
-		libp2p.EnableHolePunching(func(hps *holepunch.Service) error{
-			hps.SetLegacyBehavior(true)
-			return nil
-		}),
+		// hole punching
+		libp2p.EnableHolePunching(),
 		libp2p.ResourceManager(mgr),
 		// must disable metrics, because metrics is buggy
 		libp2p.DisableMetrics(),
@@ -573,7 +570,10 @@ func createHost(peerSource func(ctx context.Context, numPeers int) <-chan peer.A
 		// enable routing
 		libp2p.Routing(func(h host.Host) (routing.PeerRouting, error) {
 			ctx := context.Background()
-			idht, err = dht.New(ctx, h, dht.Mode(dht.ModeServer))
+			idht, err = dht.New(h, dht.Mode(dht.ModeServer))
+			if err != nil {
+				return nil, err
+			}
 			if err = idht.Bootstrap(ctx); err != nil {
 				logger.Fatal(err)
 			}

@@ -3,11 +3,13 @@
 package tcp
 
 import (
+	"fmt"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
+	"github.com/libp2p/go-libp2p/core/transport"
 	"github.com/marten-seemann/tcp"
 	"github.com/mikioh/tcpinfo"
 	manet "github.com/multiformats/go-multiaddr/net"
@@ -137,7 +139,7 @@ func (c *aggregatingCollector) gatherMetrics(now time.Time) {
 			if strings.Contains(err.Error(), "use of closed network connection") {
 				continue
 			}
-			log.Errorf("Failed to get TCP info: %s", err)
+			log.Error("Failed to get TCP info", "error", err)
 			continue
 		}
 		if hasSegmentCounter {
@@ -168,12 +170,12 @@ func (c *aggregatingCollector) Collect(metrics chan<- prometheus.Metric) {
 	if hasSegmentCounter {
 		segsSentMetric, err := prometheus.NewConstMetric(segsSentDesc, prometheus.CounterValue, float64(c.segsSent))
 		if err != nil {
-			log.Errorf("creating tcp_sent_segments_total metric failed: %v", err)
+			log.Error("creating tcp_sent_segments_total metric failed", "error", err)
 			return
 		}
 		segsRcvdMetric, err := prometheus.NewConstMetric(segsRcvdDesc, prometheus.CounterValue, float64(c.segsRcvd))
 		if err != nil {
-			log.Errorf("creating tcp_rcvd_segments_total metric failed: %v", err)
+			log.Error("creating tcp_rcvd_segments_total metric failed", "error", err)
 			return
 		}
 		metrics <- segsSentMetric
@@ -182,12 +184,12 @@ func (c *aggregatingCollector) Collect(metrics chan<- prometheus.Metric) {
 	if hasByteCounter {
 		bytesSentMetric, err := prometheus.NewConstMetric(bytesSentDesc, prometheus.CounterValue, float64(c.bytesSent))
 		if err != nil {
-			log.Errorf("creating tcp_sent_bytes metric failed: %v", err)
+			log.Error("creating tcp_sent_bytes metric failed", "error", err)
 			return
 		}
 		bytesRcvdMetric, err := prometheus.NewConstMetric(bytesRcvdDesc, prometheus.CounterValue, float64(c.bytesRcvd))
 		if err != nil {
-			log.Errorf("creating tcp_rcvd_bytes metric failed: %v", err)
+			log.Error("creating tcp_rcvd_bytes metric failed", "error", err)
 			return
 		}
 		metrics <- bytesSentMetric
@@ -253,16 +255,6 @@ func (c *tracingConn) Close() error {
 	return c.closeErr
 }
 
-func (c *tracingConn) Scope() network.ConnManagementScope {
-	if cs, ok := c.Conn.(interface {
-		Scope() network.ConnManagementScope
-	}); ok {
-		return cs.Scope()
-	}
-	// upgrader is expected to handle this
-	return nil
-}
-
 func (c *tracingConn) getTCPInfo() (*tcpinfo.Info, error) {
 	var o tcpinfo.Info
 	var b [256]byte
@@ -275,19 +267,31 @@ func (c *tracingConn) getTCPInfo() (*tcpinfo.Info, error) {
 }
 
 type tracingListener struct {
-	manet.Listener
+	transport.GatedMaListener
 	collector *aggregatingCollector
 }
 
 // newTracingListener wraps a manet.Listener with a tracingListener. A nil collector will use the default collector.
-func newTracingListener(l manet.Listener, collector *aggregatingCollector) *tracingListener {
-	return &tracingListener{Listener: l, collector: collector}
+func newTracingListener(l transport.GatedMaListener, collector *aggregatingCollector) *tracingListener {
+	return &tracingListener{GatedMaListener: l, collector: collector}
 }
 
-func (l *tracingListener) Accept() (manet.Conn, error) {
-	conn, err := l.Listener.Accept()
+func (l *tracingListener) Accept() (manet.Conn, network.ConnManagementScope, error) {
+	conn, scope, err := l.GatedMaListener.Accept()
 	if err != nil {
-		return nil, err
+		if scope != nil {
+			scope.Done()
+			log.Error("BUG: got non-nil scope but also an error", "error", err)
+		}
+		return nil, nil, err
 	}
-	return newTracingConn(conn, l.collector, false)
+
+	tc, err := newTracingConn(conn, l.collector, false)
+	if err != nil {
+		log.Error("failed to create tracingConn", "conn_type", fmt.Sprintf("%T", conn), "error", err)
+		conn.Close()
+		scope.Done()
+		return nil, nil, err
+	}
+	return tc, scope, nil
 }

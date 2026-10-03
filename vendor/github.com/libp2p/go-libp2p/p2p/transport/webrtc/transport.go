@@ -5,13 +5,12 @@ package libp2pwebrtc
 import (
 	"context"
 	"crypto"
-	"crypto/ecdsa"
-	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"errors"
 	"fmt"
 	"net"
+	"os"
 	"time"
 
 	mrand "math/rand/v2"
@@ -28,6 +27,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/security/noise"
 	libp2pquic "github.com/libp2p/go-libp2p/p2p/transport/quic"
 	"github.com/libp2p/go-libp2p/p2p/transport/webrtc/pb"
+	"github.com/libp2p/go-libp2p/p2p/transport/webrtc/udpmux"
 	"github.com/libp2p/go-msgio"
 
 	ma "github.com/multiformats/go-multiaddr"
@@ -44,7 +44,8 @@ func init() {
 	var err error
 	webrtcComponent, err = ma.NewComponent(ma.ProtocolWithCode(ma.P_WEBRTC_DIRECT).Name, "")
 	if err != nil {
-		log.Fatal(err)
+		fmt.Fprintln(os.Stderr, err.Error())
+		os.Executable()
 	}
 }
 
@@ -68,7 +69,13 @@ const (
 	DefaultFailedTimeout       = 30 * time.Second
 	DefaultKeepaliveTimeout    = 15 * time.Second
 
-	sctpReceiveBufferSize = 100_000
+	// sctpReceiveBufferSize is the size of the buffer for incoming messages.
+	//
+	// This is enough space for enqueuing 10 full sized messages.
+	// Besides throughput, this only matters if an application is using multiple dependent
+	// streams, say streams 1 & 2. It reads from stream 1 only after receiving message from
+	// stream 2. A buffer of 10 messages should serve all such situations.
+	sctpReceiveBufferSize = 10 * maxReceiveMessageSize
 )
 
 type WebRTCTransport struct {
@@ -81,6 +88,14 @@ type WebRTCTransport struct {
 
 	listenUDP func(network string, laddr *net.UDPAddr) (net.PacketConn, error)
 
+	// dialerVersion picks which WebRTC Direct handshake to use when dialing: 1
+	// uses v1 (SDP munging), 2 uses v2 (no munging; the client password rides in
+	// the server ufrag). New defaults it to 1, and WithDialerVersion only accepts
+	// 1 or 2, so dial never sees the confusing 0 value. The listener accepts both
+	// either way; it detects the version from the ICE username fragment prefix.
+	// See https://github.com/libp2p/specs/blob/master/webrtc/webrtc-direct.md.
+	dialerVersion int
+
 	// timeouts
 	peerConnectionTimeouts iceTimeouts
 
@@ -91,6 +106,24 @@ type WebRTCTransport struct {
 var _ tpt.Transport = &WebRTCTransport{}
 
 type Option func(*WebRTCTransport) error
+
+// WithDialerVersion picks which WebRTC Direct handshake to use when dialing. It
+// must be 1 (v1, SDP munging) or 2 (v2, no munging); any other value, including
+// 0, is rejected. With the option unset, dialing defaults to v1. The listener
+// accepts both either way. Browsers will need v2 once Chromium's
+// WebRTC-NoSdpMangleUfrag field trial ships; this option lets a go dialer use the
+// same v2 wire format. See https://github.com/libp2p/specs/blob/master/webrtc/webrtc-direct.md.
+func WithDialerVersion(version int) Option {
+	return func(t *WebRTCTransport) error {
+		switch version {
+		case 1, 2:
+			t.dialerVersion = version
+			return nil
+		default:
+			return fmt.Errorf("unknown WebRTC Direct dialer version %d", version)
+		}
+	}
+}
 
 type iceTimeouts struct {
 	Disconnect time.Duration
@@ -112,22 +145,10 @@ func New(privKey ic.PrivKey, psk pnet.PSK, gater connmgr.ConnectionGater, rcmgr 
 	if err != nil {
 		return nil, fmt.Errorf("get local peer ID: %w", err)
 	}
-	// We use elliptic P-256 since it is widely supported by browsers.
-	//
-	// Implementation note: Testing with the browser,
-	// it seems like Chromium only supports ECDSA P-256 or RSA key signatures in the webrtc TLS certificate.
-	// We tried using P-228 and P-384 which caused the DTLS handshake to fail with Illegal Parameter
-	//
-	// Please refer to this is a list of suggested algorithms for the WebCrypto API.
-	// The algorithm for generating a certificate for an RTCPeerConnection
-	// must adhere to the WebCrpyto API. From my observation,
-	// RSA and ECDSA P-256 is supported on almost all browsers.
-	// Ed25519 is not present on the list.
-	pk, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		return nil, fmt.Errorf("generate key for cert: %w", err)
-	}
-	cert, err := webrtc.GenerateCertificate(pk)
+	// Derive the DTLS cert from the host key so the /certhash multiaddr
+	// component stays the same across restarts. cert.go explains why this is
+	// safe under the libp2p webrtc-direct spec and current browser behavior.
+	cert, err := newDeterministicCertificate(privKey)
 	if err != nil {
 		return nil, fmt.Errorf("generate certificate: %w", err)
 	}
@@ -154,6 +175,9 @@ func New(privKey ic.PrivKey, psk pnet.PSK, gater connmgr.ConnectionGater, rcmgr 
 		},
 
 		maxInFlightConnections: DefaultMaxInFlightConnections,
+
+		// Default to v1; WithDialerVersion can override it before dial time.
+		dialerVersion: 1,
 	}
 	for _, opt := range opts {
 		if err := opt(transport); err != nil {
@@ -293,17 +317,38 @@ func (t *WebRTCTransport) dial(ctx context.Context, scope network.ConnManagement
 		return nil, fmt.Errorf("resolve udp address: %w", err)
 	}
 
-	// Instead of encoding the local fingerprint we
-	// generate a random UUID as the connection ufrag.
-	// The only requirement here is that the ufrag and password
-	// must be equal, which will allow the server to determine
-	// the password using the STUN message.
-	ufrag := genUfrag()
+	// The server has no signaling channel, so it must infer our ICE credentials
+	// from the STUN connectivity checks.
+	//
+	// In v1 we generate a single random value, prefixed with "libp2p+webrtc+v1/",
+	// and use it as both our local ufrag and password and as the server's. The
+	// server reads it from the STUN USERNAME and derives the password from it.
+	//
+	// In v2 our local ufrag and password are independent random values (as a
+	// browser's would be) and we encode our password into the server ufrag as
+	// "libp2p+webrtc+v2/<pwd>", so the server can recover it from the STUN
+	// USERNAME without us munging our local SDP. See https://github.com/libp2p/specs/blob/master/webrtc/webrtc-direct.md.
+	var localUfrag, localPwd, serverUfrag string
+	switch t.dialerVersion {
+	// TODO: flip the default to v2 roughly 12 months after Chromium ships its
+	// no-munging behavior (the WebRTC-NoSdpMangleUfrag field trial,
+	// https://webrtc-review.googlesource.com/c/src/+/385721) in stable, giving
+	// servers and other implementations a grace period to adopt v2 first.
+	case 1:
+		localUfrag = genUfrag()
+		localPwd = localUfrag
+		serverUfrag = localUfrag
+	case 2:
+		localUfrag, localPwd = genV2ClientCredentials()
+		serverUfrag = udpmux.UfragPrefixV2 + localPwd
+	default:
+		return nil, fmt.Errorf("unsupported WebRTC Direct dialer version %d", t.dialerVersion)
+	}
 
 	settingEngine := webrtc.SettingEngine{
 		LoggerFactory: pionLoggerFactory,
 	}
-	settingEngine.SetICECredentials(ufrag, ufrag)
+	settingEngine.SetICECredentials(localUfrag, localPwd)
 	settingEngine.DetachDataChannels()
 	// use the first best address candidate
 	settingEngine.SetPrflxAcceptanceMinWait(0)
@@ -341,7 +386,7 @@ func (t *WebRTCTransport) dial(ctx context.Context, scope network.ConnManagement
 		return nil, fmt.Errorf("set local description: %w", err)
 	}
 
-	answerSDPString, err := createServerSDP(raddr, ufrag, *remoteMultihash)
+	answerSDPString, err := createServerSDP(raddr, serverUfrag, *remoteMultihash)
 	if err != nil {
 		return nil, fmt.Errorf("render server SDP: %w", err)
 	}
@@ -367,7 +412,7 @@ func (t *WebRTCTransport) dial(ctx context.Context, scope network.ConnManagement
 	if err != nil {
 		return nil, err
 	}
-	channel := newStream(w.HandshakeDataChannel, detached, func() {})
+	channel := newStream(w.HandshakeDataChannel, detached, maxSendMessageSize, nil)
 
 	remotePubKey, err := t.noiseHandshake(ctx, w.PeerConnection, channel, p, remoteHashFunction, false)
 	if err != nil {
@@ -413,22 +458,28 @@ func (t *WebRTCTransport) dial(ctx context.Context, scope network.ConnManagement
 }
 
 func genUfrag() string {
-	const (
-		uFragAlphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
-		uFragPrefix   = "libp2p+webrtc+v1/"
-		uFragIdLength = 32
-		uFragLength   = len(uFragPrefix) + uFragIdLength
-	)
+	return udpmux.UfragPrefixV1 + randIceString(32)
+}
 
+// genV2ClientCredentials returns a random ICE ufrag and password for the WebRTC
+// Direct v2 dial flow. Unlike v1, the two values are independent and carry no
+// prefix; the password is instead encoded into the server ufrag as
+// "libp2p+webrtc+v2/<pwd>". Both are 32 ice-chars, comfortably above the RFC
+// 8839 section 5.4 minimums (4 for the ufrag, 22 for the password).
+func genV2ClientCredentials() (ufrag, pwd string) {
+	return randIceString(32), randIceString(32)
+}
+
+// randIceString returns a string of n characters drawn from the ICE ufrag/pwd
+// alphabet (the alphanumeric subset of RFC 8839 ice-char, also used by browsers).
+func randIceString(n int) string {
+	const alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ1234567890"
 	seed := [32]byte{}
 	rand.Read(seed[:])
-	r := mrand.New(mrand.New(mrand.NewChaCha8(seed)))
-	b := make([]byte, uFragLength)
-	for i := 0; i < len(uFragPrefix); i++ {
-		b[i] = uFragPrefix[i]
-	}
-	for i := len(uFragPrefix); i < uFragLength; i++ {
-		b[i] = uFragAlphabet[r.IntN(len(uFragAlphabet))]
+	r := mrand.New(mrand.NewChaCha8(seed))
+	b := make([]byte, n)
+	for i := range b {
+		b[i] = alphabet[r.IntN(len(alphabet))]
 	}
 	return string(b)
 }
@@ -467,12 +518,12 @@ func (t *WebRTCTransport) generateNoisePrologue(pc *webrtc.PeerConnection, hash 
 
 	localEncoded, err := multihash.Encode(localFpBytes, multihash.SHA2_256)
 	if err != nil {
-		log.Debugf("could not encode multihash for local fingerprint")
+		log.Debug("could not encode multihash for local fingerprint")
 		return nil, err
 	}
 	remoteEncoded, err := multihash.Encode(remoteFpBytes, multihash.SHA2_256)
 	if err != nil {
-		log.Debugf("could not encode multihash for remote fingerprint")
+		log.Debug("could not encode multihash for remote fingerprint")
 		return nil, err
 	}
 
@@ -531,7 +582,7 @@ func (t *WebRTCTransport) AddCertHashes(addr ma.Multiaddr) (ma.Multiaddr, bool) 
 	if err != nil {
 		return nil, false
 	}
-	return addr.AppendComponent(certComp), true
+	return addr.Encapsulate(certComp), true
 }
 
 type netConnWrapper struct {
@@ -602,13 +653,13 @@ func newWebRTCConnection(settings webrtc.SettingEngine, config webrtc.Configurat
 		dc.OnOpen(func() {
 			rwc, err := dc.Detach()
 			if err != nil {
-				log.Warnf("could not detach datachannel: id: %d", *dc.ID())
+				log.Warn("could not detach datachannel", "id", *dc.ID())
 				return
 			}
 			select {
 			case incomingDataChannels <- dataChannel{rwc, dc}:
 			default:
-				log.Warnf("connection busy, rejecting stream")
+				log.Warn("connection busy, rejecting stream")
 				b, _ := proto.Marshal(&pb.Message{Flag: pb.Message_RESET.Enum()})
 				w := msgio.NewWriter(rwc)
 				w.WriteMsg(b)
@@ -618,7 +669,7 @@ func newWebRTCConnection(settings webrtc.SettingEngine, config webrtc.Configurat
 	})
 
 	connectionClosedCh := make(chan struct{}, 1)
-	pc.SCTP().OnClose(func(err error) {
+	pc.SCTP().OnClose(func(_ error) {
 		// We only need one message. Closing a connection is a problem as pion might invoke the callback more than once.
 		select {
 		case connectionClosedCh <- struct{}{}:

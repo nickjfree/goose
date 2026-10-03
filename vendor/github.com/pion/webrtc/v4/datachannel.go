@@ -1,8 +1,7 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
@@ -10,7 +9,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"math"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -20,7 +18,6 @@ import (
 	"github.com/pion/webrtc/v4/pkg/rtcerr"
 )
 
-const dataChannelBufferSize = math.MaxUint16 // message size limit for Chromium
 var errSCTPNotEstablished = errors.New("SCTP not established")
 
 // DataChannel represents a WebRTC DataChannel
@@ -56,6 +53,7 @@ type DataChannel struct {
 	onOpenHandler       func()
 	dialHandlerOnce     sync.Once
 	onDialHandler       func()
+	closeHandlerOnce    sync.Once
 	onCloseHandler      func()
 	onBufferedAmountLow func()
 	onErrorHandler      func(error)
@@ -287,8 +285,14 @@ func (d *DataChannel) onDial() {
 // prior to GracefulClose.
 func (d *DataChannel) OnClose(f func()) {
 	d.mu.Lock()
-	defer d.mu.Unlock()
+	d.closeHandlerOnce = sync.Once{}
 	d.onCloseHandler = f
+	d.mu.Unlock()
+
+	if d.ReadyState() == DataChannelStateClosed {
+		// If the data channel is already closed, call the handler immediately.
+		go d.closeHandlerOnce.Do(f)
+	}
 }
 
 func (d *DataChannel) onClose() {
@@ -297,7 +301,7 @@ func (d *DataChannel) onClose() {
 	d.mu.RUnlock()
 
 	if handler != nil {
-		go handler()
+		go d.closeHandlerOnce.Do(handler)
 	}
 }
 
@@ -404,10 +408,24 @@ func (d *DataChannel) readLoop() {
 		d.mu.Unlock()
 		defer close(readLoopActive)
 	}()
-	buffer := make([]byte, dataChannelBufferSize)
+
+	buffer := make([]byte, sctpMaxMessageSizeUnsetValue)
 	for {
 		n, isString, err := d.dataChannel.ReadDataChannel(buffer)
 		if err != nil {
+			if errors.Is(err, io.ErrShortBuffer) {
+				if int64(n) < int64(d.api.settingEngine.getSCTPMaxMessageSize()) {
+					buffer = append(buffer, make([]byte, len(buffer))...) // nolint
+
+					continue
+				}
+
+				d.log.Errorf(
+					"Incoming DataChannel message larger then Max Message size %v",
+					d.api.settingEngine.getSCTPMaxMessageSize(),
+				)
+			}
+
 			d.setReadyState(DataChannelStateClosed)
 			if !errors.Is(err, io.EOF) {
 				d.onError(err)
@@ -417,11 +435,10 @@ func (d *DataChannel) readLoop() {
 			return
 		}
 
-		msg := DataChannelMessage{Data: make([]byte, n), IsString: isString}
-		copy(msg.Data, buffer[:n])
-
-		// NB: Why was DataChannelMessage not passed as a pointer value?
-		d.onMessage(msg) // nolint:staticcheck
+		d.onMessage(DataChannelMessage{
+			Data:     append([]byte{}, buffer[:n]...),
+			IsString: isString,
+		})
 	}
 }
 
@@ -450,8 +467,6 @@ func (d *DataChannel) SendText(s string) error {
 }
 
 func (d *DataChannel) ensureOpen() error {
-	d.mu.RLock()
-	defer d.mu.RUnlock()
 	if d.ReadyState() != DataChannelStateOpen {
 		return io.ErrClosedPipe
 	}
@@ -501,7 +516,7 @@ func (d *DataChannel) DetachWithDeadline() (datachannel.ReadWriteCloserDeadliner
 	d.sctpTransport.lock.Lock()
 	n := len(d.sctpTransport.dataChannels)
 	j := 0
-	for i := 0; i < n; i++ {
+	for i := range n {
 		if d == d.sctpTransport.dataChannels[i] {
 			continue
 		}
@@ -696,9 +711,23 @@ func (d *DataChannel) OnBufferedAmountLow(f func()) {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 
-	d.onBufferedAmountLow = f
+	onBufferedAmountLow := d.makeBufferedAmountLowHandler(f)
+	d.onBufferedAmountLow = onBufferedAmountLow
+
 	if d.dataChannel != nil {
-		d.dataChannel.OnBufferedAmountLow(f)
+		d.dataChannel.OnBufferedAmountLow(onBufferedAmountLow)
+	}
+}
+
+func (d *DataChannel) makeBufferedAmountLowHandler(f func()) func() {
+	return func() {
+		go func() {
+			if d.ReadyState() != DataChannelStateOpen {
+				return
+			}
+
+			f()
+		}()
 	}
 }
 

@@ -24,7 +24,7 @@ func hkdfHeaderProtectionLabel(v protocol.Version) string {
 	return "quic hp"
 }
 
-func newHeaderProtector(suite *cipherSuite, trafficSecret []byte, isLongHeader bool, v protocol.Version) headerProtector {
+func newHeaderProtector(suite cipherSuite, trafficSecret []byte, isLongHeader bool, v protocol.Version) headerProtector {
 	hkdfLabel := hkdfHeaderProtectionLabel(v)
 	switch suite.ID {
 	case tls.TLS_AES_128_GCM_SHA256, tls.TLS_AES_256_GCM_SHA384:
@@ -44,7 +44,7 @@ type aesHeaderProtector struct {
 
 var _ headerProtector = &aesHeaderProtector{}
 
-func newAESHeaderProtector(suite *cipherSuite, trafficSecret []byte, isLongHeader bool, hkdfLabel string) headerProtector {
+func newAESHeaderProtector(suite cipherSuite, trafficSecret []byte, isLongHeader bool, hkdfLabel string) headerProtector {
 	hpKey := hkdfExpandLabel(suite.Hash, trafficSecret, []byte{}, hkdfLabel, suite.KeyLen)
 	block, err := aes.NewCipher(hpKey)
 	if err != nil {
@@ -88,7 +88,7 @@ type chachaHeaderProtector struct {
 
 var _ headerProtector = &chachaHeaderProtector{}
 
-func newChaChaHeaderProtector(suite *cipherSuite, trafficSecret []byte, isLongHeader bool, hkdfLabel string) headerProtector {
+func newChaChaHeaderProtector(suite cipherSuite, trafficSecret []byte, isLongHeader bool, hkdfLabel string) headerProtector {
 	hpKey := hkdfExpandLabel(suite.Hash, trafficSecret, []byte{}, hkdfLabel, suite.KeyLen)
 
 	p := &chachaHeaderProtector{
@@ -110,7 +110,7 @@ func (p *chachaHeaderProtector) apply(sample []byte, firstByte *byte, hdrBytes [
 	if len(sample) != 16 {
 		panic("invalid sample size")
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		p.mask[i] = 0
 	}
 	cipher, err := chacha20.NewUnauthenticatedCipher(p.key[:], sample[4:])

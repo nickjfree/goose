@@ -1,12 +1,12 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
 import (
+	"errors"
 	"fmt"
 	"strconv"
 	"strings"
@@ -17,42 +17,6 @@ import (
 	"github.com/pion/rtp/codecs"
 	"github.com/pion/sdp/v3"
 	"github.com/pion/webrtc/v4/internal/fmtp"
-)
-
-const (
-	// MimeTypeH264 H264 MIME type.
-	// Note: Matching should be case insensitive.
-	MimeTypeH264 = "video/H264"
-	// MimeTypeH265 H265 MIME type
-	// Note: Matching should be case insensitive.
-	MimeTypeH265 = "video/H265"
-	// MimeTypeOpus Opus MIME type
-	// Note: Matching should be case insensitive.
-	MimeTypeOpus = "audio/opus"
-	// MimeTypeVP8 VP8 MIME type
-	// Note: Matching should be case insensitive.
-	MimeTypeVP8 = "video/VP8"
-	// MimeTypeVP9 VP9 MIME type
-	// Note: Matching should be case insensitive.
-	MimeTypeVP9 = "video/VP9"
-	// MimeTypeAV1 AV1 MIME type
-	// Note: Matching should be case insensitive.
-	MimeTypeAV1 = "video/AV1"
-	// MimeTypeG722 G722 MIME type
-	// Note: Matching should be case insensitive.
-	MimeTypeG722 = "audio/G722"
-	// MimeTypePCMU PCMU MIME type
-	// Note: Matching should be case insensitive.
-	MimeTypePCMU = "audio/PCMU"
-	// MimeTypePCMA PCMA MIME type
-	// Note: Matching should be case insensitive.
-	MimeTypePCMA = "audio/PCMA"
-	// MimeTypeRTX RTX MIME type
-	// Note: Matching should be case insensitive.
-	MimeTypeRTX = "video/rtx"
-	// MimeTypeFlexFEC FEC MIME Type
-	// Note: Matching should be case insensitive.
-	MimeTypeFlexFEC = "video/flexfec"
 )
 
 type mediaEngineHeaderExtension struct {
@@ -68,6 +32,7 @@ type mediaEngineHeaderExtension struct {
 type MediaEngine struct {
 	// If we have attempted to negotiate a codec type yet.
 	negotiatedVideo, negotiatedAudio bool
+	negotiateMultiCodecs             bool
 
 	videoCodecs, audioCodecs                     []RTPCodecParameters
 	negotiatedVideoCodecs, negotiatedAudioCodecs []RTPCodecParameters
@@ -76,6 +41,22 @@ type MediaEngine struct {
 	negotiatedHeaderExtensions map[int]mediaEngineHeaderExtension
 
 	mu sync.RWMutex
+}
+
+// setMultiCodecNegotiation enables or disables the negotiation of multiple codecs.
+func (m *MediaEngine) setMultiCodecNegotiation(negotiateMultiCodecs bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.negotiateMultiCodecs = negotiateMultiCodecs
+}
+
+// multiCodecNegotiation returns the current state of the negotiation of multiple codecs.
+func (m *MediaEngine) multiCodecNegotiation() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	return m.negotiateMultiCodecs
 }
 
 // RegisterDefaultCodecs registers the default codecs supported by Pion WebRTC.
@@ -194,7 +175,18 @@ func (m *MediaEngine) RegisterDefaultCodecs() error {
 			RTPCodecCapability: RTPCodecCapability{MimeTypeRTX, 90000, 0, "apt=39", nil},
 			PayloadType:        40,
 		},
-
+		{
+			RTPCodecCapability: RTPCodecCapability{
+				MimeType:     MimeTypeH265,
+				ClockRate:    90000,
+				RTCPFeedback: videoRTCPFeedback,
+			},
+			PayloadType: 116,
+		},
+		{
+			RTPCodecCapability: RTPCodecCapability{MimeTypeRTX, 90000, 0, "apt=116", nil},
+			PayloadType:        117,
+		},
 		{
 			RTPCodecCapability: RTPCodecCapability{MimeTypeAV1, 90000, 0, "", videoRTCPFeedback},
 			PayloadType:        45,
@@ -244,17 +236,20 @@ func (m *MediaEngine) RegisterDefaultCodecs() error {
 }
 
 // addCodec will append codec if it not exists.
-func (m *MediaEngine) addCodec(codecs []RTPCodecParameters, codec RTPCodecParameters) []RTPCodecParameters {
+func (m *MediaEngine) addCodec(codecs []RTPCodecParameters, codec RTPCodecParameters) ([]RTPCodecParameters, error) {
 	for _, c := range codecs {
-		if c.MimeType == codec.MimeType &&
-			fmtp.ClockRateEqual(c.MimeType, c.ClockRate, codec.ClockRate) &&
-			fmtp.ChannelsEqual(c.MimeType, c.Channels, codec.Channels) &&
-			c.PayloadType == codec.PayloadType {
-			return codecs
+		if c.PayloadType == codec.PayloadType {
+			if strings.EqualFold(c.MimeType, codec.MimeType) &&
+				fmtp.ClockRateEqual(c.MimeType, c.ClockRate, codec.ClockRate) &&
+				fmtp.ChannelsEqual(c.MimeType, c.Channels, codec.Channels) {
+				return codecs, nil
+			}
+
+			return codecs, ErrCodecAlreadyRegistered
 		}
 	}
 
-	return append(codecs, codec)
+	return append(codecs, codec), nil
 }
 
 // RegisterCodec adds codec to the MediaEngine
@@ -263,17 +258,18 @@ func (m *MediaEngine) RegisterCodec(codec RTPCodecParameters, typ RTPCodecType) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	var err error
 	codec.statsID = fmt.Sprintf("RTPCodec-%d", time.Now().UnixNano())
 	switch typ {
 	case RTPCodecTypeAudio:
-		m.audioCodecs = m.addCodec(m.audioCodecs, codec)
+		m.audioCodecs, err = m.addCodec(m.audioCodecs, codec)
 	case RTPCodecTypeVideo:
-		m.videoCodecs = m.addCodec(m.videoCodecs, codec)
+		m.videoCodecs, err = m.addCodec(m.videoCodecs, codec)
 	default:
 		return ErrUnknownType
 	}
 
-	return nil
+	return err
 }
 
 // RegisterHeaderExtension adds a header extension to the MediaEngine
@@ -331,16 +327,28 @@ func (m *MediaEngine) RegisterFeedback(feedback RTCPFeedback, typ RTPCodecType) 
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
-	if typ == RTPCodecTypeVideo {
+	addUniqueFeedback := func(existing []RTCPFeedback) []RTCPFeedback {
+		for _, f := range existing {
+			if strings.EqualFold(f.Type, feedback.Type) && strings.EqualFold(f.Parameter, feedback.Parameter) {
+				return existing
+			}
+		}
+
+		return append(existing, feedback)
+	}
+
+	switch typ {
+	case RTPCodecTypeVideo:
 		for i, v := range m.videoCodecs {
-			v.RTCPFeedback = append(v.RTCPFeedback, feedback)
+			v.RTCPFeedback = addUniqueFeedback(v.RTCPFeedback)
 			m.videoCodecs[i] = v
 		}
-	} else if typ == RTPCodecTypeAudio {
+	case RTPCodecTypeAudio:
 		for i, v := range m.audioCodecs {
-			v.RTCPFeedback = append(v.RTCPFeedback, feedback)
+			v.RTCPFeedback = addUniqueFeedback(v.RTCPFeedback)
 			m.audioCodecs[i] = v
 		}
+	default:
 	}
 }
 
@@ -577,18 +585,25 @@ func (m *MediaEngine) updateHeaderExtension(id int, extension string, typ RTPCod
 	return nil
 }
 
-func (m *MediaEngine) pushCodecs(codecs []RTPCodecParameters, typ RTPCodecType) {
+func (m *MediaEngine) pushCodecs(codecs []RTPCodecParameters, typ RTPCodecType) error {
+	var joinedErr error
 	for _, codec := range codecs {
+		var err error
 		if typ == RTPCodecTypeAudio {
-			m.negotiatedAudioCodecs = m.addCodec(m.negotiatedAudioCodecs, codec)
+			m.negotiatedAudioCodecs, err = m.addCodec(m.negotiatedAudioCodecs, codec)
 		} else if typ == RTPCodecTypeVideo {
-			m.negotiatedVideoCodecs = m.addCodec(m.negotiatedVideoCodecs, codec)
+			m.negotiatedVideoCodecs, err = m.addCodec(m.negotiatedVideoCodecs, codec)
+		}
+		if err != nil {
+			joinedErr = errors.Join(joinedErr, err)
 		}
 	}
+
+	return joinedErr
 }
 
 // Update the MediaEngine from a remote description.
-func (m *MediaEngine) updateFromRemoteDescription(desc sdp.SessionDescription) error { //nolint:cyclop
+func (m *MediaEngine) updateFromRemoteDescription(desc sdp.SessionDescription) error { //nolint:cyclop,gocognit
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
@@ -616,12 +631,31 @@ func (m *MediaEngine) updateFromRemoteDescription(desc sdp.SessionDescription) e
 				return err
 			}
 
-			continue
+			if !m.negotiateMultiCodecs || (typ != RTPCodecTypeAudio && typ != RTPCodecTypeVideo) {
+				continue
+			}
 		}
 
 		codecs, err := codecsFromMediaDescription(media)
 		if err != nil {
 			return err
+		}
+
+		addIfNew := func(existingCodecs []RTPCodecParameters, codec RTPCodecParameters) []RTPCodecParameters {
+			found := false
+			for _, existingCodec := range existingCodecs {
+				if existingCodec.PayloadType == codec.PayloadType {
+					found = true
+
+					break
+				}
+			}
+
+			if !found {
+				existingCodecs = append(existingCodecs, codec)
+			}
+
+			return existingCodecs
 		}
 
 		exactMatches := make([]RTPCodecParameters, 0, len(codecs))
@@ -636,21 +670,39 @@ func (m *MediaEngine) updateFromRemoteDescription(desc sdp.SessionDescription) e
 			remoteCodec.RTCPFeedback = rtcpFeedbackIntersection(localCodec.RTCPFeedback, remoteCodec.RTCPFeedback)
 
 			if matchType == codecMatchExact {
-				exactMatches = append(exactMatches, remoteCodec)
+				exactMatches = addIfNew(exactMatches, remoteCodec)
 			} else if matchType == codecMatchPartial {
-				partialMatches = append(partialMatches, remoteCodec)
+				partialMatches = addIfNew(partialMatches, remoteCodec)
+			}
+		}
+		// second pass in case there were missed RTX codecs
+		for _, remoteCodec := range codecs {
+			localCodec, matchType, mErr := m.matchRemoteCodec(remoteCodec, typ, exactMatches, partialMatches)
+			if mErr != nil {
+				return mErr
+			}
+
+			remoteCodec.RTCPFeedback = rtcpFeedbackIntersection(localCodec.RTCPFeedback, remoteCodec.RTCPFeedback)
+
+			if matchType == codecMatchExact {
+				exactMatches = addIfNew(exactMatches, remoteCodec)
+			} else if matchType == codecMatchPartial {
+				partialMatches = addIfNew(partialMatches, remoteCodec)
 			}
 		}
 
 		// use exact matches when they exist, otherwise fall back to partial
 		switch {
 		case len(exactMatches) > 0:
-			m.pushCodecs(exactMatches, typ)
+			err = m.pushCodecs(exactMatches, typ)
 		case len(partialMatches) > 0:
-			m.pushCodecs(partialMatches, typ)
+			err = m.pushCodecs(partialMatches, typ)
 		default:
 			// no match, not negotiated
 			continue
+		}
+		if err != nil {
+			return err
 		}
 
 		if err := m.updateHeaderExtensionFromMediaSection(media); err != nil {
@@ -789,7 +841,7 @@ func payloaderForCodec(codec RTPCodecCapability) (rtp.Payloader, error) {
 
 func (m *MediaEngine) isRTXEnabled(typ RTPCodecType, directions []RTPTransceiverDirection) bool {
 	for _, p := range m.getRTPParametersByKind(typ, directions).Codecs {
-		if p.MimeType == MimeTypeRTX {
+		if strings.EqualFold(p.MimeType, MimeTypeRTX) {
 			return true
 		}
 	}
@@ -799,7 +851,7 @@ func (m *MediaEngine) isRTXEnabled(typ RTPCodecType, directions []RTPTransceiver
 
 func (m *MediaEngine) isFECEnabled(typ RTPCodecType, directions []RTPTransceiverDirection) bool {
 	for _, p := range m.getRTPParametersByKind(typ, directions).Codecs {
-		if strings.Contains(p.MimeType, MimeTypeFlexFEC) {
+		if strings.Contains(strings.ToLower(p.MimeType), MimeTypeFlexFEC) {
 			return true
 		}
 	}

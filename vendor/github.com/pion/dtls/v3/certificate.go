@@ -1,15 +1,21 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package dtls
 
 import (
 	"bytes"
+	"crypto"
+	"crypto/ecdsa"
+	"crypto/ed25519"
+	"crypto/rsa"
 	"crypto/tls"
 	"crypto/x509"
 	"fmt"
+	"slices"
 	"strings"
 
+	"github.com/pion/dtls/v3/pkg/crypto/clientcertificate"
 	"github.com/pion/dtls/v3/pkg/protocol/handshake"
 )
 
@@ -33,6 +39,10 @@ type ClientHelloInfo struct {
 // CertificateRequest message, which is used to demand a certificate and proof
 // of control from a client.
 type CertificateRequestInfo struct {
+	// CertificateTypes lists the certificate types accepted by the server.
+	// A nil slice indicates no restriction.
+	CertificateTypes []clientcertificate.Type
+
 	// AcceptableCAs contains zero or more, DER-encoded, X.501
 	// Distinguished Names. These are the names of root or intermediate CAs
 	// that the server wishes the returned certificate to be signed by. An
@@ -43,14 +53,33 @@ type CertificateRequestInfo struct {
 // SupportsCertificate returns nil if the provided certificate is supported by
 // the server that sent the CertificateRequest. Otherwise, it returns an error
 // describing the reason for the incompatibility.
-// NOTE: original src: https://github.com/golang/go/blob/29b9a328d268d53833d2cc063d1d8b4bf6852675/src/crypto/tls/common.go#L1273
-func (cri *CertificateRequestInfo) SupportsCertificate(c *tls.Certificate) error {
+// NOTE: original src:
+// https://github.com/golang/go/blob/29b9a328d268d53833d2cc063d1d8b4bf6852675/src/crypto/tls/common.go#L1273
+func (cri *CertificateRequestInfo) SupportsCertificate(certificate *tls.Certificate) error { //nolint:cyclop
+	if cri.CertificateTypes != nil {
+		signer, ok := certificate.PrivateKey.(crypto.Signer)
+		if !ok {
+			return errInvalidPrivateKey
+		}
+		var certificateType clientcertificate.Type
+		switch signer.Public().(type) {
+		case *rsa.PublicKey:
+			certificateType = clientcertificate.RSASign
+		case *ecdsa.PublicKey, ed25519.PublicKey:
+			certificateType = clientcertificate.ECDSASign
+		default:
+			return errInvalidPrivateKey
+		}
+		if !slices.Contains(cri.CertificateTypes, certificateType) {
+			return errNotAcceptableCertificateChain
+		}
+	}
 	if len(cri.AcceptableCAs) == 0 {
 		return nil
 	}
 
-	for j, cert := range c.Certificate {
-		x509Cert := c.Leaf
+	for j, cert := range certificate.Certificate {
+		x509Cert := certificate.Leaf
 		// Parse the certificate if this isn't the leaf node, or if
 		// chain.Leaf was nil.
 		if j != 0 || x509Cert == nil {
@@ -66,6 +95,7 @@ func (cri *CertificateRequestInfo) SupportsCertificate(c *tls.Certificate) error
 			}
 		}
 	}
+
 	return errNotAcceptableCertificateChain
 }
 
@@ -91,6 +121,7 @@ func (c *handshakeConfig) setNameToCertificateLocked() {
 	c.nameToCertificate = nameToCertificate
 }
 
+//nolint:cyclop
 func (c *handshakeConfig) getCertificate(clientHelloInfo *ClientHelloInfo) (*tls.Certificate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -141,7 +172,8 @@ func (c *handshakeConfig) getCertificate(clientHelloInfo *ClientHelloInfo) (*tls
 	return &c.localCertificates[0], nil
 }
 
-// NOTE: original src: https://github.com/golang/go/blob/29b9a328d268d53833d2cc063d1d8b4bf6852675/src/crypto/tls/handshake_client.go#L974
+// NOTE: original src:
+// https://github.com/golang/go/blob/29b9a328d268d53833d2cc063d1d8b4bf6852675/src/crypto/tls/handshake_client.go#L974
 func (c *handshakeConfig) getClientCertificate(cri *CertificateRequestInfo) (*tls.Certificate, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -154,6 +186,7 @@ func (c *handshakeConfig) getClientCertificate(cri *CertificateRequestInfo) (*tl
 		if err := cri.SupportsCertificate(&chain); err != nil {
 			continue
 		}
+
 		return &chain, nil
 	}
 

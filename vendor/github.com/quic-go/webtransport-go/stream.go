@@ -1,9 +1,9 @@
 package webtransport
 
 import (
+	"context"
 	"errors"
 	"fmt"
-	"io"
 	"net"
 	"sync"
 	"time"
@@ -11,153 +11,70 @@ import (
 	"github.com/quic-go/quic-go"
 )
 
-const sessionCloseErrorCode quic.StreamErrorCode = 0x170d7b68
-
-type SendStream interface {
-	io.Writer
-	io.Closer
-
-	StreamID() quic.StreamID
-	CancelWrite(StreamErrorCode)
-
-	SetWriteDeadline(time.Time) error
-}
-
-type ReceiveStream interface {
-	io.Reader
-
-	StreamID() quic.StreamID
-	CancelRead(StreamErrorCode)
-
-	SetReadDeadline(time.Time) error
-}
-
-type Stream interface {
-	SendStream
-	ReceiveStream
-	SetDeadline(time.Time) error
-}
-
-type sendStream struct {
-	str quic.SendStream
-	// WebTransport stream header.
-	// Set by the constructor, set to nil once sent out.
-	// Might be initialized to nil if this sendStream is part of an incoming bidirectional stream.
-	streamHdr []byte
-
-	onClose func()
-
-	once sync.Once
-}
-
-var _ SendStream = &sendStream{}
-
-func newSendStream(str quic.SendStream, hdr []byte, onClose func()) *sendStream {
-	return &sendStream{str: str, streamHdr: hdr, onClose: onClose}
-}
-
-func (s *sendStream) maybeSendStreamHeader() (err error) {
-	s.once.Do(func() {
-		if _, e := s.str.Write(s.streamHdr); e != nil {
-			err = e
-			return
-		}
-		s.streamHdr = nil
-	})
-	return
-}
-
-func (s *sendStream) Write(b []byte) (int, error) {
-	if err := s.maybeSendStreamHeader(); err != nil {
-		return 0, err
-	}
-	n, err := s.str.Write(b)
-	if err != nil && !isTimeoutError(err) {
-		s.onClose()
-	}
-	return n, maybeConvertStreamError(err)
-}
-
-func (s *sendStream) CancelWrite(e StreamErrorCode) {
-	s.str.CancelWrite(webtransportCodeToHTTPCode(e))
-	s.onClose()
-}
-
-func (s *sendStream) closeWithSession() {
-	s.str.CancelWrite(sessionCloseErrorCode)
-}
-
-func (s *sendStream) Close() error {
-	if err := s.maybeSendStreamHeader(); err != nil {
-		return err
-	}
-	s.onClose()
-	return maybeConvertStreamError(s.str.Close())
-}
-
-func (s *sendStream) SetWriteDeadline(t time.Time) error {
-	return maybeConvertStreamError(s.str.SetWriteDeadline(t))
-}
-
-func (s *sendStream) StreamID() quic.StreamID {
-	return s.str.StreamID()
-}
-
-type receiveStream struct {
-	str     quic.ReceiveStream
-	onClose func()
-}
-
-var _ ReceiveStream = &receiveStream{}
-
-func newReceiveStream(str quic.ReceiveStream, onClose func()) *receiveStream {
-	return &receiveStream{str: str, onClose: onClose}
-}
-
-func (s *receiveStream) Read(b []byte) (int, error) {
-	n, err := s.str.Read(b)
-	if err != nil && !isTimeoutError(err) {
-		s.onClose()
-	}
-	return n, maybeConvertStreamError(err)
-}
-
-func (s *receiveStream) CancelRead(e StreamErrorCode) {
-	s.str.CancelRead(webtransportCodeToHTTPCode(e))
-	s.onClose()
-}
-
-func (s *receiveStream) closeWithSession() {
-	s.str.CancelRead(sessionCloseErrorCode)
-}
-
-func (s *receiveStream) SetReadDeadline(t time.Time) error {
-	return maybeConvertStreamError(s.str.SetReadDeadline(t))
-}
-
-func (s *receiveStream) StreamID() quic.StreamID {
-	return s.str.StreamID()
-}
-
-type stream struct {
-	*sendStream
-	*receiveStream
+// Stream is a bidirectional WebTransport stream.
+type Stream struct {
+	sendStr *SendStream
+	recvStr *ReceiveStream
 
 	mx                             sync.Mutex
 	sendSideClosed, recvSideClosed bool
 	onClose                        func()
 }
 
-var _ Stream = &stream{}
-
-func newStream(str quic.Stream, hdr []byte, onClose func()) *stream {
-	s := &stream{onClose: onClose}
-	s.sendStream = newSendStream(str, hdr, func() { s.registerClose(true) })
-	s.receiveStream = newReceiveStream(str, func() { s.registerClose(false) })
+func newStream(
+	str *quic.Stream,
+	hdr []byte,
+	sendFC *outgoingDataFlowController,
+	receiveFC *incomingDataFlowController,
+	queueCapsule func(capsule),
+	onFlowControlError func(error),
+	onClose func(),
+	receiveHeaderLen int64,
+) *Stream {
+	s := &Stream{onClose: onClose}
+	s.sendStr = newSendStream(str, hdr, sendFC, queueCapsule, func() { s.registerClose(true) })
+	s.recvStr = newReceiveStream(str, receiveHeaderLen, func() { s.registerClose(false) }, receiveFC, onFlowControlError)
 	return s
 }
 
-func (s *stream) registerClose(isSendSide bool) {
+// StreamID returns the ID of the underlying QUIC stream.
+func (s *Stream) StreamID() quic.StreamID {
+	return s.recvStr.StreamID()
+}
+
+// Write writes data to the stream.
+// Write can be made to time out using [Stream.SetWriteDeadline] or [Stream.SetDeadline].
+// If the stream was canceled, the error is a [StreamError].
+func (s *Stream) Write(b []byte) (int, error) {
+	return s.sendStr.Write(b)
+}
+
+// Read reads data from the stream.
+// Read can be made to time out using [Stream.SetReadDeadline] and [Stream.SetDeadline].
+// If the stream was canceled, the error is a [StreamError].
+func (s *Stream) Read(b []byte) (int, error) {
+	return s.recvStr.Read(b)
+}
+
+// CancelWrite aborts sending on this stream.
+// See [SendStream.CancelWrite] for more details.
+func (s *Stream) CancelWrite(e StreamErrorCode) {
+	s.sendStr.CancelWrite(e)
+}
+
+// CancelRead aborts receiving on this stream.
+// See [ReceiveStream.CancelRead] for more details.
+func (s *Stream) CancelRead(e StreamErrorCode) {
+	s.recvStr.CancelRead(e)
+}
+
+// Close closes the send-direction of the stream.
+// It does not close the receive-direction of the stream.
+func (s *Stream) Close() error {
+	return s.sendStr.Close()
+}
+
+func (s *Stream) registerClose(isSendSide bool) {
 	s.mx.Lock()
 	if isSendSide {
 		s.sendSideClosed = true
@@ -172,30 +89,42 @@ func (s *stream) registerClose(isSendSide bool) {
 	}
 }
 
-func (s *stream) closeWithSession() {
-	s.sendStream.closeWithSession()
-	s.receiveStream.closeWithSession()
+func (s *Stream) closeWithSession(err error) {
+	s.sendStr.closeWithSession(err)
+	s.recvStr.closeWithSession(err)
 }
 
-func (s *stream) SetDeadline(t time.Time) error {
-	err1 := s.sendStream.SetWriteDeadline(t)
-	err2 := s.receiveStream.SetReadDeadline(t)
-	if err1 != nil {
-		return err1
-	}
-	return err2
+// The Context is canceled as soon as the write-side of the stream is closed.
+// See [SendStream.Context] for more details.
+func (s *Stream) Context() context.Context {
+	return s.sendStr.Context()
 }
 
-func (s *stream) StreamID() quic.StreamID {
-	return s.receiveStream.StreamID()
+// SetWriteDeadline sets the deadline for future Write calls.
+// See [SendStream.SetWriteDeadline] for more details.
+func (s *Stream) SetWriteDeadline(t time.Time) error {
+	return s.sendStr.SetWriteDeadline(t)
+}
+
+// SetReadDeadline sets the deadline for future Read calls.
+// See [ReceiveStream.SetReadDeadline] for more details.
+func (s *Stream) SetReadDeadline(t time.Time) error {
+	return s.recvStr.SetReadDeadline(t)
+}
+
+// SetDeadline sets the read and write deadlines associated with the stream.
+// It is equivalent to calling both SetReadDeadline and SetWriteDeadline.
+func (s *Stream) SetDeadline(t time.Time) error {
+	err1 := s.SetWriteDeadline(t)
+	err2 := s.SetReadDeadline(t)
+	return errors.Join(err1, err2)
 }
 
 func maybeConvertStreamError(err error) error {
 	if err == nil {
 		return nil
 	}
-	var streamErr *quic.StreamError
-	if errors.As(err, &streamErr) {
+	if streamErr, ok := errors.AsType[*quic.StreamError](err); ok {
 		errorCode, cerr := httpCodeToWebtransportCode(streamErr.ErrorCode)
 		if cerr != nil {
 			return fmt.Errorf("stream reset, but failed to convert stream error %d: %w", streamErr.ErrorCode, cerr)

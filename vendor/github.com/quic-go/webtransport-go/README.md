@@ -4,21 +4,28 @@
 [![PkgGoDev](https://pkg.go.dev/badge/github.com/quic-go/webtransport-go)](https://pkg.go.dev/github.com/quic-go/webtransport-go)
 [![Code Coverage](https://img.shields.io/codecov/c/github/quic-go/webtransport-go/master.svg?style=flat-square)](https://codecov.io/gh/quic-go/webtransport-go/)
 
-webtransport-go is an implementation of the WebTransport protocol, based on [quic-go](https://github.com/quic-go/quic-go). It currently implements [draft-02](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-02.html) of the specification.
+webtransport-go is an implementation of the WebTransport protocol, based on [quic-go](https://github.com/quic-go/quic-go). It currently implements [draft-16](https://www.ietf.org/archive/id/draft-ietf-webtrans-http3-16.html) of the specification.
 
 Detailed documentation can be found on [quic-go.net](https://quic-go.net/docs/).
 
-## webtransport-go is currently unfunded.
+## Example
 
-### What does this mean?
+A runnable client and server example is available in [`example`](./example).
 
-webtransport-go has been unfunded since the beginning of 2024. For the first half of the year, I have been maintaining the project in my spare time.  Maintaining high-quality open-source software requires significant time and effort. This situation is becoming unsustainable, and as of June 2024, I will be ceasing maintenance work on the project.
+## Projects using webtransport-go
 
-Specifically, this means:
-* I will no longer respond to issues or review PRs.
-* I will not keep the API in sync with quic-go.
-* Since WebTransport is still an IETF draft, browser compatibility will break as soon as the interoperability target changes.
+| Project | Description | Stars |
+| --- | --- | --- |
+| [any-sync](https://github.com/anyproto/any-sync) | Local-first, peer-to-peer synchronization protocol for encrypted collaborative apps | ![GitHub Repo stars](https://img.shields.io/github/stars/anyproto/any-sync?style=flat-square) |
+| [Centrifugo](https://github.com/centrifugal/centrifugo) | Scalable real-time messaging server in a language-agnostic way. Self-hosted alternative to Pubnub, Pusher, Ably, socket.io, Phoenix.PubSub, SignalR. | ![GitHub Repo stars](https://img.shields.io/github/stars/centrifugal/centrifugo?style=flat-square) |
+| [go-libp2p](https://github.com/libp2p/go-libp2p) | libp2p implementation in Go, powering [Kubo](https://github.com/ipfs/kubo) (IPFS) and [Lotus](https://github.com/filecoin-project/lotus) (Filecoin), among others | ![GitHub Repo stars](https://img.shields.io/github/stars/libp2p/go-libp2p?style=flat-square) |
+| [MediaMTX](https://github.com/bluenviron/mediamtx) | Ready-to-use live media server and media proxy supporting Media-over-QUIC, SRT, WebRTC, RTSP, RTMP, HLS, and more | ![GitHub Repo stars](https://img.shields.io/github/stars/bluenviron/mediamtx?style=flat-square) |
+| [signalr](https://github.com/philippseith/signalr) | SignalR server and client in Go | ![GitHub Repo stars](https://img.shields.io/github/stars/philippseith/signalr?style=flat-square) |
+| [socket.io](https://github.com/zishang520/socket.io) | Socket.IO server and client implementation in Go | ![GitHub Repo stars](https://img.shields.io/github/stars/zishang520/socket.io?style=flat-square) |
 
-### If your project relies on WebTransport support, what can you do?
+If you'd like to see your project added to this list, please send us a PR.
 
-I’m glad you asked. First, I would like to hear about your use case. Second, please consider sponsoring the maintenance and future development of the project. It’s best to reach out to me via email.
+
+## Release Policy
+
+webtransport-go always aims to support the latest two Go releases.

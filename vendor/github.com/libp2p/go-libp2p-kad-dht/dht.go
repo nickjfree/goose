@@ -2,9 +2,10 @@ package dht
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
-	"math/rand"
+	"math/rand/v2"
 	"sync"
 	"time"
 
@@ -20,10 +21,10 @@ import (
 
 	"github.com/libp2p/go-libp2p-kad-dht/internal"
 	dhtcfg "github.com/libp2p/go-libp2p-kad-dht/internal/config"
-	"github.com/libp2p/go-libp2p-kad-dht/metrics"
+	"github.com/libp2p/go-libp2p-kad-dht/internal/metrics"
 	"github.com/libp2p/go-libp2p-kad-dht/netsize"
 	pb "github.com/libp2p/go-libp2p-kad-dht/pb"
-	"github.com/libp2p/go-libp2p-kad-dht/providers"
+	"github.com/libp2p/go-libp2p-kad-dht/records"
 	"github.com/libp2p/go-libp2p-kad-dht/rtrefresh"
 	kb "github.com/libp2p/go-libp2p-kbucket"
 	"github.com/libp2p/go-libp2p-kbucket/peerdiversity"
@@ -32,12 +33,8 @@ import (
 
 	ds "github.com/ipfs/go-datastore"
 	logging "github.com/ipfs/go-log/v2"
-	"github.com/multiformats/go-base32"
 	ma "github.com/multiformats/go-multiaddr"
-	"go.opencensus.io/tag"
-	"go.uber.org/multierr"
 	"go.uber.org/zap"
-	"google.golang.org/protobuf/proto"
 )
 
 const (
@@ -87,13 +84,21 @@ type IpfsDHT struct {
 
 	routingTable *kb.RoutingTable // Array of routing tables for differently distanced nodes
 	// providerStore stores & manages the provider records for this Dht peer.
-	providerStore providers.ProviderStore
+	providerStore records.ProviderStore
+	// valueStore persists value records (e.g. /pk, /ipns), applying the
+	// Validator and record-age policy on read and write.
+	valueStore *records.ValueStore
 
 	// manages Routing Table refresh
 	rtRefreshManager *rtrefresh.RtRefreshManager
 
 	birth time.Time // When this peer started up
 
+	// Validator applies validation and selection to records fetched from and
+	// stored in the DHT. It is set from the Validator option and must not be
+	// reassigned after New: the value store captures it at construction, so a
+	// later assignment changes lookup-side behavior only and splits validation
+	// between the two.
 	Validator record.Validator
 
 	ctx    context.Context
@@ -102,8 +107,6 @@ type IpfsDHT struct {
 
 	protoMessenger *pb.ProtocolMessenger
 	msgSender      pb.MessageSenderWithDisconnect
-
-	stripedPutLocks [256]sync.Mutex
 
 	// DHT protocols we query with. We'll only add peers to our routing
 	// table if they speak these protocols.
@@ -137,13 +140,6 @@ type IpfsDHT struct {
 	// connecting to the network).
 	bootstrapPeers func() []peer.AddrInfo
 
-	maxRecordAge time.Duration
-
-	// Allows disabling dht subsystems. These should _only_ be set on
-	// "forked" DHTs (e.g., DHTs with custom protocols and/or private
-	// networks).
-	enableProviders, enableValues bool
-
 	disableFixLowPeers bool
 	fixLowPeersChan    chan struct{}
 
@@ -166,6 +162,11 @@ type IpfsDHT struct {
 	// Mostly used to filter out localhost and local addresses.
 	addrFilter func([]ma.Multiaddr) []ma.Multiaddr
 
+	// shuffle randomises the provider order received from queried peers before
+	// the count cap, so the providers we keep and surface are spread across the
+	// returned set rather than always its first entries.
+	shuffle func(n int, swap func(i, j int))
+
 	onRequestHook func(ctx context.Context, s network.Stream, req *pb.Message)
 }
 
@@ -183,7 +184,13 @@ var (
 // Please note that being connected to a DHT peer does not necessarily imply that it's also in the DHT Routing Table.
 // If the Routing Table has more than "minRTRefreshThreshold" peers, we consider a peer as a Routing Table candidate ONLY when
 // we successfully get a query response from it OR if it send us a query.
-func New(ctx context.Context, h host.Host, options ...Option) (*IpfsDHT, error) {
+//
+// The DHT runs until Close is called. Close blocks until all long-lived
+// internal components have shut down: the background loops, the routing
+// table refresh manager, and the record stores.
+//
+// If New returns an error, no component it started is left running.
+func New(h host.Host, options ...Option) (_ *IpfsDHT, err error) {
 	var cfg dhtcfg.Config
 	if err := cfg.Apply(append([]Option{dhtcfg.Defaults}, options...)...); err != nil {
 		return nil, err
@@ -198,17 +205,29 @@ func New(ctx context.Context, h host.Host, options ...Option) (*IpfsDHT, error) 
 
 	dht, err := makeDHT(h, cfg)
 	if err != nil {
-		return nil, fmt.Errorf("failed to create DHT, err=%s", err)
+		return nil, fmt.Errorf("failed to create DHT: %w", err)
 	}
+	// makeDHT started the provider manager's GC, and StartGC below starts the
+	// value store sweeper. If the rest of construction fails, tear them down
+	// instead of leaking the goroutines: the caller gets no handle to Close.
+	defer func() {
+		if err != nil {
+			err = errors.Join(err, dht.Close())
+		}
+	}()
 
 	dht.autoRefresh = cfg.RoutingTable.AutoRefresh
 
-	dht.maxRecordAge = cfg.MaxRecordAge
-	dht.enableProviders = cfg.EnableProviders
-	dht.enableValues = cfg.EnableValues
 	dht.disableFixLowPeers = cfg.DisableFixLowPeers
 
 	dht.Validator = cfg.Validator
+	// A nil valueStore marks the value subsystem as absent: value RPCs are then
+	// reported unsupported. It stays nil only on forked DHTs that opt out with
+	// DisableValues; the Amino DHT always enables values (enforced by Validate).
+	if cfg.EnableValues {
+		dht.valueStore = records.NewValueStore(cfg.ValueDS(), cfg.Validator, cfg.MaxRecordAge)
+		dht.valueStore.StartGC(dht.ctx, cfg.ValueGCInterval)
+	}
 	dht.msgSender = cfg.MsgSenderBuilder(h, dht.protocols)
 	dht.protoMessenger, err = pb.NewProtocolMessenger(dht.msgSender)
 	if err != nil {
@@ -240,7 +259,7 @@ func New(ctx context.Context, h host.Host, options ...Option) (*IpfsDHT, error) 
 
 	// go-routine to make sure we ALWAYS have RT peer addresses in the peerstore
 	// since RT membership is decoupled from connectivity
-	go dht.persistRTPeersInPeerStore()
+	dht.wg.Go(dht.persistRTPeersInPeerStore)
 
 	dht.rtPeerLoop()
 
@@ -262,8 +281,8 @@ func New(ctx context.Context, h host.Host, options ...Option) (*IpfsDHT, error) 
 // NewDHT creates a new DHT object with the given peer as the 'local' host.
 // IpfsDHT's initialized with this function will respond to DHT requests,
 // whereas IpfsDHT's initialized with NewDHTClient will not.
-func NewDHT(ctx context.Context, h host.Host, dstore ds.Batching) *IpfsDHT {
-	dht, err := New(ctx, h, Datastore(dstore))
+func NewDHT(h host.Host, dstore ds.Batching) *IpfsDHT {
+	dht, err := New(h, Datastore(dstore))
 	if err != nil {
 		panic(err)
 	}
@@ -273,8 +292,8 @@ func NewDHT(ctx context.Context, h host.Host, dstore ds.Batching) *IpfsDHT {
 // NewDHTClient creates a new DHT object with the given peer as the 'local'
 // host. IpfsDHT clients initialized with this function will not respond to DHT
 // requests. If you need a peer to respond to DHT requests, use NewDHT instead.
-func NewDHTClient(ctx context.Context, h host.Host, dstore ds.Batching) *IpfsDHT {
-	dht, err := New(ctx, h, Datastore(dstore), Mode(ModeClient))
+func NewDHTClient(h host.Host, dstore ds.Batching) *IpfsDHT {
+	dht, err := New(h, Datastore(dstore), Mode(ModeClient))
 	if err != nil {
 		panic(err)
 	}
@@ -310,6 +329,7 @@ func makeDHT(h host.Host, cfg dhtcfg.Config) (*IpfsDHT, error) {
 		routingTablePeerFilter: cfg.RoutingTable.PeerFilter,
 		rtPeerDiversityFilter:  cfg.RoutingTable.DiversityFilter,
 		addrFilter:             cfg.AddressFilter,
+		shuffle:                rand.Shuffle,
 		onRequestHook:          cfg.OnRequestHook,
 
 		fixLowPeersChan: make(chan struct{}, 1),
@@ -353,20 +373,21 @@ func makeDHT(h host.Host, cfg dhtcfg.Config) (*IpfsDHT, error) {
 		dht.optProvJobsPool = make(chan struct{}, cfg.OptimisticProvideJobsPoolSize)
 	}
 
+	// the DHT's internal lifetime context, cancelled by Close
+	dht.ctx, dht.cancel = context.WithCancel(dht.newContextWithLocalTags(context.Background()))
+
 	// rt refresh manager
 	dht.rtRefreshManager, err = makeRtRefreshManager(dht, cfg, maxLastSuccessfulOutboundThreshold)
 	if err != nil {
 		return nil, fmt.Errorf("failed to construct RT Refresh Manager,err=%s", err)
 	}
 
-	// create a tagged context derived from the original context
-	// the DHT context should be done when the process is closed
-	dht.ctx, dht.cancel = context.WithCancel(dht.newContextWithLocalTags(context.Background()))
-
-	if cfg.ProviderStore != nil {
-		dht.providerStore = cfg.ProviderStore
-	} else {
-		dht.providerStore, err = providers.NewProviderManager(h.ID(), dht.peerstore, cfg.Datastore)
+	// A nil providerStore marks the provider subsystem as absent: provider RPCs
+	// are then reported unsupported. It stays nil only on forked DHTs that opt
+	// out with DisableProviders; the Amino DHT always enables providers
+	// (enforced by Validate).
+	if cfg.EnableProviders {
+		dht.providerStore, err = records.NewProviderManager(h.ID(), dht.peerstore, cfg.ProviderDS(), cfg.ProviderManagerOpts...)
 		if err != nil {
 			return nil, fmt.Errorf("initializing default provider manager (%v)", err)
 		}
@@ -455,8 +476,10 @@ func makeRoutingTable(dht *IpfsDHT, cfg dhtcfg.Config, maxLastSuccessfulOutbound
 	return rt, err
 }
 
-// ProviderStore returns the provider storage object for storing and retrieving provider records.
-func (dht *IpfsDHT) ProviderStore() providers.ProviderStore {
+// ProviderStore returns the provider storage object for storing and retrieving
+// provider records. It returns nil on a forked DHT that disabled providers with
+// DisableProviders; the Amino DHT always has a provider store.
+func (dht *IpfsDHT) ProviderStore() records.ProviderStore {
 	return dht.providerStore
 }
 
@@ -472,10 +495,7 @@ func (dht *IpfsDHT) Mode() ModeOpt {
 
 // runFixLowPeersLoop manages simultaneous requests to fixLowPeers
 func (dht *IpfsDHT) runFixLowPeersLoop() {
-	dht.wg.Add(1)
-	go func() {
-		defer dht.wg.Done()
-
+	dht.wg.Go(func() {
 		dht.fixLowPeers()
 
 		ticker := time.NewTicker(periodicBootstrapInterval)
@@ -491,7 +511,7 @@ func (dht *IpfsDHT) runFixLowPeersLoop() {
 
 			dht.fixLowPeers()
 		}
-	}()
+	})
 }
 
 // fixLowPeers tries to get more peers into the routing table if we're below the threshold
@@ -579,37 +599,21 @@ func (dht *IpfsDHT) persistRTPeersInPeerStore() {
 func (dht *IpfsDHT) getLocal(ctx context.Context, key string) (*recpb.Record, error) {
 	logger.Debugw("finding value in datastore", "key", internal.LoggableRecordKeyString(key))
 
-	rec, err := dht.getRecordFromDatastore(ctx, mkDsKey(key))
+	rec, err := dht.valueStore.Get(ctx, key)
 	if err != nil {
 		logger.Warnw("get local failed", "key", internal.LoggableRecordKeyString(key), "error", err)
 		return nil, err
-	}
-
-	// Double check the key. Can't hurt.
-	if rec != nil && string(rec.GetKey()) != key {
-		logger.Errorw("BUG: found a DHT record that didn't match it's key", "expected", internal.LoggableRecordKeyString(key), "got", rec.GetKey())
-		return nil, nil
-
 	}
 	return rec, nil
 }
 
 // putLocal stores the key value pair in the datastore
 func (dht *IpfsDHT) putLocal(ctx context.Context, key string, rec *recpb.Record) error {
-	data, err := proto.Marshal(rec)
-	if err != nil {
-		logger.Warnw("failed to put marshal record for local put", "error", err, "key", internal.LoggableRecordKeyString(key))
-		return err
-	}
-
-	return dht.datastore.Put(ctx, mkDsKey(key), data)
+	return dht.valueStore.Put(ctx, key, rec)
 }
 
 func (dht *IpfsDHT) rtPeerLoop() {
-	dht.wg.Add(1)
-	go func() {
-		defer dht.wg.Done()
-
+	dht.wg.Go(func() {
 		var bootstrapCount uint
 		var isBootsrapping bool
 		var timerCh <-chan time.Time
@@ -654,7 +658,7 @@ func (dht *IpfsDHT) rtPeerLoop() {
 				return
 			}
 		}
-	}()
+	})
 }
 
 // peerFound verifies whether the found peer advertises DHT protocols
@@ -746,39 +750,39 @@ func (dht *IpfsDHT) FindLocal(ctx context.Context, id peer.ID) peer.AddrInfo {
 	return peer.AddrInfo{}
 }
 
-// nearestPeersToQuery returns the routing tables closest peers.
-func (dht *IpfsDHT) nearestPeersToQuery(pmes *pb.Message, count int) []peer.ID {
-	closer := dht.routingTable.NearestPeers(kb.ConvertKey(string(pmes.GetKey())), count)
-	return closer
-}
+// closestPeersToQuery returns the closest peers to the target key from the
+// local routing table, filtering out self and the requester's peer ID.
+//
+// Per the IPFS Kademlia DHT spec, servers SHOULD NOT include themselves or the
+// requester in FIND_NODE responses (except for FIND_PEER when the target is
+// self or the requester, which is handled separately in handleFindPeer).
+func (dht *IpfsDHT) closestPeersToQuery(pmes *pb.Message, from peer.ID, count int) []peer.ID {
+	// Get count+1 closest peers to target key, so that we can filter out 'from'
+	// (and potentially 'self' if it somehow appears) and still return 'count' peers.
+	closestPeers := dht.routingTable.NearestPeers(kb.ConvertKey(string(pmes.GetKey())), count+1)
 
-// betterPeersToQuery returns nearestPeersToQuery with some additional filtering
-func (dht *IpfsDHT) betterPeersToQuery(pmes *pb.Message, from peer.ID, count int) []peer.ID {
-	closer := dht.nearestPeersToQuery(pmes, count)
-
-	// no node? nil
-	if closer == nil {
+	if len(closestPeers) == 0 {
 		logger.Infow("no closer peers to send", from)
 		return nil
 	}
 
-	filtered := make([]peer.ID, 0, len(closer))
-	for _, clp := range closer {
-
-		// == to self? thats bad
-		if clp == dht.self {
-			logger.Error("BUG betterPeersToQuery: attempted to return self! this shouldn't happen...")
-			return nil
-		}
-		// Dont send a peer back themselves
-		if clp == from {
+	filtered := make([]peer.ID, 0, min(len(closestPeers), count))
+	for _, p := range closestPeers {
+		// Per spec: don't include self in responses. This should never happen since
+		// self should not be in the routing table, but check defensively.
+		if p == dht.self {
+			logger.Debugw("self found in routing table, skipping", "key", string(pmes.GetKey()))
 			continue
 		}
-
-		filtered = append(filtered, clp)
+		// Per spec: don't include requester in responses (exception handled in handleFindPeer).
+		if p == from {
+			continue
+		}
+		filtered = append(filtered, p)
+		if len(filtered) >= count {
+			break
+		}
 	}
-
-	// ok seems like closer nodes
 	return filtered
 }
 
@@ -845,7 +849,10 @@ func (dht *IpfsDHT) getMode() mode {
 	return dht.mode
 }
 
-// Context returns the DHT's context.
+// Context returns the DHT's internal lifetime context. It is cancelled when
+// Close is called, but does not signal that shutdown has completed.
+//
+// Deprecated: use Close, which blocks until shutdown is complete.
 func (dht *IpfsDHT) Context() context.Context {
 	return dht.ctx
 }
@@ -855,31 +862,50 @@ func (dht *IpfsDHT) RoutingTable() *kb.RoutingTable {
 	return dht.routingTable
 }
 
-// Close calls Process Close.
+// BucketSize returns the size of the DHT's routing table buckets.
+func (dht *IpfsDHT) BucketSize() int {
+	return dht.bucketSize
+}
+
+// Close shuts the DHT down. It blocks until all long-lived internal
+// components have stopped: the background loops, the routing table refresh
+// manager, and the record stores. Transient per-query goroutines are
+// cancelled and wind down asynchronously.
+//
+// In-flight RPC handlers are owned by the libp2p host, not awaited here: the
+// provider store fences them off, but a handler mid-request may still read
+// from the value datastore after Close returns. Close the host before closing
+// any datastore handed to the DHT.
 func (dht *IpfsDHT) Close() error {
 	dht.cancel()
 	dht.wg.Wait()
 
-	var wg sync.WaitGroup
-	closes := [...]func() error{
-		dht.rtRefreshManager.Close,
-		dht.providerStore.Close,
+	// providerStore and valueStore are absent on forked DHTs that disable the
+	// corresponding subsystem, so only close the ones that were constructed.
+	closes := []func() error{dht.rtRefreshManager.Close}
+	if dht.providerStore != nil {
+		closes = append(closes, dht.providerStore.Close)
 	}
-	var errors [len(closes)]error
-	wg.Add(len(errors))
-	for i, c := range closes {
-		go func(i int, c func() error) {
-			defer wg.Done()
-			errors[i] = c()
-		}(i, c)
+	if dht.valueStore != nil {
+		closes = append(closes, dht.valueStore.Close)
 	}
-	wg.Wait()
 
-	return multierr.Combine(errors[:]...)
-}
+	errc := make(chan error)
+	for _, c := range closes {
+		go func(c func() error) {
+			errc <- c()
+		}(c)
+	}
 
-func mkDsKey(s string) ds.Key {
-	return ds.NewKey(base32.RawStdEncoding.EncodeToString([]byte(s)))
+	var errs []error
+	for range len(closes) {
+		err := <-errc
+		if err != nil {
+			errs = append(errs, err)
+		}
+	}
+
+	return errors.Join(errs...)
 }
 
 // PeerID returns the DHT node's Peer ID.
@@ -897,6 +923,11 @@ func (dht *IpfsDHT) Host() host.Host {
 	return dht.host
 }
 
+// MessageSender returns the DHT's message sender.
+func (dht *IpfsDHT) MessageSender() pb.MessageSender {
+	return dht.msgSender
+}
+
 // Ping sends a ping message to the passed peer and waits for a response.
 func (dht *IpfsDHT) Ping(ctx context.Context, p peer.ID) error {
 	ctx, span := internal.StartSpan(ctx, "IpfsDHT.Ping", trace.WithAttributes(attribute.Stringer("PeerID", p)))
@@ -912,19 +943,16 @@ func (dht *IpfsDHT) NetworkSize() (int32, error) {
 }
 
 // newContextWithLocalTags returns a new context.Context with the InstanceID and
-// PeerID keys populated. It will also take any extra tags that need adding to
-// the context as tag.Mutators.
-func (dht *IpfsDHT) newContextWithLocalTags(ctx context.Context, extraTags ...tag.Mutator) context.Context {
-	extraTags = append(
-		extraTags,
-		tag.Upsert(metrics.KeyPeerID, dht.self.String()),
-		tag.Upsert(metrics.KeyInstanceID, fmt.Sprintf("%p", dht)),
-	)
-	ctx, _ = tag.New(
-		ctx,
-		extraTags...,
-	) // ignoring error as it is unrelated to the actual function of this code.
-	return ctx
+// PeerID keys populated. It will also take any extra attributes that need adding to
+// the context as attribute.KeyValue.
+func (dht *IpfsDHT) newContextWithLocalTags(ctx context.Context, extraAttrs ...attribute.KeyValue) context.Context {
+	allAttrs := make([]attribute.KeyValue, 0, len(extraAttrs)+2)
+	copy(allAttrs, extraAttrs)
+
+	allAttrs = append(allAttrs, attribute.Key(metrics.KeyPeerID).String(dht.self.String()))
+	allAttrs = append(allAttrs, attribute.Key(metrics.KeyInstanceID).String(fmt.Sprintf("%p", dht)))
+
+	return metrics.ContextWithAttributes(ctx, allAttrs...)
 }
 
 func (dht *IpfsDHT) maybeAddAddrs(p peer.ID, addrs []ma.Multiaddr, ttl time.Duration) {
@@ -933,6 +961,16 @@ func (dht *IpfsDHT) maybeAddAddrs(p peer.ID, addrs []ma.Multiaddr, ttl time.Dura
 		return
 	}
 	dht.peerstore.AddAddrs(p, dht.filterAddrs(addrs), ttl)
+}
+
+// FilteredAddrs returns the set of addresses that this DHT instance
+// advertises to the swarm, after applying the configured addrFilter.
+//
+// For example:
+//   - In a public DHT, local and loopback addresses are filtered out.
+//   - In a LAN DHT, only loopback addresses are filtered out.
+func (dht *IpfsDHT) FilteredAddrs() []ma.Multiaddr {
+	return dht.filterAddrs(dht.host.Addrs())
 }
 
 func (dht *IpfsDHT) filterAddrs(addrs []ma.Multiaddr) []ma.Multiaddr {

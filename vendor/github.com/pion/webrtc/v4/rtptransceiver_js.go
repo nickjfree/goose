@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build js && wasm
@@ -44,4 +44,11 @@ func (r *RTPTransceiver) Receiver() *RTPReceiver {
 	}
 
 	return &RTPReceiver{underlying: underlying}
+}
+
+// RTPHeaderEncryptionNegotiated reports if RFC 9335 RTP Header Extension Encryption ("Cryptex")
+// has been negotiated and is enabled for this transceiver. The underlying browser API does not
+// currently expose this state, so this always returns false.
+func (r *RTPTransceiver) RTPHeaderEncryptionNegotiated() bool {
+	return false
 }

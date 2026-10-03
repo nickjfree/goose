@@ -1,10 +1,11 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/pion/ice/v4"
 )
@@ -80,7 +81,8 @@ func newICECandidateFromICE(candidate ice.Candidate, sdpMid string, sdpMLineInde
 	return newCandidate, nil
 }
 
-func (c ICECandidate) toICE() (cand ice.Candidate, err error) {
+// ToICE converts ICECandidate to ice.Candidate.
+func (c ICECandidate) ToICE() (cand ice.Candidate, err error) {
 	candidateID := c.statsID
 	switch c.Typ {
 	case ICECandidateTypeHost:
@@ -150,17 +152,17 @@ func (c ICECandidate) toICE() (cand ice.Candidate, err error) {
 }
 
 func (c *ICECandidate) setExtensions(ext []ice.CandidateExtension) {
-	var extensions string
+	var extensions strings.Builder
 
 	for i := range ext {
 		if i > 0 {
-			extensions += " "
+			extensions.WriteString(" ")
 		}
 
-		extensions += ext[i].Key + " " + ext[i].Value
+		extensions.WriteString(ext[i].Key + " " + ext[i].Value)
 	}
 
-	c.extensions = extensions
+	c.extensions = extensions.String()
 }
 
 func (c *ICECandidate) exportExtensions(cand ice.Candidate) error {
@@ -216,7 +218,7 @@ func convertTypeFromICE(t ice.CandidateType) (ICECandidateType, error) {
 }
 
 func (c ICECandidate) String() string {
-	ic, err := c.toICE()
+	ic, err := c.ToICE()
 	if err != nil {
 		return fmt.Sprintf("%#v failed to convert to ICE: %s", c, err)
 	}
@@ -229,7 +231,7 @@ func (c ICECandidate) String() string {
 func (c ICECandidate) ToJSON() ICECandidateInit {
 	candidateStr := ""
 
-	candidate, err := c.toICE()
+	candidate, err := c.ToICE()
 	if err == nil {
 		candidateStr = candidate.Marshal()
 	}

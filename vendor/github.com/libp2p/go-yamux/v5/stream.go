@@ -182,7 +182,7 @@ START:
 
 	// Send the header
 	hdr = encode(typeData, flags, s.id, max)
-	if err = s.session.sendMsg(hdr, b[:max], s.writeDeadline.wait()); err != nil {
+	if err = s.session.sendMsg(hdr, b[:max], s.writeDeadline.wait(), true); err != nil {
 		return 0, err
 	}
 
@@ -223,7 +223,7 @@ func (s *Stream) sendWindowUpdate(deadline <-chan struct{}) error {
 	}
 
 	now := time.Now()
-	if rtt := s.session.getRTT(); flags == 0 && rtt > 0 && now.Sub(s.epochStart) < rtt*4 {
+	if rtt := s.session.RTT(); flags == 0 && rtt > 0 && now.Sub(s.epochStart) < rtt*4 {
 		var recvWindow uint32
 		if s.recvWindow > math.MaxUint32/2 {
 			recvWindow = min(math.MaxUint32, s.session.config.MaxStreamWindowSize)
@@ -241,7 +241,7 @@ func (s *Stream) sendWindowUpdate(deadline <-chan struct{}) error {
 
 	s.epochStart = now
 	hdr := encode(typeWindowUpdate, flags, s.id, delta)
-	return s.session.sendMsg(hdr, nil, deadline)
+	return s.session.sendMsg(hdr, nil, deadline, true)
 }
 
 // sendClose is used to send a FIN
@@ -249,13 +249,13 @@ func (s *Stream) sendClose() error {
 	flags := s.sendFlags()
 	flags |= flagFIN
 	hdr := encode(typeWindowUpdate, flags, s.id, 0)
-	return s.session.sendMsg(hdr, nil, nil)
+	return s.session.sendMsg(hdr, nil, nil, true)
 }
 
 // sendReset is used to send a RST
 func (s *Stream) sendReset(errCode uint32) error {
 	hdr := encode(typeWindowUpdate, flagRST, s.id, errCode)
-	return s.session.sendMsg(hdr, nil, nil)
+	return s.session.sendMsg(hdr, nil, nil, true)
 }
 
 // Reset resets the stream (forcibly closes the stream)

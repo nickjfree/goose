@@ -16,7 +16,7 @@ import (
 	"github.com/libp2p/go-libp2p/p2p/net/reuseport"
 	"github.com/libp2p/go-libp2p/p2p/transport/tcpreuse"
 
-	logging "github.com/ipfs/go-log/v2"
+	logging "github.com/libp2p/go-libp2p/gologshim"
 	ma "github.com/multiformats/go-multiaddr"
 	mafmt "github.com/multiformats/go-multiaddr-fmt"
 	manet "github.com/multiformats/go-multiaddr/net"
@@ -41,7 +41,7 @@ var ReuseportIsAvailable = tcpreuse.ReuseportIsAvailable
 func tryKeepAlive(conn net.Conn, keepAlive bool) {
 	keepAliveConn, ok := conn.(canKeepAlive)
 	if !ok {
-		log.Errorf("Can't set TCP keepalives.")
+		log.Error("can't set TCP keepalives. net.Conn doesn't support SetKeepAlive", "conn_type", fmt.Sprintf("%T", conn))
 		return
 	}
 	if err := keepAliveConn.SetKeepAlive(keepAlive); err != nil {
@@ -51,16 +51,16 @@ func tryKeepAlive(conn net.Conn, keepAlive bool) {
 		// But there's nothing we can do about invalid arguments, so we'll drop this to a
 		// debug.
 		if errors.Is(err, os.ErrInvalid) || errors.Is(err, syscall.EINVAL) {
-			log.Debugw("failed to enable TCP keepalive", "error", err)
+			log.Debug("failed to enable TCP keepalive", "error", err)
 		} else {
-			log.Errorw("failed to enable TCP keepalive", "error", err)
+			log.Error("failed to enable TCP keepalive", "error", err)
 		}
 		return
 	}
 
 	if runtime.GOOS != "openbsd" {
 		if err := keepAliveConn.SetKeepAlivePeriod(keepAlivePeriod); err != nil {
-			log.Errorw("failed set keepalive period", "error", err)
+			log.Error("failed set keepalive period", "error", err)
 		}
 	}
 }
@@ -76,23 +76,23 @@ func tryLinger(conn net.Conn, sec int) {
 	}
 }
 
-type tcpListener struct {
-	manet.Listener
+type tcpGatedMaListener struct {
+	transport.GatedMaListener
 	sec int
 }
 
-func (ll *tcpListener) Accept() (manet.Conn, error) {
-	c, err := ll.Listener.Accept()
+func (ll *tcpGatedMaListener) Accept() (manet.Conn, network.ConnManagementScope, error) {
+	c, scope, err := ll.GatedMaListener.Accept()
 	if err != nil {
-		return nil, err
+		if scope != nil {
+			log.Error("BUG: got non-nil scope but also an error", "error", err)
+			scope.Done()
+		}
+		return nil, nil, err
 	}
 	tryLinger(c, ll.sec)
 	tryKeepAlive(c, true)
-	// We're not calling OpenConnection in the resource manager here,
-	// since the manet.Conn doesn't allow us to save the scope.
-	// It's the caller's (usually the p2p/net/upgrader) responsibility
-	// to call the resource manager.
-	return c, nil
+	return c, scope, nil
 }
 
 type Option func(*TcpTransport) error
@@ -254,7 +254,7 @@ func (t *TcpTransport) Dial(ctx context.Context, raddr ma.Multiaddr, p peer.ID) 
 func (t *TcpTransport) DialWithUpdates(ctx context.Context, raddr ma.Multiaddr, p peer.ID, updateChan chan<- transport.DialUpdate) (transport.CapableConn, error) {
 	connScope, err := t.rcmgr.OpenConnection(network.DirOutbound, true, raddr)
 	if err != nil {
-		log.Debugw("resource manager blocked outgoing connection", "peer", p, "addr", raddr, "error", err)
+		log.Debug("resource manager blocked outgoing connection", "peer", p, "addr", raddr, "error", err)
 		return nil, err
 	}
 
@@ -268,7 +268,7 @@ func (t *TcpTransport) DialWithUpdates(ctx context.Context, raddr ma.Multiaddr, 
 
 func (t *TcpTransport) dialWithScope(ctx context.Context, raddr ma.Multiaddr, p peer.ID, connScope network.ConnManagementScope, updateChan chan<- transport.DialUpdate) (transport.CapableConn, error) {
 	if err := connScope.SetPeer(p); err != nil {
-		log.Debugw("resource manager blocked outgoing connection for peer", "peer", p, "addr", raddr, "error", err)
+		log.Debug("resource manager blocked outgoing connection for peer", "peer", p, "addr", raddr, "error", err)
 		return nil, err
 	}
 	conn, err := t.maDial(ctx, raddr)
@@ -316,22 +316,31 @@ func (t *TcpTransport) unsharedMAListen(laddr ma.Multiaddr) (manet.Listener, err
 
 // Listen listens on the given multiaddr.
 func (t *TcpTransport) Listen(laddr ma.Multiaddr) (transport.Listener, error) {
-	var list manet.Listener
+	var list transport.GatedMaListener
 	var err error
-
-	if t.sharedTcp == nil {
-		list, err = t.unsharedMAListen(laddr)
-	} else {
+	if t.sharedTcp != nil {
 		list, err = t.sharedTcp.DemultiplexedListen(laddr, tcpreuse.DemultiplexedConnType_MultistreamSelect)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		mal, err := t.unsharedMAListen(laddr)
+		if err != nil {
+			return nil, err
+		}
+		list = t.upgrader.GateMaListener(mal)
 	}
-	if err != nil {
-		return nil, err
-	}
+
+	// Always wrap the listener with tcpGatedMaListener to apply TCP-specific configurations
+	tcpList := &tcpGatedMaListener{list, 0}
 
 	if t.enableMetrics {
-		list = newTracingListener(&tcpListener{list, 0}, t.metricsCollector)
+		// Wrap with tracing listener if metrics are enabled
+		return t.upgrader.UpgradeGatedMaListener(t, newTracingListener(tcpList, t.metricsCollector)), nil
 	}
-	return t.upgrader.UpgradeListener(t, list), nil
+
+	// Regular path without metrics
+	return t.upgrader.UpgradeGatedMaListener(t, tcpList), nil
 }
 
 // Protocols returns the list of terminal protocols this transport can dial.

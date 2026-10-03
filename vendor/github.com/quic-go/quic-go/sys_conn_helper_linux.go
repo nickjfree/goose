@@ -58,7 +58,7 @@ func parseIPv4PktInfo(body []byte) (ip netip.Addr, ifIndex uint32, ok bool) {
 	if len(body) != 12 {
 		return netip.Addr{}, 0, false
 	}
-	return netip.AddrFrom4(*(*[4]byte)(body[8:12])), binary.LittleEndian.Uint32(body), true
+	return netip.AddrFrom4(*(*[4]byte)(body[8:12])), binary.NativeEndian.Uint32(body), true
 }
 
 // isGSOEnabled tests if the kernel supports GSO.
@@ -96,8 +96,7 @@ func appendUDPSegmentSizeMsg(b []byte, size uint16) []byte {
 }
 
 func isGSOError(err error) bool {
-	var serr *os.SyscallError
-	if errors.As(err, &serr) {
+	if serr, ok := errors.AsType[*os.SyscallError](err); ok {
 		// EIO is returned by udp_send_skb() if the device driver does not have tx checksums enabled,
 		// which is a hard requirement of UDP_SEGMENT. See:
 		// https://git.kernel.org/pub/scm/docs/man-pages/man-pages.git/tree/man7/udp.7?id=806eabd74910447f21005160e90957bde4db0183#n228
@@ -111,8 +110,7 @@ func isGSOError(err error) bool {
 // It's not clear why this happens.
 // See https://github.com/golang/go/issues/63322.
 func isPermissionError(err error) bool {
-	var serr *os.SyscallError
-	if errors.As(err, &serr) {
+	if serr, ok := errors.AsType[*os.SyscallError](err); ok {
 		return serr.Syscall == "sendmsg" && serr.Err == unix.EPERM
 	}
 	return false

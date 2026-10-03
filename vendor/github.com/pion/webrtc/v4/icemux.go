@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -14,9 +14,10 @@ import (
 // passive ICE TCP candidates.
 func NewICETCPMux(logger logging.LeveledLogger, listener net.Listener, readBufferSize int) ice.TCPMux {
 	return ice.NewTCPMuxDefault(ice.TCPMuxParams{
-		Listener:       listener,
-		Logger:         logger,
-		ReadBufferSize: readBufferSize,
+		Listener:        listener,
+		Logger:          logger,
+		ReadBufferSize:  readBufferSize,
+		WriteBufferSize: 4 * 1024 * 1024, // 4 MB recommended by pion/ice.
 	})
 }
 

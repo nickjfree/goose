@@ -13,7 +13,7 @@ func WrapHard(str string, wrapLen int) string {
 	if wrapLen <= 0 {
 		return ""
 	}
-	str = strings.Replace(str, "\t", "    ", -1)
+	str = strings.ReplaceAll(str, "\t", "    ")
 	sLen := StringWidthWithoutEscSequences(str)
 	if sLen <= wrapLen {
 		return str
@@ -41,7 +41,7 @@ func WrapSoft(str string, wrapLen int) string {
 	if wrapLen <= 0 {
 		return ""
 	}
-	str = strings.Replace(str, "\t", "    ", -1)
+	str = strings.ReplaceAll(str, "\t", "    ")
 	sLen := StringWidthWithoutEscSequences(str)
 	if sLen <= wrapLen {
 		return str
@@ -68,7 +68,7 @@ func WrapText(str string, wrapLen int) string {
 	if wrapLen <= 0 {
 		return ""
 	}
-	str = strings.Replace(str, "\t", "    ", -1)
+	str = strings.ReplaceAll(str, "\t", "    ")
 	sLen := StringWidthWithoutEscSequences(str)
 	if sLen <= wrapLen {
 		return str
@@ -89,7 +89,7 @@ func WrapText(str string, wrapLen int) string {
 func appendChar(char rune, wrapLen int, lineLen *int, inEscSeq bool, lastSeenEscSeq string, out *strings.Builder) {
 	// handle reaching the end of the line as dictated by wrapLen or by finding
 	// a newline character
-	if (*lineLen == wrapLen && !inEscSeq && char != '\n') || (char == '\n') {
+	if (*lineLen >= wrapLen && !inEscSeq && char != '\n') || (char == '\n') {
 		if lastSeenEscSeq != "" {
 			// terminate escape sequence and the line; and restart the escape
 			// sequence in the next line
@@ -122,7 +122,7 @@ func appendWord(word string, lineIdx *int, lastSeenEscSeq string, wrapLen int, o
 			inEscSeq = true
 			lastSeenEscSeq = ""
 		}
-		if inEscSeq {
+		if inEscSeq && len(lastSeenEscSeq) < escSeqMaxLength {
 			lastSeenEscSeq += string(char)
 		}
 
@@ -157,7 +157,7 @@ func terminateOutput(lastSeenEscSeq string, out *strings.Builder) {
 }
 
 func wrapHard(paragraph string, wrapLen int, out *strings.Builder) {
-	esp := escSeqParser{}
+	esp := EscSeqParser{}
 	lineLen, lastSeenEscSeq := 0, ""
 	words := strings.Fields(paragraph)
 	for wordIdx, word := range words {
@@ -186,7 +186,7 @@ func wrapHard(paragraph string, wrapLen int, out *strings.Builder) {
 }
 
 func wrapSoft(paragraph string, wrapLen int, out *strings.Builder) {
-	esp := escSeqParser{}
+	esp := EscSeqParser{}
 	lineLen, lastSeenEscSeq := 0, ""
 	words := strings.Fields(paragraph)
 	for wordIdx, word := range words {

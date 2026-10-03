@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package rtcp
@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"strings"
 )
 
 // https://www.rfc-editor.org/rfc/rfc8888.html#name-rtcp-congestion-control-fee
@@ -45,25 +46,44 @@ var (
 	errMetricBlockLength   = errors.New("feedback report metric blocks must be exactly 2 bytes")
 )
 
-// ECN represents the two ECN bits
+// ECN represents the two ECN bits.
 type ECN uint8
 
 const (
 	//nolint:misspell
-	// ECNNonECT signals Non ECN-Capable Transport, Non-ECT
+	// ECNNonECT signals Non ECN-Capable Transport, Non-ECT.
 	ECNNonECT ECN = iota // 00
 
 	//nolint:misspell
-	// ECNECT1 signals ECN Capable Transport, ECT(0)
+	// ECNECT1 signals ECN Capable Transport, ECT(0).
 	ECNECT1 // 01
 
 	//nolint:misspell
-	// ECNECT0 signals ECN Capable Transport, ECT(1)
+	// ECNECT0 signals ECN Capable Transport, ECT(1).
 	ECNECT0 // 10
 
-	// ECNCE signals ECN Congestion Encountered, CE
+	// ECNCE signals ECN Congestion Encountered, CE.
 	ECNCE // 11
 )
+
+func (e ECN) String() string {
+	switch e {
+	case ECNNonECT:
+		//nolint:misspell
+		return "Non-ECT (00)"
+	case ECNECT0:
+		//nolint:misspell
+		return "ECT(0) (01)"
+	case ECNECT1:
+		//nolint:misspell
+		return "ECT(1) (10)"
+	case ECNCE:
+		//nolint:misspell
+		return "CE (11)"
+	}
+
+	return "invalid ECN value"
+}
 
 const (
 	reportTimestampLength = 4
@@ -89,20 +109,22 @@ func (b CCFeedbackReport) DestinationSSRC() []uint32 {
 	for i, block := range b.ReportBlocks {
 		ssrcs[i] = block.MediaSSRC
 	}
+
 	return ssrcs
 }
 
-// Len returns the length of the report in bytes
+// Len returns the length of the report in bytes.
 func (b *CCFeedbackReport) Len() int {
 	return b.MarshalSize()
 }
 
-// MarshalSize returns the size of the packet once marshaled
+// MarshalSize returns the size of the packet once marshaled.
 func (b *CCFeedbackReport) MarshalSize() int {
 	n := 0
 	for _, block := range b.ReportBlocks {
 		n += block.len()
 	}
+
 	return reportBlockOffset + n + reportTimestampLength
 }
 
@@ -112,18 +134,18 @@ func (b *CCFeedbackReport) Header() Header {
 		Padding: false,
 		Count:   FormatCCFB,
 		Type:    TypeTransportSpecificFeedback,
-		Length:  uint16(b.MarshalSize()/4 - 1),
+		Length:  uint16(b.MarshalSize()/4 - 1), //nolint:gosec // G115
 	}
 }
 
-// Marshal encodes the Congestion Control Feedback Report in binary
+// Marshal encodes the Congestion Control Feedback Report in binary.
 func (b CCFeedbackReport) Marshal() ([]byte, error) {
 	header := b.Header()
 	headerBuf, err := header.Marshal()
 	if err != nil {
 		return nil, err
 	}
-	length := 4 * (header.Length + 1)
+	length := 4 * (int(header.Length) + 1)
 	buf := make([]byte, length)
 	copy(buf[:headerLength], headerBuf)
 	binary.BigEndian.PutUint32(buf[headerLength:], b.SenderSSRC)
@@ -138,22 +160,25 @@ func (b CCFeedbackReport) Marshal() ([]byte, error) {
 	}
 
 	binary.BigEndian.PutUint32(buf[offset:], b.ReportTimestamp)
+
 	return buf, nil
 }
 
 func (b CCFeedbackReport) String() string {
-	out := fmt.Sprintf("CCFB:\n\tHeader %v\n", b.Header())
-	out += fmt.Sprintf("CCFB:\n\tSender SSRC %d\n", b.SenderSSRC)
-	out += fmt.Sprintf("\tReport Timestamp %d\n", b.ReportTimestamp)
-	out += "\tFeedback Reports \n"
+	var out strings.Builder
+	fmt.Fprintf(&out, "CCFB:\n\tHeader %v\n", b.Header())
+	fmt.Fprintf(&out, "CCFB:\n\tSender SSRC %d\n", b.SenderSSRC)
+	fmt.Fprintf(&out, "\tReport Timestamp %d\n", b.ReportTimestamp)
+	out.WriteString("\tFeedback Reports \n")
 	for _, report := range b.ReportBlocks {
-		out += fmt.Sprintf("%v ", report)
+		fmt.Fprintf(&out, "%v ", report)
 	}
-	out += "\n"
-	return out
+	out.WriteString("\n")
+
+	return out.String()
 }
 
-// Unmarshal decodes the Congestion Control Feedback Report from binary
+// Unmarshal decodes the Congestion Control Feedback Report from binary.
 func (b *CCFeedbackReport) Unmarshal(rawPacket []byte) error {
 	if len(rawPacket) < headerLength+ssrcLength+reportTimestampLength {
 		return errPacketTooShort
@@ -186,6 +211,38 @@ func (b *CCFeedbackReport) Unmarshal(rawPacket []byte) error {
 	return nil
 }
 
+func appendCCFBSSRCs(dst []uint32, header Header, pkt []byte) ([]uint32, error) {
+	if header.Type != TypeTransportSpecificFeedback || header.Count != FormatCCFB {
+		return dst, errWrongType
+	}
+	if len(pkt) < headerLength+ssrcLength+reportTimestampLength {
+		return dst, errPacketTooShort
+	}
+
+	// Each block's contents are bounded by the end of the packet rather than
+	// the start of the timestamp, as in CCFeedbackReport.Unmarshal.
+	reportTimestampOffset := len(pkt) - reportTimestampLength
+	offset := reportBlockOffset
+	for offset < reportTimestampOffset {
+		block := pkt[offset:]
+		if len(block) < reportsOffset {
+			return dst, errReportBlockLength
+		}
+		dst = append(dst, binary.BigEndian.Uint32(block[:beginSequenceOffset]))
+
+		numReports := int(binary.BigEndian.Uint16(block[numReportsOffset:]))
+		if len(block) < reportsOffset+numReports*2 {
+			return dst, errIncorrectNumReports
+		}
+		if numReports%2 != 0 {
+			numReports++
+		}
+		offset += reportsOffset + 2*numReports
+	}
+
+	return dst, nil
+}
+
 const (
 	ssrcOffset          = 0
 	beginSequenceOffset = 4
@@ -195,7 +252,7 @@ const (
 	maxMetricBlocks = 16384
 )
 
-// CCFeedbackReportBlock is a Feedback Report Block
+// CCFeedbackReportBlock is a Feedback Report Block.
 type CCFeedbackReportBlock struct {
 	// SSRC of the RTP stream on which this block is reporting
 	MediaSSRC     uint32
@@ -203,27 +260,35 @@ type CCFeedbackReportBlock struct {
 	MetricBlocks  []CCFeedbackMetricBlock
 }
 
-// len returns the length of the report block in bytes
+// len returns the length of the report block in bytes.
 func (b *CCFeedbackReportBlock) len() int {
 	n := len(b.MetricBlocks)
 	if n%2 != 0 {
 		n++
 	}
+
 	return reportsOffset + 2*n
 }
 
 func (b CCFeedbackReportBlock) String() string {
-	out := fmt.Sprintf("\tReport Block Media SSRC %d\n", b.MediaSSRC)
-	out += fmt.Sprintf("\tReport Begin Sequence Nr %d\n", b.BeginSequence)
-	out += fmt.Sprintf("\tReport length %d\n\t", len(b.MetricBlocks))
+	var out strings.Builder
+	fmt.Fprintf(&out, "\tReport Block Media SSRC %d\n", b.MediaSSRC)
+	fmt.Fprintf(&out, "\tReport Begin Sequence Nr %d\n", b.BeginSequence)
+	fmt.Fprintf(&out, "\tReport length %d\n\t", len(b.MetricBlocks))
 	for i, block := range b.MetricBlocks {
-		out += fmt.Sprintf("{nr: %d, rx: %v, ts: %v} ", b.BeginSequence+uint16(i), block.Received, block.ArrivalTimeOffset)
+		//nolint:gosec // G115
+		fmt.Fprintf(&out, "{nr: %d, rx: %v, ts: %v, ecn: %v} ",
+			b.BeginSequence+uint16(i),
+			block.Received,
+			block.ArrivalTimeOffset,
+			block.ECN)
 	}
-	out += "\n"
-	return out
+	out.WriteString("\n")
+
+	return out.String()
 }
 
-// marshal encodes the Congestion Control Feedback Report Block in binary
+// marshal encodes the Congestion Control Feedback Report Block in binary.
 func (b CCFeedbackReportBlock) marshal() ([]byte, error) {
 	if len(b.MetricBlocks) > maxMetricBlocks {
 		return nil, errTooManyReports
@@ -233,10 +298,7 @@ func (b CCFeedbackReportBlock) marshal() ([]byte, error) {
 	binary.BigEndian.PutUint32(buf[ssrcOffset:], b.MediaSSRC)
 	binary.BigEndian.PutUint16(buf[beginSequenceOffset:], b.BeginSequence)
 
-	length := uint16(len(b.MetricBlocks))
-	if length > 0 {
-		length--
-	}
+	length := uint16(len(b.MetricBlocks)) //nolint:gosec // G115
 
 	binary.BigEndian.PutUint16(buf[numReportsOffset:], length)
 
@@ -251,31 +313,28 @@ func (b CCFeedbackReportBlock) marshal() ([]byte, error) {
 	return buf, nil
 }
 
-// Unmarshal decodes the Congestion Control Feedback Report Block from binary
+// Unmarshal decodes the Congestion Control Feedback Report Block from binary.
 func (b *CCFeedbackReportBlock) unmarshal(rawPacket []byte) error {
 	if len(rawPacket) < reportsOffset {
 		return errReportBlockLength
 	}
 	b.MediaSSRC = binary.BigEndian.Uint32(rawPacket[:beginSequenceOffset])
 	b.BeginSequence = binary.BigEndian.Uint16(rawPacket[beginSequenceOffset:numReportsOffset])
-	numReportsField := binary.BigEndian.Uint16(rawPacket[numReportsOffset:])
-	if numReportsField == 0 {
+	numReports := int(binary.BigEndian.Uint16(rawPacket[numReportsOffset:]))
+	if numReports == 0 {
 		return nil
 	}
 
-	if int(b.BeginSequence)+int(numReportsField) > math.MaxUint16 {
+	if numReports > math.MaxUint16 {
 		return errIncorrectNumReports
 	}
-
-	endSequence := b.BeginSequence + numReportsField
-	numReports := int(endSequence - b.BeginSequence + 1)
 
 	if len(rawPacket) < reportsOffset+numReports*2 {
 		return errIncorrectNumReports
 	}
 
 	b.MetricBlocks = make([]CCFeedbackMetricBlock, numReports)
-	for i := int(0); i < numReports; i++ {
+	for i := range numReports {
 		var mb CCFeedbackMetricBlock
 		offset := reportsOffset + 2*i
 		if err := mb.unmarshal(rawPacket[offset : offset+2]); err != nil {
@@ -283,6 +342,7 @@ func (b *CCFeedbackReportBlock) unmarshal(rawPacket []byte) error {
 		}
 		b.MetricBlocks[i] = mb
 	}
+
 	return nil
 }
 
@@ -290,7 +350,7 @@ const (
 	metricBlockLength = 2
 )
 
-// CCFeedbackMetricBlock is a Feedback Metric Block
+// CCFeedbackMetricBlock is a Feedback Metric Block.
 type CCFeedbackMetricBlock struct {
 	Received bool
 	ECN      ECN
@@ -299,7 +359,7 @@ type CCFeedbackMetricBlock struct {
 	ArrivalTimeOffset uint16
 }
 
-// Marshal encodes the Congestion Control Feedback Metric Block in binary
+// Marshal encodes the Congestion Control Feedback Metric Block in binary.
 func (b CCFeedbackMetricBlock) marshal() ([]byte, error) {
 	buf := make([]byte, 2)
 	r := uint16(0)
@@ -320,10 +380,11 @@ func (b CCFeedbackMetricBlock) marshal() ([]byte, error) {
 	}
 
 	binary.BigEndian.PutUint16(buf, dst)
+
 	return buf, nil
 }
 
-// Unmarshal decodes the Congestion Control Feedback Metric Block from binary
+// Unmarshal decodes the Congestion Control Feedback Metric Block from binary.
 func (b *CCFeedbackMetricBlock) unmarshal(rawPacket []byte) error {
 	if len(rawPacket) != metricBlockLength {
 		return errMetricBlockLength
@@ -332,9 +393,11 @@ func (b *CCFeedbackMetricBlock) unmarshal(rawPacket []byte) error {
 	if !b.Received {
 		b.ECN = ECNNonECT
 		b.ArrivalTimeOffset = 0
+
 		return nil
 	}
 	b.ECN = ECN(rawPacket[0] >> 5 & 0x03)
 	b.ArrivalTimeOffset = binary.BigEndian.Uint16(rawPacket) & 0x1FFF
+
 	return nil
 }

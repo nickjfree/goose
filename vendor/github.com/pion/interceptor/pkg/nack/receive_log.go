@@ -1,11 +1,13 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package nack
 
 import (
-	"fmt"
 	"sync"
+
+	"github.com/pion/interceptor/internal/rtpbuffer"
+	"github.com/pion/interceptor/internal/validation"
 )
 
 type receiveLog struct {
@@ -18,18 +20,8 @@ type receiveLog struct {
 }
 
 func newReceiveLog(size uint16) (*receiveLog, error) {
-	allowedSizes := make([]uint16, 0)
-	correctSize := false
-	for i := 6; i < 16; i++ {
-		if size == 1<<i {
-			correctSize = true
-			break
-		}
-		allowedSizes = append(allowedSizes, 1<<i)
-	}
-
-	if !correctSize {
-		return nil, fmt.Errorf("%w: %d is not a valid size, allowed sizes: %v", ErrInvalidSize, size, allowedSizes)
+	if err := validation.IsPowerOfTwo(size); err != nil {
+		return nil, err
 	}
 
 	return &receiveLog{
@@ -47,6 +39,7 @@ func (s *receiveLog) add(seq uint16) {
 		s.end = seq
 		s.started = true
 		s.lastConsecutive = seq
+
 		return
 	}
 
@@ -54,7 +47,7 @@ func (s *receiveLog) add(seq uint16) {
 	switch {
 	case diff == 0:
 		return
-	case diff < uint16SizeHalf:
+	case diff < rtpbuffer.Uint16SizeHalf:
 		// this means a positive diff, in other words seq > end (with counting for rollovers)
 		for i := s.end + 1; i != seq; i++ {
 			// clear packets between end and seq (these may contain packets from a "size" ago)
@@ -82,7 +75,7 @@ func (s *receiveLog) get(seq uint16) bool {
 	defer s.m.RUnlock()
 
 	diff := s.end - seq
-	if diff >= uint16SizeHalf {
+	if diff >= rtpbuffer.Uint16SizeHalf {
 		return false
 	}
 
@@ -93,24 +86,25 @@ func (s *receiveLog) get(seq uint16) bool {
 	return s.getReceived(seq)
 }
 
-func (s *receiveLog) missingSeqNumbers(skipLastN uint16) []uint16 {
+func (s *receiveLog) missingSeqNumbers(skipLastN uint16, missingPacketSeqNums []uint16) []uint16 {
 	s.m.RLock()
 	defer s.m.RUnlock()
 
 	until := s.end - skipLastN
-	if until-s.lastConsecutive >= uint16SizeHalf {
+	if until-s.lastConsecutive >= rtpbuffer.Uint16SizeHalf {
 		// until < s.lastConsecutive (counting for rollover)
 		return nil
 	}
 
-	missingPacketSeqNums := make([]uint16, 0)
+	c := 0
 	for i := s.lastConsecutive + 1; i != until+1; i++ {
 		if !s.getReceived(i) {
-			missingPacketSeqNums = append(missingPacketSeqNums, i)
+			missingPacketSeqNums[c] = i
+			c++
 		}
 	}
 
-	return missingPacketSeqNums
+	return missingPacketSeqNums[:c]
 }
 
 func (s *receiveLog) setReceived(seq uint16) {
@@ -125,6 +119,7 @@ func (s *receiveLog) delReceived(seq uint16) {
 
 func (s *receiveLog) getReceived(seq uint16) bool {
 	pos := seq % s.size
+
 	return (s.packets[pos/64] & (1 << (pos % 64))) != 0
 }
 

@@ -1,9 +1,12 @@
-comment: false
 coverage:
+  ignore:
+    - example/
+    - interop/
+    - interop_chrome/
   status:
-    patch:
+    project:
       default:
         informational: true
-    project:
+    patch:
       default:
         informational: true

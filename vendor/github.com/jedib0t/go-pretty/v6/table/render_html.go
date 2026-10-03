@@ -60,15 +60,16 @@ const (
 //	  </tfoot>
 //	</table>
 func (t *Table) RenderHTML() string {
-	t.initForRender()
+	t.initForRender(renderModeHTML)
 
 	var out strings.Builder
 	if t.numColumns > 0 {
+		out.Grow(t.estimatedRenderLength())
 		out.WriteString("<table class=\"")
 		if t.htmlCSSClass != "" {
-			out.WriteString(t.htmlCSSClass)
+			out.WriteString(html.EscapeString(t.htmlCSSClass))
 		} else {
-			out.WriteString(t.style.HTML.CSSClass)
+			out.WriteString(html.EscapeString(t.style.HTML.CSSClass))
 		}
 		out.WriteString("\">\n")
 		t.htmlRenderTitle(&out)
@@ -99,18 +100,26 @@ func (t *Table) htmlGetColStrAndTag(row rowStr, colIdx int, hint renderHint) (st
 
 func (t *Table) htmlRenderCaption(out *strings.Builder) {
 	if t.caption != "" {
+		caption := t.caption
+		if t.style.HTML.EscapeText {
+			caption = html.EscapeString(caption)
+		}
 		out.WriteString("  <caption class=\"caption\" style=\"caption-side: bottom;\">")
-		out.WriteString(t.caption)
+		out.WriteString(caption)
 		out.WriteString("</caption>\n")
 	}
 }
 
 func (t *Table) htmlRenderColumn(out *strings.Builder, colStr string) {
-	if t.style.HTML.EscapeText {
+	// convertEscSequencesToSpans already escapes text content, so skip
+	// EscapeText if ConvertColorsToSpans is true
+	if t.style.HTML.ConvertColorsToSpans {
+		colStr = convertEscSequencesToSpans(colStr)
+	} else if t.style.HTML.EscapeText {
 		colStr = html.EscapeString(colStr)
 	}
 	if t.style.HTML.Newline != "\n" {
-		colStr = strings.Replace(colStr, "\n", t.style.HTML.Newline, -1)
+		colStr = strings.ReplaceAll(colStr, "\n", t.style.HTML.Newline)
 	}
 	out.WriteString(colStr)
 }
@@ -147,7 +156,7 @@ func (t *Table) htmlRenderColumnAutoIndex(out *strings.Builder, hint renderHint)
 		out.WriteString("</td>\n")
 	} else {
 		out.WriteString("    <td align=\"right\">")
-		out.WriteString(fmt.Sprint(hint.rowNumber))
+		fmt.Fprint(out, hint.rowNumber)
 		out.WriteString("</td>\n")
 	}
 }
@@ -158,6 +167,10 @@ func (t *Table) htmlRenderRow(out *strings.Builder, row rowStr, hint renderHint)
 		// auto-index column
 		if colIdx == 0 && t.autoIndex {
 			t.htmlRenderColumnAutoIndex(out, hint)
+		}
+		// auto-merged columns should be skipped
+		if t.shouldMergeCellsVerticallyAbove(colIdx, hint) {
+			continue
 		}
 
 		align := t.getAlign(colIdx, hint)
@@ -183,7 +196,10 @@ func (t *Table) htmlRenderRow(out *strings.Builder, row rowStr, hint renderHint)
 		t.htmlRenderColumnAttributes(out, colIdx, hint, align)
 		if extraColumnsRendered > 0 {
 			out.WriteString(" colspan=")
-			out.WriteString(fmt.Sprint(extraColumnsRendered + 1))
+			fmt.Fprint(out, extraColumnsRendered+1)
+		} else if rowSpan := t.shouldMergeCellsVerticallyBelow(colIdx, hint); rowSpan > 1 {
+			out.WriteString(" rowspan=")
+			fmt.Fprint(out, rowSpan)
 		}
 		out.WriteString(">")
 		if len(colStr) == 0 {
@@ -222,6 +238,7 @@ func (t *Table) htmlRenderRows(out *strings.Builder, rows []rowStr, hint renderH
 				t.htmlRenderRow(out, row, hint)
 				shouldRenderTagClose = true
 			}
+			t.firstRowOfPage = false
 		}
 		if shouldRenderTagClose {
 			out.WriteString("  </")
@@ -251,6 +268,9 @@ func (t *Table) htmlRenderTitle(out *strings.Builder) {
 		align := t.style.Title.Align.HTMLProperty()
 		colors := t.style.Title.Colors.HTMLProperty()
 		title := t.style.Title.Format.Apply(t.title)
+		if t.style.HTML.EscapeText {
+			title = html.EscapeString(title)
+		}
 
 		out.WriteString("  <caption class=\"title\"")
 		if align != "" {

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"slices"
 	"sync"
 	"time"
 
@@ -24,10 +25,19 @@ import (
 // ErrNoPeersQueried is returned when we failed to connect to any peers.
 var ErrNoPeersQueried = errors.New("failed to query any peers")
 
-type (
-	queryFn func(context.Context, peer.ID) ([]*peer.AddrInfo, error)
-	stopFn  func(*qpeerset.QueryPeerset) bool
-)
+// queryFn runs once per peer visited in a DHT lookup. The returned
+// slice is the "heard" set the worker follows up on, and is commonly
+// also published via routing.QueryEvent.Responses.
+//
+// The returned slice and the AddrInfo values it points at are
+// read-only: mutating them (e.g. appending to AddrInfo.Addrs) races
+// with any RegisterForQueryEvents consumer reading the published
+// event.
+type queryFn func(context.Context, peer.ID) ([]*peer.AddrInfo, error)
+
+// stopFn decides whether a lookup has collected enough results and
+// can terminate early.
+type stopFn func(*qpeerset.QueryPeerset) bool
 
 // query represents a single DHT query.
 type query struct {
@@ -44,6 +54,12 @@ type query struct {
 
 	// seedPeers is the set of peers that seed the query
 	seedPeers []peer.ID
+
+	// If non-zero, define how many closer peers from the same IP block are
+	// allowed to be returned in a response. if response contains more than
+	// maxPeersPerIPGroup peers from the same IP block, all peers from that IP
+	// block are dropped
+	maxPeersPerIPGroup int
 
 	// peerTimes contains the duration of each successful query to a peer
 	peerTimes map[peer.ID]time.Duration
@@ -127,7 +143,7 @@ func (dht *IpfsDHT) runLookupWithFollowup(ctx context.Context, target string, qu
 	// wait for all queries to complete before returning, aborting ongoing queries if we've been externally stopped
 	followupsCompleted := 0
 processFollowUp:
-	for i := 0; i < len(queryPeers); i++ {
+	for i := range queryPeers {
 		select {
 		case <-doneCh:
 			followupsCompleted++
@@ -168,18 +184,27 @@ func (dht *IpfsDHT) runQuery(ctx context.Context, target string, queryFn queryFn
 		})
 		return nil, nil, kb.ErrLookupFailure
 	}
+	// if the DHT has a diversity filter, reuse the maxForTable value to drop
+	// responses from peers providing too many closer peers in the same IP block
+	var maxPeersPerIPGroup int
+	if dht.rtPeerDiversityFilter != nil {
+		if filter, ok := dht.rtPeerDiversityFilter.(*rtPeerIPGroupFilter); ok {
+			maxPeersPerIPGroup = filter.maxForTable
+		}
+	}
 
 	q := &query{
-		id:         uuid.New(),
-		key:        target,
-		ctx:        ctx,
-		dht:        dht,
-		queryPeers: qpeerset.NewQueryPeerset(target),
-		seedPeers:  seedPeers,
-		peerTimes:  make(map[peer.ID]time.Duration),
-		terminated: false,
-		queryFn:    queryFn,
-		stopFn:     stopFn,
+		id:                 uuid.New(),
+		key:                target,
+		ctx:                ctx,
+		dht:                dht,
+		queryPeers:         qpeerset.NewQueryPeerset(target),
+		maxPeersPerIPGroup: maxPeersPerIPGroup,
+		seedPeers:          seedPeers,
+		peerTimes:          make(map[peer.ID]time.Duration),
+		terminated:         false,
+		queryFn:            queryFn,
+		stopFn:             stopFn,
 	}
 
 	// run the query
@@ -425,25 +450,44 @@ func (q *query) queryPeer(ctx context.Context, ch chan<- *queryUpdate, p peer.ID
 	// query successful, try to add to RT
 	q.dht.validPeerFound(p)
 
+	// Cap the number of closer peers accepted from a single response. Honest
+	// peers return at most bucketSize closer peers; a longer list can only come
+	// from a peer trying to inflate our query state, where every extra entry
+	// costs a peerstore write and an O(n) insertion into the query peerset.
+	if maxCloserPeers := 2 * q.dht.bucketSize; len(newPeers) > maxCloserPeers {
+		newPeers = newPeers[:maxCloserPeers]
+	}
+
+	if q.maxPeersPerIPGroup != 0 {
+		newPeers = filterPeersByIPDiversity(newPeers, q.maxPeersPerIPGroup)
+	}
+
 	// process new peers
 	saw := []peer.ID{}
 	for _, next := range newPeers {
 		if next.ID == q.dht.self { // don't add self.
-			logger.Debugf("PEERS CLOSER -- worker for: %v found self", p)
 			continue
 		}
 
-		// add any other know addresses for the candidate peer.
+		// A RegisterForQueryEvents consumer may be reading next.Addrs
+		// right now: the same *peer.AddrInfo is published on
+		// routing.QueryEvent.Responses. Don't use append:
+		//   - with spare capacity, append writes into next.Addrs's
+		//     backing array, which the consumer still holds.
+		//   - writing the result back to next.Addrs races on the slice
+		//     header (three words, torn read/write).
+		// slices.Concat always allocates a fresh backing array, so our
+		// addrs don't share memory with the consumer's view.
 		curInfo := q.dht.peerstore.PeerInfo(next.ID)
-		next.Addrs = append(next.Addrs, curInfo.Addrs...)
+		addrs := slices.Concat(next.Addrs, curInfo.Addrs)
 
 		// add their addresses to the dialer's peerstore
 		//
 		// add the next peer to the query if matches the query target even if it would otherwise fail the query filter
 		// TODO: this behavior is really specific to how FindPeer works and not GetClosestPeers or any other function
 		isTarget := string(next.ID) == q.key
-		if isTarget || q.dht.queryPeerFilter(q.dht, *next) {
-			q.dht.maybeAddAddrs(next.ID, next.Addrs, pstore.TempAddrTTL)
+		if isTarget || q.dht.queryPeerFilter(q.dht, peer.AddrInfo{ID: next.ID, Addrs: addrs}) {
+			q.dht.maybeAddAddrs(next.ID, addrs, pstore.TempAddrTTL)
 			saw = append(saw, next.ID)
 		}
 	}

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ice
@@ -6,6 +6,7 @@ package ice
 import (
 	"context"
 	"net"
+	"net/netip"
 	"time"
 )
 
@@ -82,7 +83,12 @@ type Candidate interface {
 
 	Marshal() string
 
+	// transportAddressEqual checks if the transport address (IP, Port, NetworkType, TCPType) is equal to another
+	// candidate.
+	transportAddressEqual(other Candidate) bool
+
 	addr() net.Addr
+	addrPort() netip.AddrPort
 	filterForLocationTracking() bool
 	agent() *Agent
 	context() context.Context
@@ -92,4 +98,7 @@ type Candidate interface {
 	seen(outbound bool)
 	start(a *Agent, conn net.PacketConn, initializedCh <-chan struct{})
 	writeTo(raw []byte, dst Candidate) (int, error)
+	setPriority(uint32)
+
+	replaceRemoteCandidateCacheValues(oldRemote, newRemote Candidate)
 }

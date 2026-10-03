@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ice
@@ -38,21 +38,20 @@ func NewCandidateHost(config *CandidateHostConfig) (*CandidateHost, error) {
 
 	candidateHost := &CandidateHost{
 		candidateBase: candidateBase{
-			id:                    candidateID,
-			address:               config.Address,
-			candidateType:         CandidateTypeHost,
-			component:             config.Component,
-			port:                  config.Port,
-			tcpType:               config.TCPType,
-			foundationOverride:    config.Foundation,
-			priorityOverride:      config.Priority,
-			remoteCandidateCaches: map[AddrPort]Candidate{},
-			isLocationTracked:     config.IsLocationTracked,
+			id:                 candidateID,
+			address:            config.Address,
+			candidateType:      CandidateTypeHost,
+			component:          config.Component,
+			port:               config.Port,
+			tcpType:            config.TCPType,
+			foundationOverride: config.Foundation,
+			priorityOverride:   config.Priority,
+			isLocationTracked:  config.IsLocationTracked,
 		},
 		network: config.Network,
 	}
 
-	if !strings.HasSuffix(config.Address, ".local") {
+	if !strings.HasSuffix(config.Address, ".local") && !strings.HasSuffix(config.Address, ".invalid") {
 		ipAddr, err := netip.ParseAddr(config.Address)
 		if err != nil {
 			return nil, err
@@ -76,7 +75,7 @@ func (c *CandidateHost) setIPAddr(addr netip.Addr) error {
 	}
 
 	c.candidateBase.networkType = networkType
-	c.candidateBase.resolvedAddr = createAddr(networkType, addr, c.port)
+	c.candidateBase.setResolvedAddr(createAddr(networkType, addr, c.port))
 
 	return nil
 }

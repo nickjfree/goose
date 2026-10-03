@@ -149,7 +149,7 @@ func (rf *relayFinder) cleanupDisconnectedPeers(ctx context.Context) {
 
 			rf.relayMx.Lock()
 			if rf.usingRelay(evt.Peer) { // we were disconnected from a relay
-				log.Debugw("disconnected from relay", "id", evt.Peer)
+				log.Debug("disconnected from relay", "peer", evt.Peer)
 				delete(rf.relays, evt.Peer)
 				rf.notifyMaybeConnectToRelay()
 				rf.notifyMaybeNeedNewCandidates()
@@ -167,17 +167,13 @@ func (rf *relayFinder) cleanupDisconnectedPeers(ctx context.Context) {
 
 func (rf *relayFinder) background(ctx context.Context) {
 	peerSourceRateLimiter := make(chan struct{}, 1)
-	rf.refCount.Add(1)
-	go func() {
-		defer rf.refCount.Done()
+	rf.refCount.Go(func() {
 		rf.findNodes(ctx, peerSourceRateLimiter)
-	}()
+	})
 
-	rf.refCount.Add(1)
-	go func() {
-		defer rf.refCount.Done()
+	rf.refCount.Go(func() {
 		rf.handleNewCandidates(ctx)
-	}()
+	})
 
 	now := rf.conf.clock.Now()
 	bootDelayTimer := rf.conf.clock.InstantTimer(now.Add(rf.conf.bootDelay))
@@ -239,11 +235,11 @@ func (rf *relayFinder) updateAddrs() {
 	rf.circuitAddrs = rf.getCircuitAddrs()
 
 	if areSortedAddrsDifferent(rf.circuitAddrs, oldAddrs) {
-		log.Debug("relay addresses updated", rf.circuitAddrs)
+		log.Debug("relay addresses updated", "addrs", rf.circuitAddrs)
 		rf.metricsTracer.RelayAddressUpdated()
 		rf.metricsTracer.RelayAddressCount(len(rf.circuitAddrs))
 		if err := rf.emitter.Emit(event.EvtAutoRelayAddrsUpdated{RelayAddrs: slices.Clone(rf.circuitAddrs)}); err != nil {
-			log.Error("failed to emit event.EvtAutoRelayAddrs with RelayAddrs", rf.circuitAddrs, err)
+			log.Error("failed to emit event.EvtAutoRelayAddrs with RelayAddrs", "addrs", rf.circuitAddrs, "err", err)
 		}
 	}
 }
@@ -251,6 +247,9 @@ func (rf *relayFinder) updateAddrs() {
 // This function returns the p2p-circuit addrs for the host.
 // The returned addresses are of the form <relay's-addr>/p2p/<relay's-id>/p2p-circuit.
 func (rf *relayFinder) getCircuitAddrs() []ma.Multiaddr {
+	rf.relayMx.Lock()
+	defer rf.relayMx.Unlock()
+
 	raddrs := make([]ma.Multiaddr, 0, 4*len(rf.relays)+4)
 	for p := range rf.relays {
 		addrs := cleanupAddressSet(rf.host.Peerstore().Addrs(p))
@@ -339,7 +338,7 @@ func (rf *relayFinder) clearOldCandidates(now time.Time) time.Time {
 				nextTime = expiry
 			}
 		} else {
-			log.Debugw("deleting candidate due to age", "id", id)
+			log.Debug("deleting candidate due to age", "peer", id)
 			deleted = true
 			rf.removeCandidate(id)
 		}
@@ -365,7 +364,7 @@ func (rf *relayFinder) clearBackoff(now time.Time) time.Time {
 				nextTime = expiry
 			}
 		} else {
-			log.Debugw("removing backoff for node", "id", id)
+			log.Debug("removing backoff for node", "peer", id)
 			delete(rf.backoff, id)
 		}
 	}
@@ -416,17 +415,17 @@ func (rf *relayFinder) findNodes(ctx context.Context, peerSourceRateLimiter <-ch
 				peerChan = nil
 				continue
 			}
-			log.Debugw("found node", "id", pi.ID)
+			log.Debug("found node", "peer", pi.ID)
 			rf.candidateMx.Lock()
 			numCandidates := len(rf.candidates)
 			backoffStart, isOnBackoff := rf.backoff[pi.ID]
 			rf.candidateMx.Unlock()
 			if isOnBackoff {
-				log.Debugw("skipping node that we recently failed to obtain a reservation with", "id", pi.ID, "last attempt", rf.conf.clock.Since(backoffStart))
+				log.Debug("skipping node that we recently failed to obtain a reservation with", "peer", pi.ID, "last_attempt", rf.conf.clock.Since(backoffStart))
 				continue
 			}
 			if numCandidates >= rf.conf.maxCandidates {
-				log.Debugw("skipping node. Already have enough candidates", "id", pi.ID, "num", numCandidates, "max", rf.conf.maxCandidates)
+				log.Debug("skipping node. Already have enough candidates", "peer", pi.ID, "candidate_count", numCandidates, "max_candidates", rf.conf.maxCandidates)
 				continue
 			}
 			rf.refCount.Add(1)
@@ -489,7 +488,7 @@ func (rf *relayFinder) handleNewNode(ctx context.Context, pi peer.AddrInfo) (add
 	defer cancel()
 	supportsV2, err := rf.tryNode(ctx, pi)
 	if err != nil {
-		log.Debugf("node %s not accepted as a candidate: %s", pi.ID, err)
+		log.Debug("node not accepted as a candidate", "peer", pi.ID, "err", err)
 		if err == errProtocolNotSupported {
 			rf.metricsTracer.CandidateChecked(false)
 		}
@@ -502,7 +501,7 @@ func (rf *relayFinder) handleNewNode(ctx context.Context, pi peer.AddrInfo) (add
 		rf.candidateMx.Unlock()
 		return false
 	}
-	log.Debugw("node supports relay protocol", "peer", pi.ID, "supports circuit v2", supportsV2)
+	log.Debug("node supports relay protocol", "peer", pi.ID, "supports_circuit_v2", supportsV2)
 	rf.addCandidate(&candidate{
 		added:           rf.conf.clock.Now(),
 		ai:              pi,
@@ -618,12 +617,12 @@ func (rf *relayFinder) maybeConnectToRelay(ctx context.Context) {
 		}
 		rsvp, err := rf.connectToRelay(ctx, cand)
 		if err != nil {
-			log.Debugw("failed to connect to relay", "peer", id, "error", err)
+			log.Debug("failed to connect to relay", "relay_peer", id, "err", err)
 			rf.notifyMaybeNeedNewCandidates()
 			rf.metricsTracer.ReservationRequestFinished(false, err)
 			continue
 		}
-		log.Debugw("adding new relay", "id", id)
+		log.Debug("adding new relay", "relay_peer", id)
 		rf.relayMx.Lock()
 		rf.relays[id] = rsvp
 		numRelays := len(rf.relays)
@@ -660,13 +659,13 @@ func (rf *relayFinder) connectToRelay(ctx context.Context, cand *candidate) (*ci
 		}
 	}
 
-	rf.candidateMx.Lock()
-	rf.backoff[id] = rf.conf.clock.Now()
-	rf.candidateMx.Unlock()
 	var err error
 	if cand.supportsRelayV2 {
 		rsvp, err = circuitv2.Reserve(ctx, rf.host, cand.ai)
 		if err != nil {
+			rf.candidateMx.Lock()
+			rf.backoff[id] = rf.conf.clock.Now()
+			rf.candidateMx.Unlock()
 			err = fmt.Errorf("failed to reserve slot: %w", err)
 		}
 	}
@@ -704,7 +703,7 @@ func (rf *relayFinder) refreshRelayReservation(ctx context.Context, p peer.ID) e
 
 	rf.relayMx.Lock()
 	if err != nil {
-		log.Debugw("failed to refresh relay slot reservation", "relay", p, "error", err)
+		log.Debug("failed to refresh relay slot reservation", "relay_peer", p, "err", err)
 		_, exists := rf.relays[p]
 		delete(rf.relays, p)
 		// unprotect the connection
@@ -716,7 +715,7 @@ func (rf *relayFinder) refreshRelayReservation(ctx context.Context, p peer.ID) e
 		return err
 	}
 
-	log.Debugw("refreshed relay slot reservation", "relay", p)
+	log.Debug("refreshed relay slot reservation", "relay_peer", p)
 	rf.relays[p] = rsvp
 	rf.relayMx.Unlock()
 	return nil
@@ -776,11 +775,9 @@ func (rf *relayFinder) Start() error {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	rf.ctxCancel = cancel
-	rf.refCount.Add(1)
-	go func() {
-		defer rf.refCount.Done()
+	rf.refCount.Go(func() {
 		rf.background(ctx)
-	}()
+	})
 	return nil
 }
 

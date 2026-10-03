@@ -12,13 +12,11 @@ import (
 	"os"
 	"strconv"
 	"strings"
-
-	"github.com/google/gopacket/routing"
 )
 
 const netdir = "/net"
 
-func New() (routing.Router, error) {
+func New() (Router, error) {
 	rtr := &router{}
 	rtr.ifaces = make(map[int]net.Interface)
 	rtr.addrs = make(map[int]ipAddrs)
@@ -57,7 +55,7 @@ func New() (routing.Router, error) {
 	return rtr, nil
 }
 
-func parseIPRoutes() (v4, v6 routeSlice, err error) {
+func parseIPRoutes() (v4, v6 []*rtInfo, err error) {
 	buf, err := os.ReadFile(netdir + "/iproute")
 	if err != nil {
 		return nil, nil, err

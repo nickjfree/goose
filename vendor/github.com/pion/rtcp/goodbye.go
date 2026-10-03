@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package rtcp
@@ -6,6 +6,7 @@ package rtcp
 import (
 	"encoding/binary"
 	"fmt"
+	"strings"
 )
 
 // The Goodbye packet indicates that one or more sources are no longer active.
@@ -16,7 +17,7 @@ type Goodbye struct {
 	Reason string
 }
 
-// Marshal encodes the Goodbye packet in binary
+// Marshal encodes the Goodbye packet in binary.
 func (g Goodbye) Marshal() ([]byte, error) {
 	/*
 	 *        0                   1                   2                   3
@@ -51,7 +52,7 @@ func (g Goodbye) Marshal() ([]byte, error) {
 		}
 
 		reasonOffset := len(g.Sources) * ssrcLength
-		packetBody[reasonOffset] = uint8(len(reason))
+		packetBody[reasonOffset] = uint8(len(reason)) //nolint:gosec // G115
 		copy(packetBody[reasonOffset+1:], reason)
 	}
 
@@ -64,7 +65,7 @@ func (g Goodbye) Marshal() ([]byte, error) {
 	return rawPacket, nil
 }
 
-// Unmarshal decodes the Goodbye packet from binary
+// Unmarshal decodes the Goodbye packet from binary.
 func (g *Goodbye) Unmarshal(rawPacket []byte) error {
 	/*
 	 *        0                   1                   2                   3
@@ -120,17 +121,34 @@ func (g *Goodbye) Unmarshal(rawPacket []byte) error {
 	return nil
 }
 
+func appendGoodbyeSSRCs(dst []uint32, header Header, pkt []byte) ([]uint32, error) {
+	if header.Type != TypeGoodbye {
+		return dst, errWrongType
+	}
+	reasonOffset := int(headerLength + header.Count*ssrcLength)
+	if reasonOffset > len(pkt) {
+		return dst, errPacketTooShort
+	}
+	for i := 0; i < int(header.Count); i++ {
+		offset := headerLength + i*ssrcLength
+
+		dst = append(dst, binary.BigEndian.Uint32(pkt[offset:]))
+	}
+
+	return dst, nil
+}
+
 // Header returns the Header associated with this packet.
 func (g *Goodbye) Header() Header {
 	return Header{
 		Padding: false,
-		Count:   uint8(len(g.Sources)),
+		Count:   uint8(len(g.Sources)), //nolint:gosec //G115
 		Type:    TypeGoodbye,
-		Length:  uint16((g.MarshalSize() / 4) - 1),
+		Length:  uint16((g.MarshalSize() / 4) - 1), //nolint:gosec //G115
 	}
 }
 
-// MarshalSize returns the size of the packet once marshaled
+// MarshalSize returns the size of the packet once marshaled.
 func (g *Goodbye) MarshalSize() int {
 	srcsLength := len(g.Sources) * ssrcLength
 	// reason is optional
@@ -149,15 +167,17 @@ func (g *Goodbye) MarshalSize() int {
 func (g *Goodbye) DestinationSSRC() []uint32 {
 	out := make([]uint32, len(g.Sources))
 	copy(out, g.Sources)
+
 	return out
 }
 
 func (g Goodbye) String() string {
-	out := "Goodbye\n"
+	var out strings.Builder
+	out.WriteString("Goodbye\n")
 	for i, s := range g.Sources {
-		out += fmt.Sprintf("\tSource %d: %x\n", i, s)
+		fmt.Fprintf(&out, "\tSource %d: %x\n", i, s)
 	}
-	out += fmt.Sprintf("\tReason: %s\n", g.Reason)
+	fmt.Fprintf(&out, "\tReason: %s\n", g.Reason)
 
-	return out
+	return out.String()
 }

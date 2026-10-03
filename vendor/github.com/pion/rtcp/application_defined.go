@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package rtcp
@@ -38,7 +38,7 @@ func (a ApplicationDefined) Marshal() ([]byte, error) {
 	packetSize := a.MarshalSize()
 	header := Header{
 		Type:    TypeApplicationDefined,
-		Length:  uint16((packetSize / 4) - 1),
+		Length:  uint16((packetSize / 4) - 1), //nolint:gosec // G115
 		Padding: paddingSize != 0,
 		Count:   a.SubType,
 	}
@@ -88,7 +88,7 @@ func (a *ApplicationDefined) Unmarshal(rawPacket []byte) error {
 		return errPacketTooShort
 	}
 
-	if int(header.Length+1)*4 != len(rawPacket) {
+	if (int(header.Length)+1)*4 != len(rawPacket) {
 		return errAppDefinedInvalidLength
 	}
 
@@ -110,7 +110,18 @@ func (a *ApplicationDefined) Unmarshal(rawPacket []byte) error {
 	return nil
 }
 
-// MarshalSize returns the size of the packet once marshaled
+func appendApplicationDefinedSSRCs(dst []uint32, header Header, pkt []byte) ([]uint32, error) {
+	if header.Type != TypeApplicationDefined {
+		return dst, errWrongType
+	}
+	if len(pkt) < 12 {
+		return dst, errPacketTooShort
+	}
+
+	return append(dst, binary.BigEndian.Uint32(pkt[4:8])), nil
+}
+
+// MarshalSize returns the size of the packet once marshaled.
 func (a *ApplicationDefined) MarshalSize() int {
 	dataLength := len(a.Data)
 	// Calculate the padding size to be added to make the packet length a multiple of 4 bytes.
@@ -118,5 +129,6 @@ func (a *ApplicationDefined) MarshalSize() int {
 	if paddingSize == 4 {
 		paddingSize = 0
 	}
+
 	return 12 + dataLength + paddingSize
 }

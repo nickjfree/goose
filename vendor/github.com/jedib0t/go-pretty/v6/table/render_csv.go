@@ -10,14 +10,15 @@ import (
 //
 //	#,First Name,Last Name,Salary,
 //	1,Arya,Stark,3000,
-//	20,Jon,Snow,2000,"You know nothing\, Jon Snow!"
+//	20,Jon,Snow,2000,"You know nothing, Jon Snow!"
 //	300,Tyrion,Lannister,5000,
 //	,,Total,10000,
 func (t *Table) RenderCSV() string {
-	t.initForRender()
+	t.initForRender(renderModeCSV)
 
 	var out strings.Builder
 	if t.numColumns > 0 {
+		out.Grow(t.estimatedRenderLength())
 		if t.title != "" {
 			out.WriteString(t.title)
 		}
@@ -35,12 +36,21 @@ func (t *Table) RenderCSV() string {
 	return t.render(&out)
 }
 
-func (t *Table) csvFixCommas(str string) string {
-	return strings.Replace(str, ",", "\\,", -1)
+// csvEscapeDoubleQuotes escapes double-quotes inside a quoted field by
+// doubling them, as mandated by RFC 4180.
+func (t *Table) csvEscapeDoubleQuotes(str string) string {
+	return strings.ReplaceAll(str, "\"", "\"\"")
 }
 
-func (t *Table) csvFixDoubleQuotes(str string) string {
-	return strings.Replace(str, "\"", "\\\"", -1)
+// csvProtectField neutralizes fields that spreadsheet applications would
+// interpret as formulas (=, +, -, @, tab or CR prefix) by prefixing them with
+// a single-quote.
+func (t *Table) csvProtectField(str string) string {
+	switch str[0] {
+	case '=', '+', '-', '@', '\t', '\r':
+		return "'" + str
+	}
+	return str
 }
 
 func (t *Table) csvRenderRow(out *strings.Builder, row rowStr, hint renderHint) {
@@ -54,16 +64,19 @@ func (t *Table) csvRenderRow(out *strings.Builder, row rowStr, hint renderHint) 
 		// auto-index column
 		if colIdx == 0 && t.autoIndex {
 			if hint.isRegularRow() {
-				out.WriteString(fmt.Sprint(hint.rowNumber))
+				fmt.Fprint(out, hint.rowNumber)
 			}
 			out.WriteRune(',')
 		}
 		if colIdx > 0 {
 			out.WriteRune(',')
 		}
+		if t.style.CSV.FieldProtection && colStr != "" {
+			colStr = t.csvProtectField(colStr)
+		}
 		if strings.ContainsAny(colStr, "\",\n") {
 			out.WriteRune('"')
-			out.WriteString(t.csvFixCommas(t.csvFixDoubleQuotes(colStr)))
+			out.WriteString(t.csvEscapeDoubleQuotes(colStr))
 			out.WriteRune('"')
 		} else if utf8.RuneCountInString(colStr) > 0 {
 			out.WriteString(colStr)

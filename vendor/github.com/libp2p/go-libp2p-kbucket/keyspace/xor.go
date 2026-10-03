@@ -5,15 +5,16 @@ import (
 	"math/big"
 	"math/bits"
 
-	u "github.com/ipfs/boxo/util"
 	sha256 "github.com/minio/sha256-simd"
 )
 
 // XORKeySpace is a KeySpace which:
 // - normalizes identifiers using a cryptographic hash (sha256)
 // - measures distance by XORing keys together
-var XORKeySpace = &xorKeySpace{}
-var _ KeySpace = XORKeySpace // ensure it conforms
+var (
+	XORKeySpace          = &xorKeySpace{}
+	_           KeySpace = XORKeySpace // ensure it conforms
+)
 
 type xorKeySpace struct{}
 
@@ -26,6 +27,13 @@ func (s *xorKeySpace) Key(id []byte) Key {
 		Original: id,
 		Bytes:    key,
 	}
+
+}
+
+// Compare returns an integer comparing two keys in this key space. The result
+// will be 0 if k1 == k2, -1 if k1 < k2, and +1 if k1 > k2.
+func (s *xorKeySpace) Compare(k1, k2 Key) int {
+	return bytes.Compare(k1.Bytes, k2.Bytes)
 }
 
 // Equal returns whether keys are equal in this key space
@@ -36,16 +44,11 @@ func (s *xorKeySpace) Equal(k1, k2 Key) bool {
 // Distance returns the distance metric in this key space
 func (s *xorKeySpace) Distance(k1, k2 Key) *big.Int {
 	// XOR the keys
-	k3 := u.XOR(k1.Bytes, k2.Bytes)
+	k3 := Xor(k1.Bytes, k2.Bytes)
 
 	// interpret it as an integer
 	dist := big.NewInt(0).SetBytes(k3)
 	return dist
-}
-
-// Less returns whether the first key is smaller than the second.
-func (s *xorKeySpace) Less(k1, k2 Key) bool {
-	return bytes.Compare(k1.Bytes, k2.Bytes) < 0
 }
 
 // ZeroPrefixLen returns the number of consecutive zeroes in a byte slice.
@@ -56,4 +59,12 @@ func ZeroPrefixLen(id []byte) int {
 		}
 	}
 	return len(id) * 8
+}
+
+func Xor(a, b []byte) []byte {
+	out := make([]byte, len(a))
+	for i := range out {
+		out[i] = a[i] ^ b[i]
+	}
+	return out
 }

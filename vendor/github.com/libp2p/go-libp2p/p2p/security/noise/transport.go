@@ -3,12 +3,13 @@ package noise
 import (
 	"context"
 	"net"
+	"slices"
 
-	"github.com/libp2p/go-libp2p/core/canonicallog"
 	"github.com/libp2p/go-libp2p/core/crypto"
 	"github.com/libp2p/go-libp2p/core/peer"
 	"github.com/libp2p/go-libp2p/core/protocol"
 	"github.com/libp2p/go-libp2p/core/sec"
+	"github.com/libp2p/go-libp2p/p2p/canonicallog"
 	tptu "github.com/libp2p/go-libp2p/p2p/net/upgrader"
 	"github.com/libp2p/go-libp2p/p2p/security/noise/pb"
 
@@ -89,10 +90,8 @@ func (t *Transport) ID() protocol.ID {
 
 func matchMuxers(initiatorMuxers, responderMuxers []protocol.ID) protocol.ID {
 	for _, initMuxer := range initiatorMuxers {
-		for _, respMuxer := range responderMuxers {
-			if initMuxer == respMuxer {
-				return initMuxer
-			}
+		if slices.Contains(responderMuxers, initMuxer) {
+			return initMuxer
 		}
 	}
 	return ""

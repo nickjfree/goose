@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -18,8 +19,10 @@ import (
 
 var log = logging.Logger("table")
 
-var ErrPeerRejectedHighLatency = errors.New("peer rejected; latency too high")
-var ErrPeerRejectedNoCapacity = errors.New("peer rejected; insufficient capacity")
+var (
+	ErrPeerRejectedHighLatency = errors.New("peer rejected; latency too high")
+	ErrPeerRejectedNoCapacity  = errors.New("peer rejected; insufficient capacity")
+)
 
 // RoutingTable defines the routing table.
 type RoutingTable struct {
@@ -61,7 +64,8 @@ type RoutingTable struct {
 
 // NewRoutingTable creates a new routing table with a given bucketsize, local ID, and latency tolerance.
 func NewRoutingTable(bucketsize int, localID ID, latency time.Duration, m peerstore.Metrics, usefulnessGracePeriod time.Duration,
-	df *peerdiversity.Filter) (*RoutingTable, error) {
+	df *peerdiversity.Filter,
+) (*RoutingTable, error) {
 	rt := &RoutingTable{
 		buckets:    []*bucket{newBucket()},
 		bucketsize: bucketsize,
@@ -565,9 +569,9 @@ func (rt *RoutingTable) maxCommonPrefix() uint {
 	rt.tabLock.RLock()
 	defer rt.tabLock.RUnlock()
 
-	for i := len(rt.buckets) - 1; i >= 0; i-- {
-		if rt.buckets[i].len() > 0 {
-			return rt.buckets[i].maxCommonPrefix(rt.local)
+	for _, b := range slices.Backward(rt.buckets) {
+		if b.len() > 0 {
+			return b.maxCommonPrefix(rt.local)
 		}
 	}
 	return 0

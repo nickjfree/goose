@@ -4,10 +4,39 @@ import (
 	"context"
 	"net"
 	"strings"
+	"time"
 
-	"github.com/miekg/dns"
 	ma "github.com/multiformats/go-multiaddr"
 )
+
+// isFqdn checks if s is a fully qualified domain name.
+// A domain is fully qualified if it ends with an unescaped dot.
+// Escaped dots (preceded by an odd number of backslashes) do not count
+// as terminators.
+func isFqdn(s string) bool {
+	if s == "" || s[len(s)-1] != '.' {
+		return false
+	}
+	s = s[:len(s)-1]
+	if s == "" || s[len(s)-1] != '\\' {
+		return true
+	}
+	// Check if the dot is escaped by counting backslashes
+	i := strings.LastIndexFunc(s, func(r rune) bool {
+		return r != '\\'
+	})
+	return (len(s)-i)%2 != 0
+}
+
+// fqdn returns the fully qualified domain name of s by appending a trailing
+// dot if one is not already present. If s is already fully qualified, it is
+// returned unchanged.
+func fqdn(s string) string {
+	if isFqdn(s) {
+		return s
+	}
+	return s + "."
+}
 
 var (
 	dnsaddrProtocol = ma.ProtocolWithCode(ma.P_DNSADDR)
@@ -75,14 +104,14 @@ func WithDomainResolver(domain string, rslv BasicResolver) Option {
 		if r.custom == nil {
 			r.custom = make(map[string]BasicResolver)
 		}
-		fqdn := dns.Fqdn(domain)
+		fqdn := fqdn(domain)
 		r.custom[fqdn] = rslv
 		return nil
 	}
 }
 
 func (r *Resolver) getResolver(domain string) BasicResolver {
-	fqdn := dns.Fqdn(domain)
+	fqdn := fqdn(domain)
 
 	// we match left-to-right, with more specific resolvers superseding generic ones.
 	// So for a domain a.b.c, we will try a.b,c, b.c, c, and fallback to the default if
@@ -283,4 +312,30 @@ func (r *Resolver) LookupIPAddr(ctx context.Context, domain string) ([]net.IPAdd
 
 func (r *Resolver) LookupTXT(ctx context.Context, txt string) ([]string, error) {
 	return r.getResolver(txt).LookupTXT(ctx, txt)
+}
+
+// TXTWithTTLResolver is an optional interface a [BasicResolver] may implement to
+// report the TTL of a TXT record set alongside its values. Resolvers backed by
+// a protocol that carries TTLs (such as DNS-over-HTTPS) can implement it; the
+// default OS resolver cannot.
+type TXTWithTTLResolver interface {
+	LookupTXTWithTTL(ctx context.Context, name string) (txt []string, ttl time.Duration, err error)
+}
+
+// a Resolver routes TXT-with-TTL lookups, so it satisfies the interface too
+var _ TXTWithTTLResolver = (*Resolver)(nil)
+
+// LookupTXTWithTTL resolves the TXT records for a domain and, when the resolver
+// the lookup routes to (a matched per-domain resolver, or the default one
+// otherwise) implements [TXTWithTTLResolver], also returns their TTL. Resolvers
+// that cannot report a TTL (such as the default OS resolver) yield a TTL of 0,
+// meaning unknown.
+func (r *Resolver) LookupTXTWithTTL(ctx context.Context, domain string) ([]string, time.Duration, error) {
+	rslv := r.getResolver(domain)
+	if ttlRslv, ok := rslv.(TXTWithTTLResolver); ok {
+		return ttlRslv.LookupTXTWithTTL(ctx, domain)
+	}
+
+	txt, err := rslv.LookupTXT(ctx, domain)
+	return txt, 0, err
 }

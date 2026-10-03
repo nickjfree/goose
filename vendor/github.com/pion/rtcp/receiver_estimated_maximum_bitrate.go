@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package rtcp
@@ -42,7 +42,7 @@ func (p ReceiverEstimatedMaximumBitrate) Marshal() (buf []byte, err error) {
 	return buf, nil
 }
 
-// MarshalSize returns the size of the packet once marshaled
+// MarshalSize returns the size of the packet once marshaled.
 func (p ReceiverEstimatedMaximumBitrate) MarshalSize() int {
 	return 20 + 4*len(p.SSRCs)
 }
@@ -78,7 +78,7 @@ func (p ReceiverEstimatedMaximumBitrate) MarshalTo(buf []byte) (n int, err error
 	buf[1] = 206
 
 	// Length of this packet in 32-bit words minus one.
-	length := uint16((p.MarshalSize() / 4) - 1)
+	length := uint16((p.MarshalSize() / 4) - 1) //nolint:gosec // G115
 	binary.BigEndian.PutUint16(buf[2:4], length)
 
 	binary.BigEndian.PutUint32(buf[4:8], p.SenderSSRC)
@@ -91,7 +91,11 @@ func (p ReceiverEstimatedMaximumBitrate) MarshalTo(buf []byte) (n int, err error
 	buf[15] = 'B'
 
 	// Write the length of the ssrcs to follow at the end
-	buf[16] = byte(len(p.SSRCs))
+	if len(p.SSRCs) > math.MaxUint8 {
+		return 0, errTooManySSRCs
+	}
+
+	buf[16] = byte(len(p.SSRCs)) //nolint:gosec // length validated above
 
 	exp := 0
 	bitrate := p.Bitrate
@@ -118,9 +122,9 @@ func (p ReceiverEstimatedMaximumBitrate) MarshalTo(buf []byte) (n int, err error
 	// We can't quite use the binary package because
 	// a) it's a uint24 and b) the exponent is only 6-bits
 	// Just trust me; this is big-endian encoding.
-	buf[17] = byte(exp<<2) | byte(mantissa>>16)
-	buf[18] = byte(mantissa >> 8)
-	buf[19] = byte(mantissa)
+	buf[17] = byte(exp<<2) | byte(mantissa>>16) //nolint: gosec //  mantissa is limited to 18 bits
+	buf[18] = byte(mantissa >> 8)               //nolint: gosec //  mantissa is limited to 18 bits
+	buf[19] = byte(mantissa)                    // nolint: gosec //  mantissa is limited to 18 bits
 
 	// Write the SSRCs at the very end.
 	n = 20
@@ -133,6 +137,8 @@ func (p ReceiverEstimatedMaximumBitrate) MarshalTo(buf []byte) (n int, err error
 }
 
 // Unmarshal reads a REMB packet from the given byte slice.
+//
+//nolint:cyclop
 func (p *ReceiverEstimatedMaximumBitrate) Unmarshal(buf []byte) (err error) {
 	const mantissamax = 0x7FFFFF
 	/*
@@ -250,19 +256,46 @@ func (p *ReceiverEstimatedMaximumBitrate) Unmarshal(buf []byte) (err error) {
 	return nil
 }
 
+func appendREMBSSRCs(dst []uint32, header Header, pkt []byte) ([]uint32, error) {
+	if header.Type != TypePayloadSpecificFeedback || header.Count != FormatREMB {
+		return dst, errWrongType
+	}
+	if len(pkt) < 20 {
+		return dst, errPacketTooShort
+	}
+
+	// The unique identifier is the discriminator: FMT 15 is generic
+	// application layer feedback, of which REMB is only one kind.
+	if !bytes.Equal(pkt[12:16], []byte{'R', 'E', 'M', 'B'}) {
+		return dst, errMissingREMBidentifier
+	}
+
+	// The byte after the 'REMB' unique identifier is the number of SSRC
+	// entries at the end.
+	num := int(pkt[16])
+	if len(pkt) != 20+4*num {
+		return dst, errSSRCNumAndLengthMismatch
+	}
+	for n := 20; n < len(pkt); n += 4 {
+		dst = append(dst, binary.BigEndian.Uint32(pkt[n:n+4]))
+	}
+
+	return dst, nil
+}
+
 // Header returns the Header associated with this packet.
 func (p *ReceiverEstimatedMaximumBitrate) Header() Header {
 	return Header{
 		Count:  FormatREMB,
 		Type:   TypePayloadSpecificFeedback,
-		Length: uint16((p.MarshalSize() / 4) - 1),
+		Length: uint16((p.MarshalSize() / 4) - 1), //nolint:gosec // G115
 	}
 }
 
 // String prints the REMB packet in a human-readable format.
 func (p *ReceiverEstimatedMaximumBitrate) String() string {
 	// Keep a table of powers to units for fast conversion.
-	bitUnits := []string{"b", "Kb", "Mb", "Gb", "Tb", "Pb", "Eb"}
+	bitUnits := []string{"b", "Kb", "Mb", "Gb", "Tb", "Pb", "Eb", "Zb"}
 
 	// Do some unit conversions because b/s is far too difficult to read.
 	bitrate := p.Bitrate
@@ -274,7 +307,7 @@ func (p *ReceiverEstimatedMaximumBitrate) String() string {
 		powers++
 	}
 
-	unit := bitUnits[powers]
+	unit := bitUnits[powers] //nolint:gosec // powers is bounded by loop condition
 
 	return fmt.Sprintf("ReceiverEstimatedMaximumBitrate %x %.2f %s/s", p.SenderSSRC, bitrate, unit)
 }

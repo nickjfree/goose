@@ -1,6 +1,7 @@
 package quic
 
 import (
+	"io"
 	"log"
 	"net"
 	"os"
@@ -9,13 +10,39 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/quic-go/quic-go/internal/monotime"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/internal/utils"
 )
 
+type connCapabilities struct {
+	// This connection has the Don't Fragment (DF) bit set.
+	// This means it makes to run DPLPMTUD.
+	DF bool
+	// GSO (Generic Segmentation Offload) supported
+	GSO bool
+	// ECN (Explicit Congestion Notifications) supported
+	ECN bool
+}
+
+// rawConn is a connection that allow reading of a receivedPackeh.
+type rawConn interface {
+	ReadPacket() (receivedPacket, error)
+	// WritePacket writes a packet on the wire.
+	// gsoSize is the size of a single packet, or 0 to disable GSO.
+	// It is invalid to set gsoSize if capabilities.GSO is not set.
+	WritePacket(b []byte, addr net.Addr, packetInfoOOB []byte, gsoSize uint16, ecn protocol.ECN) (int, error)
+	LocalAddr() net.Addr
+	SetReadDeadline(time.Time) error
+	io.Closer
+
+	capabilities() connCapabilities
+}
+
 // OOBCapablePacketConn is a connection that allows the reading of ECN bits from the IP header.
-// If the PacketConn passed to Dial or Listen satisfies this interface, quic-go will use it.
-// In this case, ReadMsgUDP() will be used instead of ReadFrom() to read packets.
+// If the PacketConn passed to the [Transport] satisfies this interface, quic-go will use it.
+// In this case, packets will be read in batches, and [OOBCapablePacketConn.WriteMsgUDP]
+// will be used instead of [net.PacketConn.WriteTo] to write packets.
 type OOBCapablePacketConn interface {
 	net.PacketConn
 	SyscallConn() (syscall.RawConn, error)
@@ -92,13 +119,13 @@ func (c *basicConn) ReadPacket() (receivedPacket, error) {
 	// The packet size should not exceed protocol.MaxPacketBufferSize bytes
 	// If it does, we only read a truncated packet, which will then end up undecryptable
 	buffer.Data = buffer.Data[:protocol.MaxPacketBufferSize]
-	n, addr, err := c.PacketConn.ReadFrom(buffer.Data)
+	n, addr, err := c.ReadFrom(buffer.Data)
 	if err != nil {
 		return receivedPacket{}, err
 	}
 	return receivedPacket{
 		remoteAddr: addr,
-		rcvTime:    time.Now(),
+		rcvTime:    monotime.Now(),
 		data:       buffer.Data[:n],
 		buffer:     buffer,
 	}, nil
@@ -111,7 +138,7 @@ func (c *basicConn) WritePacket(b []byte, addr net.Addr, _ []byte, gsoSize uint1
 	if ecn != protocol.ECNUnsupported {
 		panic("cannot use ECN with a basicConn")
 	}
-	return c.PacketConn.WriteTo(b, addr)
+	return c.WriteTo(b, addr)
 }
 
 func (c *basicConn) capabilities() connCapabilities { return connCapabilities{DF: c.supportsDF} }

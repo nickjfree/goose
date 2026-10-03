@@ -6,11 +6,12 @@ import (
 )
 
 func (t *Table) RenderTSV() string {
-	t.initForRender()
+	t.initForRender(renderModeTSV)
 
 	var out strings.Builder
 
 	if t.numColumns > 0 {
+		out.Grow(t.estimatedRenderLength())
 		if t.title != "" {
 			out.WriteString(t.title)
 		}
@@ -40,7 +41,7 @@ func (t *Table) tsvRenderRow(out *strings.Builder, row rowStr, hint renderHint) 
 	for idx, col := range row {
 		if idx == 0 && t.autoIndex {
 			if hint.isRegularRow() {
-				out.WriteString(fmt.Sprint(hint.rowNumber))
+				fmt.Fprint(out, hint.rowNumber)
 			}
 			out.WriteRune('\t')
 		}
@@ -50,7 +51,8 @@ func (t *Table) tsvRenderRow(out *strings.Builder, row rowStr, hint renderHint) 
 		}
 
 		if strings.ContainsAny(col, "\t\n\"") || strings.Contains(col, "    ") {
-			out.WriteString(fmt.Sprintf("\"%s\"", t.tsvFixDoubleQuotes(col)))
+			col = strings.ReplaceAll(col, "\"", "\"\"") // fix double-quotes
+			fmt.Fprintf(out, "\"%s\"", col)
 		} else {
 			out.WriteString(col)
 		}
@@ -59,10 +61,6 @@ func (t *Table) tsvRenderRow(out *strings.Builder, row rowStr, hint renderHint) 
 	for colIdx := len(row); colIdx < t.numColumns; colIdx++ {
 		out.WriteRune('\t')
 	}
-}
-
-func (t *Table) tsvFixDoubleQuotes(str string) string {
-	return strings.Replace(str, "\"", "\"\"", -1)
 }
 
 func (t *Table) tsvRenderRows(out *strings.Builder, rows []rowStr, hint renderHint) {

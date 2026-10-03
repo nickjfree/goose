@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 // Package media provides media writer and filters
@@ -17,7 +17,7 @@ type Sample struct {
 	Duration           time.Duration
 	PacketTimestamp    uint32
 	PrevDroppedPackets uint16
-	Metadata           interface{}
+	Metadata           any
 
 	// RTP headers of RTP packets forming this Sample. (Optional)
 	// Useful for accessing RTP extensions associated to the Sample.

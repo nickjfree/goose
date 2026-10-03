@@ -1,30 +1,37 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build !js
-// +build !js
 
 package webrtc
 
 import (
 	"fmt"
+	"strings"
 	"sync"
 	"sync/atomic"
 
 	"github.com/pion/rtp"
+	"github.com/pion/sdp/v3"
 )
 
 // RTPTransceiver represents a combination of an RTPSender and an RTPReceiver that share a common mid.
 type RTPTransceiver struct {
-	mid              atomic.Value // string
-	sender           atomic.Value // *RTPSender
-	receiver         atomic.Value // *RTPReceiver
-	direction        atomic.Value // RTPTransceiverDirection
-	currentDirection atomic.Value // RTPTransceiverDirection
+	mid                    atomic.Value // string
+	sender                 atomic.Value // *RTPSender
+	receiver               atomic.Value // *RTPReceiver
+	direction              atomic.Value // RTPTransceiverDirection
+	currentDirection       atomic.Value // RTPTransceiverDirection
+	currentRemoteDirection atomic.Value // RTPTransceiverDirection
 
 	codecs []RTPCodecParameters // User provided codecs via SetCodecPreferences
 
 	kind RTPCodecType
+
+	// rtpHeaderEncryptionNegotiated tracks whether Cryptex was present in the SDP that most
+	// recently negotiated this transceiver's mid. It stays false until this transceiver has
+	// participated in a completed offer/answer exchange.
+	rtpHeaderEncryptionNegotiated atomic.Bool
 
 	api *API
 	mu  sync.RWMutex
@@ -60,19 +67,19 @@ func (t *RTPTransceiver) SetCodecPreferences(codecs []RTPCodecParameters) error 
 		}
 	}
 
-	t.codecs = codecs
+	t.codecs = filterUnattachedRTX(codecs)
 
 	return nil
 }
 
-// Codecs returns list of supported codecs.
+// getCodecs returns list of supported codecs.
 func (t *RTPTransceiver) getCodecs() []RTPCodecParameters {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 
 	mediaEngineCodecs := t.api.mediaEngine.getCodecsByKind(t.kind)
 	if len(t.codecs) == 0 {
-		return mediaEngineCodecs
+		return filterUnattachedRTX(mediaEngineCodecs)
 	}
 
 	filteredCodecs := []RTPCodecParameters{}
@@ -86,7 +93,117 @@ func (t *RTPTransceiver) getCodecs() []RTPCodecParameters {
 		}
 	}
 
-	return filteredCodecs
+	return filterUnattachedRTX(filteredCodecs)
+}
+
+// match codecs from remote description, used when remote is offerer and creating a transceiver
+// from remote description with the aim of keeping order of codecs in remote description.
+func (t *RTPTransceiver) setCodecPreferencesFromRemoteDescription(media *sdp.MediaDescription) { //nolint:cyclop
+	remoteCodecs, err := codecsFromMediaDescription(media)
+	if err != nil {
+		return
+	}
+	offeredPayloads := make(map[PayloadType]bool, len(remoteCodecs))
+	for _, codec := range remoteCodecs {
+		offeredPayloads[codec.PayloadType] = true
+	}
+
+	// make a copy as this slice is modified
+	leftCodecs := append([]RTPCodecParameters{}, t.api.mediaEngine.getCodecsByKind(t.kind)...)
+
+	// find codec matches between what is in remote description and
+	// the transceivers codecs and use payload type registered to
+	// media engine.
+	payloadMapping := make(map[PayloadType]PayloadType) // for RTX re-mapping later
+	filterByMatchType := func(matchFilter codecMatchType) []RTPCodecParameters {
+		filteredCodecs := []RTPCodecParameters{}
+		for remoteCodecIdx := len(remoteCodecs) - 1; remoteCodecIdx >= 0; remoteCodecIdx-- {
+			remoteCodec := remoteCodecs[remoteCodecIdx]
+			if strings.EqualFold(remoteCodec.RTPCodecCapability.MimeType, MimeTypeRTX) {
+				continue
+			}
+
+			matchCodec, matchType := matchCodecWithPayloadIdentity(
+				remoteCodec,
+				leftCodecs,
+				offeredPayloads,
+			)
+			if matchType == matchFilter {
+				payloadMapping[remoteCodec.PayloadType] = matchCodec.PayloadType
+
+				remoteCodec.PayloadType = matchCodec.PayloadType
+				filteredCodecs = append([]RTPCodecParameters{remoteCodec}, filteredCodecs...)
+
+				// removed matched codec for next round
+				remoteCodecs = append(remoteCodecs[:remoteCodecIdx], remoteCodecs[remoteCodecIdx+1:]...)
+
+				// Remove the codec we selected, not a different equivalent format.
+				for leftCodecIdx, codec := range leftCodecs {
+					if codec.PayloadType == matchCodec.PayloadType {
+						leftCodecs = append(leftCodecs[:leftCodecIdx], leftCodecs[leftCodecIdx+1:]...)
+
+						break
+					}
+				}
+			}
+		}
+
+		return filteredCodecs
+	}
+
+	filteredCodecs := filterByMatchType(codecMatchExact)
+	filteredCodecs = append(filteredCodecs, filterByMatchType(codecMatchPartial)...)
+
+	// find RTX associations and add those
+	for remotePayloadType, mediaEnginePayloadType := range payloadMapping {
+		remoteRTX := findRTXPayloadType(remotePayloadType, remoteCodecs)
+		if remoteRTX == PayloadType(0) {
+			continue
+		}
+
+		mediaEngineRTX := findRTXPayloadType(mediaEnginePayloadType, leftCodecs)
+		if mediaEngineRTX == PayloadType(0) {
+			continue
+		}
+
+		for _, rtxCodec := range leftCodecs {
+			if rtxCodec.PayloadType == mediaEngineRTX {
+				filteredCodecs = append(filteredCodecs, rtxCodec)
+
+				break
+			}
+		}
+	}
+	_ = t.SetCodecPreferences(filteredCodecs)
+}
+
+// When equivalent payloads are offered together (for example H265 levels),
+// preserve their identities. If the canonical payload is absent from this media
+// section, retain the existing remapping to codecs negotiated by earlier sections.
+func matchCodecWithPayloadIdentity(
+	remoteCodec RTPCodecParameters,
+	localCodecs []RTPCodecParameters,
+	offeredPayloads map[PayloadType]bool,
+) (RTPCodecParameters, codecMatchType) {
+	matchCodec, matchType := codecParametersFuzzySearch(remoteCodec, localCodecs)
+	if matchType != codecMatchExact || matchCodec.PayloadType == remoteCodec.PayloadType ||
+		!offeredPayloads[matchCodec.PayloadType] {
+		return matchCodec, matchType
+	}
+
+	for _, codec := range localCodecs {
+		if codec.PayloadType != remoteCodec.PayloadType {
+			continue
+		}
+		_, identityMatch := codecParametersFuzzySearch(remoteCodec, []RTPCodecParameters{codec})
+		if identityMatch == codecMatchExact {
+			return codec, codecMatchExact
+		}
+
+		break
+	}
+
+	return matchCodec, matchType
 }
 
 // Sender returns the RTPTransceiver's RTPSender if it has one.
@@ -159,6 +276,37 @@ func (t *RTPTransceiver) Direction() RTPTransceiverDirection {
 	return RTPTransceiverDirection(0)
 }
 
+// RTPHeaderEncryptionNegotiated reports if RFC 9335 RTP Header Extension Encryption ("Cryptex")
+// has been negotiated and is enabled for this transceiver. It returns false until this transceiver
+// has participated in a completed offer/answer exchange, even if Cryptex is active on other
+// transceivers sharing the same transport.
+func (t *RTPTransceiver) RTPHeaderEncryptionNegotiated() bool {
+	if !t.rtpHeaderEncryptionNegotiated.Load() {
+		return false
+	}
+
+	var dtlsTransport *DTLSTransport
+	if sender := t.Sender(); sender != nil {
+		dtlsTransport = sender.Transport()
+	}
+	if dtlsTransport == nil {
+		if receiver := t.Receiver(); receiver != nil {
+			dtlsTransport = receiver.Transport()
+		}
+	}
+	if dtlsTransport == nil {
+		return false
+	}
+
+	return dtlsTransport.rtpHeaderEncryptionNegotiated()
+}
+
+// setRTPHeaderEncryptionNegotiated records whether Cryptex was present in the SDP that most
+// recently negotiated this transceiver's mid.
+func (t *RTPTransceiver) setRTPHeaderEncryptionNegotiated(negotiated bool) {
+	t.rtpHeaderEncryptionNegotiated.Store(negotiated)
+}
+
 // Stop irreversibly stops the RTPTransceiver.
 func (t *RTPTransceiver) Stop() error {
 	if sender := t.Sender(); sender != nil {
@@ -206,6 +354,18 @@ func (t *RTPTransceiver) getCurrentDirection() RTPTransceiverDirection {
 	return RTPTransceiverDirectionUnknown
 }
 
+func (t *RTPTransceiver) setCurrentRemoteDirection(d RTPTransceiverDirection) {
+	t.currentRemoteDirection.Store(d)
+}
+
+func (t *RTPTransceiver) getCurrentRemoteDirection() RTPTransceiverDirection {
+	if v, ok := t.currentRemoteDirection.Load().(RTPTransceiverDirection); ok {
+		return v
+	}
+
+	return RTPTransceiverDirectionUnknown
+}
+
 func (t *RTPTransceiver) setSendingTrack(track TrackLocal) error { //nolint:cyclop
 	if err := t.Sender().ReplaceTrack(track); err != nil {
 		return err
@@ -236,6 +396,37 @@ func (t *RTPTransceiver) setSendingTrack(track TrackLocal) error { //nolint:cycl
 	return nil
 }
 
+func (t *RTPTransceiver) isSendAllowed(kind RTPCodecType) bool {
+	if t.kind != kind || t.Sender() != nil {
+		return false
+	}
+
+	// According to https://www.w3.org/TR/webrtc/#dom-rtcpeerconnection-addtrack, if the
+	// transceiver can be reused only if its currentDirection was never sendrecv or sendonly.
+	// But that will cause sdp to inflate. So we only check currentDirection's current value,
+	// that's worked for all browsers.
+	currentDirection := t.getCurrentDirection()
+	if currentDirection == RTPTransceiverDirectionSendrecv ||
+		currentDirection == RTPTransceiverDirectionSendonly {
+		return false
+	}
+
+	// `currentRemoteDirection` should be checked before using the transceiver for send.
+	// Remote directions could be
+	//   - `sendrecv` or `recvonly` - can send, remote direction will transition from
+	//     `sendrecv` -> `recvonly` if a remote track was removed.
+	//   - `sendonly` or `inactive` - cannot send, remote direction will transitions from
+	//     `sendonly` -> `inactive` if a remote track was removed.
+	//   - `unknown` - can send - we are the offering side and remote direction is unknown
+	currentRemoteDirection := t.getCurrentRemoteDirection()
+	if currentRemoteDirection == RTPTransceiverDirectionSendonly ||
+		currentRemoteDirection == RTPTransceiverDirectionInactive {
+		return false
+	}
+
+	return true
+}
+
 func findByMid(mid string, localTransceivers []*RTPTransceiver) (*RTPTransceiver, []*RTPTransceiver) {
 	for i, t := range localTransceivers {
 		if t.Mid() == mid {
@@ -263,7 +454,7 @@ func satisfyTypeAndDirection(
 				RTPTransceiverDirectionSendonly,
 			}
 		case RTPTransceiverDirectionSendonly:
-			return []RTPTransceiverDirection{RTPTransceiverDirectionRecvonly, RTPTransceiverDirectionSendrecv}
+			return []RTPTransceiverDirection{RTPTransceiverDirectionRecvonly}
 		case RTPTransceiverDirectionRecvonly:
 			return []RTPTransceiverDirection{RTPTransceiverDirectionSendonly, RTPTransceiverDirectionSendrecv}
 		default:
@@ -290,33 +481,29 @@ func handleUnknownRTPPacket(
 	midExtensionID,
 	streamIDExtensionID,
 	repairStreamIDExtensionID uint8,
-	mid, rid, rsid *string,
-) (payloadType PayloadType, paddingOnly bool, err error) {
+) (mid, rid, rsid string, paddingOnly bool, err error) {
 	rp := &rtp.Packet{}
 	if err = rp.Unmarshal(buf); err != nil {
-		return 0, false, err
+		return mid, rid, rsid, false, err
 	}
 
-	if rp.Padding && len(rp.Payload) == 0 {
-		paddingOnly = true
-	}
+	isPaddingOnlyPacket := rp.Padding && len(rp.Payload) == 0
 
 	if !rp.Header.Extension {
-		return payloadType, paddingOnly, nil
+		return mid, rid, rsid, isPaddingOnlyPacket, nil
 	}
 
-	payloadType = PayloadType(rp.PayloadType)
 	if payload := rp.GetExtension(midExtensionID); payload != nil {
-		*mid = string(payload)
+		mid = string(payload)
 	}
 
 	if payload := rp.GetExtension(streamIDExtensionID); payload != nil {
-		*rid = string(payload)
+		rid = string(payload)
 	}
 
 	if payload := rp.GetExtension(repairStreamIDExtensionID); payload != nil {
-		*rsid = string(payload)
+		rsid = string(payload)
 	}
 
-	return payloadType, paddingOnly, nil
+	return mid, rid, rsid, isPaddingOnlyPacket, nil
 }

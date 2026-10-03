@@ -12,13 +12,13 @@ import (
 	"strconv"
 	"sync"
 	"syscall"
-	"time"
 	"unsafe"
 
 	"golang.org/x/net/ipv4"
 	"golang.org/x/net/ipv6"
 	"golang.org/x/sys/unix"
 
+	"github.com/quic-go/quic-go/internal/monotime"
 	"github.com/quic-go/quic-go/internal/protocol"
 	"github.com/quic-go/quic-go/internal/utils"
 )
@@ -35,28 +35,6 @@ var _ ipv4.Message = ipv6.Message{}
 
 type batchConn interface {
 	ReadBatch(ms []ipv4.Message, flags int) (int, error)
-}
-
-func inspectReadBuffer(c syscall.RawConn) (int, error) {
-	var size int
-	var serr error
-	if err := c.Control(func(fd uintptr) {
-		size, serr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_RCVBUF)
-	}); err != nil {
-		return 0, err
-	}
-	return size, serr
-}
-
-func inspectWriteBuffer(c syscall.RawConn) (int, error) {
-	var size int
-	var serr error
-	if err := c.Control(func(fd uintptr) {
-		size, serr = unix.GetsockoptInt(int(fd), unix.SOL_SOCKET, unix.SO_SNDBUF)
-	}); err != nil {
-		return 0, err
-	}
-	return size, serr
 }
 
 func isECNDisabledUsingEnv() bool {
@@ -132,6 +110,9 @@ func newConn(c OOBCapablePacketConn, supportsDF bool) (*oobConn, error) {
 	if ibc, ok := c.(batchConn); ok {
 		bc = ibc
 	} else {
+		if _, ok := c.(net.Conn); !ok {
+			return nil, errors.New("quic: OOBCapablePacketConn must implement net.Conn or ReadBatch")
+		}
 		bc = ipv4.NewPacketConn(c)
 	}
 
@@ -151,7 +132,7 @@ func newConn(c OOBCapablePacketConn, supportsDF bool) (*oobConn, error) {
 			ECN: isECNEnabled(),
 		},
 	}
-	for i := 0; i < batchSize; i++ {
+	for i := range batchSize {
 		oobConn.messages[i].OOB = make([]byte, oobBufferSize)
 	}
 	return oobConn, nil
@@ -185,7 +166,7 @@ func (c *oobConn) ReadPacket() (receivedPacket, error) {
 	data := msg.OOB[:msg.NN]
 	p := receivedPacket{
 		remoteAddr: msg.Addr,
-		rcvTime:    time.Now(),
+		rcvTime:    monotime.Now(),
 		data:       msg.Buffers[0][:msg.N],
 		buffer:     buffer,
 	}
@@ -197,6 +178,9 @@ func (c *oobConn) ReadPacket() (receivedPacket, error) {
 		if hdr.Level == unix.IPPROTO_IP {
 			switch hdr.Type {
 			case msgTypeIPTOS:
+				if len(body) != 1 {
+					return receivedPacket{}, errors.New("invalid IPTOS size")
+				}
 				p.ecn = protocol.ParseECNHeaderBits(body[0] & ecnMask)
 			case ipv4PKTINFO:
 				ip, ifIndex, ok := parseIPv4PktInfo(body)
@@ -214,7 +198,11 @@ func (c *oobConn) ReadPacket() (receivedPacket, error) {
 		if hdr.Level == unix.IPPROTO_IPV6 {
 			switch hdr.Type {
 			case unix.IPV6_TCLASS:
-				p.ecn = protocol.ParseECNHeaderBits(body[0] & ecnMask)
+				if len(body) != 4 {
+					return receivedPacket{}, errors.New("invalid IPV6_TCLASS size")
+				}
+				bits := uint8(binary.NativeEndian.Uint32(body)) & ecnMask
+				p.ecn = protocol.ParseECNHeaderBits(bits)
 			case unix.IPV6_PKTINFO:
 				// struct in6_pktinfo {
 				// 	struct in6_addr ipi6_addr;    /* src/dst IPv6 address */
@@ -222,7 +210,7 @@ func (c *oobConn) ReadPacket() (receivedPacket, error) {
 				// };
 				if len(body) == 20 {
 					p.info.addr = netip.AddrFrom16(*(*[16]byte)(body[:16])).Unmap()
-					p.info.ifIndex = binary.LittleEndian.Uint32(body[16:])
+					p.info.ifIndex = binary.NativeEndian.Uint32(body[16:])
 				} else {
 					invalidCmsgOnceV6.Do(func() {
 						log.Printf("Received invalid IPv6 packet info control message: %+x. "+
@@ -257,7 +245,7 @@ func (c *oobConn) WritePacket(b []byte, addr net.Addr, packetInfoOOB []byte, gso
 			}
 		}
 	}
-	n, _, err := c.OOBCapablePacketConn.WriteMsgUDP(b, oob, addr.(*net.UDPAddr))
+	n, _, err := c.WriteMsgUDP(b, oob, addr.(*net.UDPAddr))
 	return n, err
 }
 
@@ -326,6 +314,6 @@ func appendIPv6ECNMsg(b []byte, val protocol.ECN) []byte {
 
 	// UnixRights uses the private `data` method, but I *think* this achieves the same goal.
 	offset := startLen + unix.CmsgSpace(0)
-	b[offset] = val.ToHeaderBits()
+	binary.NativeEndian.PutUint32(b[offset:offset+dataLen], uint32(val.ToHeaderBits()))
 	return b
 }

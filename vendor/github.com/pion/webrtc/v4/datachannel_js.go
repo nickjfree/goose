@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 //go:build js && wasm
@@ -32,6 +32,14 @@ type DataChannel struct {
 	onBufferedAmountLow *js.Func
 	onErrorHandler      *js.Func
 
+	// onCloseFunc retains the user-provided OnClose callback so it can still be
+	// invoked from a self-releasing wrapper installed by Close().
+	onCloseFunc func()
+
+	// closeWrapperInstalled guards the self-releasing onclose wrapper in Close()
+	// so repeated Close calls don't override the first wrapper before it fires.
+	closeWrapperInstalled bool
+
 	// A reference to the associated api object used by this datachannel
 	api *API
 }
@@ -48,7 +56,7 @@ func (d *DataChannel) OnOpen(f func()) {
 		oldHandler := d.onOpenHandler
 		defer oldHandler.Release()
 	}
-	onOpenHandler := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	onOpenHandler := js.FuncOf(func(this js.Value, args []js.Value) any {
 		go f()
 		return js.Undefined()
 	})
@@ -63,7 +71,8 @@ func (d *DataChannel) OnClose(f func()) {
 		oldHandler := d.onCloseHandler
 		defer oldHandler.Release()
 	}
-	onCloseHandler := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	d.onCloseFunc = f
+	onCloseHandler := js.FuncOf(func(this js.Value, args []js.Value) any {
 		go f()
 		return js.Undefined()
 	})
@@ -78,7 +87,7 @@ func (d *DataChannel) OnClosing(f func()) {
 		oldHandler := d.onClosingHandler
 		defer oldHandler.Release()
 	}
-	onClosingHandler := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	onClosingHandler := js.FuncOf(func(this js.Value, args []js.Value) any {
 		go f()
 		return js.Undefined()
 	})
@@ -91,7 +100,7 @@ func (d *DataChannel) OnError(f func(err error)) {
 		oldHandler := d.onErrorHandler
 		defer oldHandler.Release()
 	}
-	onErrorHandler := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	onErrorHandler := js.FuncOf(func(this js.Value, args []js.Value) any {
 		event := args[0]
 		errorObj := event.Get("error")
 		// FYI RTCError has some extra properties, e.g. `errorDetail`:
@@ -111,7 +120,7 @@ func (d *DataChannel) OnMessage(f func(msg DataChannelMessage)) {
 		oldHandler := d.onMessageHandler
 		defer oldHandler.Release()
 	}
-	onMessageHandler := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	onMessageHandler := js.FuncOf(func(this js.Value, args []js.Value) any {
 		// pion/webrtc/projects/15
 		data := args[0].Get("data")
 		go func() {
@@ -177,27 +186,63 @@ func (d *DataChannel) Close() (err error) {
 		}
 	}()
 
-	d.underlying.Call("close")
-
-	// Release any handlers as required by the syscall/js API.
+	// Nullify and release handlers that should not fire after Close is called.
 	if d.onOpenHandler != nil {
+		d.underlying.Set("onopen", js.Null())
 		d.onOpenHandler.Release()
-	}
-	if d.onCloseHandler != nil {
-		d.onCloseHandler.Release()
+		d.onOpenHandler = nil
 	}
 	if d.onClosingHandler != nil {
+		d.underlying.Set("onclosing", js.Null())
 		d.onClosingHandler.Release()
+		d.onClosingHandler = nil
 	}
 	if d.onMessageHandler != nil {
+		d.underlying.Set("onmessage", js.Null())
 		d.onMessageHandler.Release()
+		d.onMessageHandler = nil
 	}
 	if d.onBufferedAmountLow != nil {
+		d.underlying.Set("onbufferedamountlow", js.Null())
 		d.onBufferedAmountLow.Release()
+		d.onBufferedAmountLow = nil
 	}
-	if d.onErrorHandler != nil {
-		d.onErrorHandler.Release()
+
+	// Defer nullifying onclose and onerror until the channel has fully closed.
+	// An error event may still fire during the close handshake (between calling
+	// close() and the onclose event), and the user-provided OnClose callback
+	// must still be invoked. Install the wrapper only once so repeated Close()
+	// calls don't override the original wrapper before it fires.
+	if !d.closeWrapperInstalled {
+		oldCloseHandler := d.onCloseHandler
+		oldErrorHandler := d.onErrorHandler
+		closeFunc := d.onCloseFunc
+
+		var wrapperHandler js.Func
+		wrapperHandler = js.FuncOf(func(this js.Value, args []js.Value) any {
+			if closeFunc != nil {
+				go closeFunc()
+			}
+			d.underlying.Set("onclose", js.Null())
+			wrapperHandler.Release()
+			if oldErrorHandler != nil {
+				d.underlying.Set("onerror", js.Null())
+				oldErrorHandler.Release()
+			}
+			d.closeWrapperInstalled = false
+			return js.Undefined()
+		})
+		d.underlying.Set("onclose", wrapperHandler)
+		d.closeWrapperInstalled = true
+		if oldCloseHandler != nil {
+			oldCloseHandler.Release()
+		}
 	}
+	d.onCloseHandler = nil
+	d.onCloseFunc = nil
+	d.onErrorHandler = nil
+
+	d.underlying.Call("close")
 
 	return nil
 }
@@ -300,7 +345,11 @@ func (d *DataChannel) OnBufferedAmountLow(f func()) {
 		oldHandler := d.onBufferedAmountLow
 		defer oldHandler.Release()
 	}
-	onBufferedAmountLow := js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+	onBufferedAmountLow := js.FuncOf(func(this js.Value, args []js.Value) any {
+		if d.ReadyState() != DataChannelStateOpen {
+			return js.Undefined()
+		}
+
 		go f()
 		return js.Undefined()
 	})
@@ -336,7 +385,7 @@ func valueToDataChannelMessage(val js.Value) DataChannelMessage {
 		// channel to signal when reading is done.
 		reader := js.Global().Get("FileReader").New()
 		doneChan := make(chan struct{})
-		reader.Call("addEventListener", "loadend", js.FuncOf(func(this js.Value, args []js.Value) interface{} {
+		reader.Call("addEventListener", "loadend", js.FuncOf(func(this js.Value, args []js.Value) any {
 			go func() {
 				// Signal that the FileReader is done reading/loading by sending through
 				// the doneChan.

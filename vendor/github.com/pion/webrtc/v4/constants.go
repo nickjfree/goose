@@ -1,9 +1,13 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
 
-import "github.com/pion/dtls/v3"
+import (
+	"math"
+
+	"github.com/pion/dtls/v3"
+)
 
 const (
 	// default as the standard ethernet MTU
@@ -19,17 +23,30 @@ const (
 	// If the total amount of incoming SSRCes exceeds this new requests will be ignored.
 	simulcastMaxProbeRoutines = 25
 
+	// Default Max SCTP Message Size is the largest single DataChannel
+	// message we can send or accept. This default was chosen to match FireFox.
+	defaultMaxSCTPMessageSize = 1073741823
+
+	// If a DataChannel Max Message Size isn't declared by the Remote(max-message-size)
+	// this is the value we default to. This value was chosen because it was the behavior
+	// of Pion before max-message-size was implemented.
+	sctpMaxMessageSizeUnsetValue = math.MaxUint16
+
 	mediaSectionApplication = "application"
 
 	sdpAttributeRid = "rid"
 
 	sdpAttributeSimulcast = "simulcast"
 
-	rtpOutboundMTU = 1200
+	outboundMTU = 1200
+
+	sctpOutboundMTU = 1191
 
 	rtpPayloadTypeBitmask = 0x7F
 
 	incomingUnhandledRTPSsrc = "Incoming unhandled RTP ssrc(%d), OnTrack will not be fired. %v"
+
+	useReadSimulcast = "Use ReadSimulcast(rid) instead of Read() when multiple tracks are present"
 
 	generatedCertificateOrigin = "WebRTC"
 

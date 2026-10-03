@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package webrtc
@@ -52,6 +52,10 @@ var (
 	// ErrModifyingRTCPMuxPolicy indicates that an attempt to modify
 	// RTCPMuxPolicy was made after PeerConnection has been initialized.
 	ErrModifyingRTCPMuxPolicy = errors.New("rtcp mux policy cannot be modified")
+
+	// errModifyingRTPHeaderEncryptionPolicy indicates that an attempt to modify
+	// RTPHeaderEncryptionPolicy was made after PeerConnection has been initialized.
+	errModifyingRTPHeaderEncryptionPolicy = errors.New("rtp header encryption policy cannot be modified")
 
 	// ErrModifyingICECandidatePoolSize indicates that an attempt to modify
 	// ICECandidatePoolSize was made after PeerConnection has been initialized.
@@ -135,6 +139,20 @@ var (
 	// ErrNoSRTPProtectionProfile indicates that the DTLS handshake completed and no SRTP Protection Profile was chosen.
 	ErrNoSRTPProtectionProfile = errors.New("DTLS Handshake completed and no SRTP Protection Profile was chosen")
 
+	// ErrRTPHeaderEncryptionRequired indicates that the local endpoint requires
+	// RFC 9335 Cryptex negotiation, but the remote SDP did not negotiate it.
+	ErrRTPHeaderEncryptionRequired = errors.New("rtp header extension encryption required")
+
+	// ErrRTPHeaderEncryptionModeChangeNotSupported indicates that the negotiated RTP header
+	// extension encryption mode could not be applied to the already-started SRTP session.
+	ErrRTPHeaderEncryptionModeChangeNotSupported = errors.New(
+		"rtp header extension encryption mode change not supported")
+
+	// ErrRTPHeaderEncryptionMixedModeNotSupported indicates that the remote SDP negotiated
+	// RTP header extension encryption for only some RTP media sections. Pion currently
+	// configures Cryptex as a connection-wide SRTP behavior and cannot support mixed mode.
+	ErrRTPHeaderEncryptionMixedModeNotSupported = errors.New("rtp header extension encryption mixed mode not supported")
+
 	// ErrFailedToGenerateCertificateFingerprint indicates that we failed to generate the fingerprint
 	// used for comparing certificates.
 	ErrFailedToGenerateCertificateFingerprint = errors.New("failed to generate certificate fingerprint")
@@ -148,6 +166,9 @@ var (
 	// ErrSenderWithNoCodecs indicates that a RTPSender was created without any codecs. To send media the MediaEngine
 	//  needs at least one configured codec.
 	ErrSenderWithNoCodecs = errors.New("unable to populate media section, RTPSender created with no codecs")
+
+	// ErrCodecAlreadyRegistered indicates that a codec has already been registered for the same payload type.
+	ErrCodecAlreadyRegistered = errors.New("codec already registered for same payload type")
 
 	// ErrRTPSenderNewTrackHasIncorrectKind indicates that the new track is of a different kind than the previous/original.
 	ErrRTPSenderNewTrackHasIncorrectKind = errors.New("new track must be of the same kind as previous")
@@ -172,6 +193,9 @@ var (
 	// and the requested SSRC was ignored.
 	ErrSimulcastProbeOverflow = errors.New("simulcast probe limit has been reached, new SSRC has been discarded")
 
+	// ErrSDPUnmarshalling indicates that the SDP could not be unmarshalled.
+	ErrSDPUnmarshalling = errors.New("failed to unmarshal SDP")
+
 	errDetachNotEnabled                 = errors.New("enable detaching by calling webrtc.DetachDataChannels()")
 	errDetachBeforeOpened               = errors.New("datachannel not opened yet, try calling Detach from OnOpen")
 	errDtlsTransportNotStarted          = errors.New("the DTLS transport has not started yet")
@@ -193,10 +217,12 @@ var (
 	errICERoleUnknown              = errors.New("unknown ICE Role")
 	errICEProtocolUnknown          = errors.New("unknown protocol")
 	errICEGathererNotStarted       = errors.New("gatherer not started")
+	errAddressRewriteWithNAT1To1   = errors.New("address rewrite rules cannot be combined with NAT1To1IPs")
 
 	errNetworkTypeUnknown = errors.New("unknown network type")
 
 	errSDPDoesNotMatchOffer        = errors.New("new sdp does not match previous offer")
+	errSDPPayloadTypeNotFound      = errors.New("payload type not found in media description")
 	errSDPDoesNotMatchAnswer       = errors.New("new sdp does not match previous answer")
 	errPeerConnSDPTypeInvalidValue = errors.New(
 		"provided value is not a valid enum value of type SDPType",
@@ -208,7 +234,7 @@ var (
 		"remoteDescription contained media section without mid value",
 	)
 	errPeerConnRemoteDescriptionNil                  = errors.New("remoteDescription has not been set yet")
-	errPeerConnSingleMediaSectionHasExplicitSSRC     = errors.New("single media section has an explicit SSRC")
+	errMediaSectionHasExplictSSRCAttribute           = errors.New("media section has an explicit SSRC")
 	errPeerConnRemoteSSRCAddTransceiver              = errors.New("could not add transceiver for remote SSRC")
 	errPeerConnSimulcastMidRTPExtensionRequired      = errors.New("mid RTP Extensions required for Simulcast")
 	errPeerConnSimulcastStreamIDRTPExtensionRequired = errors.New("stream id RTP Extensions required for Simulcast")
@@ -228,6 +254,10 @@ var (
 	errPeerConnSetIdentityProviderNotImplemented = errors.New("TODO SetIdentityProvider")
 	errPeerConnWriteRTCPOpenWriteStream          = errors.New("WriteRTCP failed to open WriteStream")
 	errPeerConnTranscieverMidNil                 = errors.New("cannot find transceiver with mid")
+	errPeerConnEarlyMediaWithoutAnswer           = errors.New(
+		"cannot process early media without SDP answer," +
+			"use SettingEngine.SetHandleUndeclaredSSRCWithoutAnswer(true) to process without answer",
+	)
 
 	errRTPReceiverDTLSTransportNil            = errors.New("DTLSTransport must not be nil")
 	errRTPReceiverReceiveAlreadyCalled        = errors.New("Receive has already been called")
@@ -237,6 +267,7 @@ var (
 	errRTPSenderTrackNil             = errors.New("Track must not be nil")
 	errRTPSenderDTLSTransportNil     = errors.New("DTLSTransport must not be nil")
 	errRTPSenderSendAlreadyCalled    = errors.New("Send has already been called")
+	errRTPSenderSendNotCalled        = errors.New("Send has not been called")
 	errRTPSenderStopped              = errors.New("Sender has already been stopped")
 	errRTPSenderTrackRemoved         = errors.New("Sender Track has been removed or replaced to nil")
 	errRTPSenderRidNil               = errors.New("Sender cannot add encoding as rid is empty")
@@ -245,7 +276,7 @@ var (
 	errRTPSenderRIDCollision         = errors.New("Sender cannot encoding due to RID collision")
 	errRTPSenderNoTrackForRID        = errors.New("Sender does not have track for RID")
 
-	errRTPTransceiverCannotChangeMid        = errors.New("errRTPSenderTrackNil")
+	errRTPTransceiverCannotChangeMid        = errors.New("cannot change transceiver mid")
 	errRTPTransceiverSetSendingInvalidState = errors.New("invalid state change in RTPTransceiver.setSending")
 	errRTPTransceiverCodecUnsupported       = errors.New("unsupported codec type by this transceiver")
 
@@ -266,13 +297,17 @@ var (
 		"cannot convert to StatsICECandidatePairStateSucceeded invalid ice candidate state",
 	)
 
+	errICECandidatePoolSizeTooLarge = errors.New("ice candidate pool size greater than 1 is not supported")
+
 	errInvalidICECredentialTypeString = errors.New("invalid ICECredentialType")
 	errInvalidICEServer               = errors.New("invalid ICEServer")
 
 	errICETransportNotInNew = errors.New("ICETransport can only be called in ICETransportStateNew")
 	errICETransportClosed   = errors.New("ICETransport closed")
 
-	errCertificatePEMFormatError = errors.New("bad Certificate PEM format")
+	errCertificatePEMMultipleCert = errors.New("failed parsing certificate, more than 1 CERTIFICATE block in pems")
+	errCertificatePEMMultiplePriv = errors.New("failed parsing certificate, more than 1 PRIVATE KEY block in pems")
+	errCertificatePEMMissing      = errors.New("failed parsing certificate, pems must contain both a CERTIFICATE block and a PRIVATE KEY block") // nolint: lll
 
 	errRTPTooShort = errors.New("not long enough to be a RTP Packet")
 

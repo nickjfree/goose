@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ice
@@ -9,40 +9,106 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/pion/stun/v3"
+	"github.com/pion/stun/v4"
+	"github.com/pion/transport/v5/packetio"
 )
 
-// Dial connects to the remote agent, acting as the controlling ice agent.
-// Dial blocks until at least one ice candidate pair has successfully connected.
-func (a *Agent) Dial(ctx context.Context, remoteUfrag, remotePwd string) (*Conn, error) {
-	return a.connect(ctx, true, remoteUfrag, remotePwd)
+type packetAttributeKey uint8
+
+const ecnAttributeKey packetAttributeKey = iota
+
+// ECN is the two-bit Explicit Congestion Notification codepoint in an IP header.
+type ECN uint8
+
+// ECNFromAttributes returns the received packet's ECN codepoint.
+func ECNFromAttributes(attrs packetio.Attributes) (ECN, bool) {
+	ecn, ok := attrs.Get(ecnAttributeKey).(ECN)
+
+	return ecn, ok
 }
 
-// Accept connects to the remote agent, acting as the controlled ice agent.
+// AwaitConnect waits until a pair is selected.
+func (a *Agent) AwaitConnect(ctx context.Context) error {
+	select {
+	case <-a.loop.Done():
+		return a.loop.Err()
+	case <-ctx.Done():
+		return ErrCanceledByCaller
+	case <-a.onConnected:
+	}
+
+	return nil
+}
+
+// StartDial sets the agent up for connecting to the remote agent, acting as the
+// controlling agent and returns immediately.
+func (a *Agent) StartDial(remoteUfrag, remotePwd string) (*Conn, error) {
+	conn, err := a.startConnect(true, remoteUfrag, remotePwd)
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, nil
+}
+
+// Dial blocks until at least one ice candidate pair has successfully connected.
+func (a *Agent) Dial(ctx context.Context, remoteUfrag, remotePwd string) (*Conn, error) {
+	conn, err := a.StartDial(remoteUfrag, remotePwd) //nolint:contextcheck
+	if err != nil {
+		return nil, err
+	}
+	err = a.AwaitConnect(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, nil
+}
+
+// StartAccept sets the agent up for connecting to the remote agent, acting as the
+// controlled agent and returns immediately.
+func (a *Agent) StartAccept(remoteUfrag, remotePwd string) (*Conn, error) {
+	conn, err := a.startConnect(false, remoteUfrag, remotePwd)
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, nil
+}
+
 // Accept blocks until at least one ice candidate pair has successfully connected.
 func (a *Agent) Accept(ctx context.Context, remoteUfrag, remotePwd string) (*Conn, error) {
-	return a.connect(ctx, false, remoteUfrag, remotePwd)
+	conn, err := a.StartAccept(remoteUfrag, remotePwd) //nolint:contextcheck
+	if err != nil {
+		return nil, err
+	}
+	err = a.AwaitConnect(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	return conn, nil
 }
 
 // Conn represents the ICE connection.
 // At the moment the lifetime of the Conn is equal to the Agent.
 type Conn struct {
-	bytesReceived uint64
-	bytesSent     uint64
+	bytesReceived atomic.Uint64
+	bytesSent     atomic.Uint64
 	agent         *Agent
 }
 
 // BytesSent returns the number of bytes sent.
 func (c *Conn) BytesSent() uint64 {
-	return atomic.LoadUint64(&c.bytesSent)
+	return c.bytesSent.Load()
 }
 
 // BytesReceived returns the number of bytes received.
 func (c *Conn) BytesReceived() uint64 {
-	return atomic.LoadUint64(&c.bytesReceived)
+	return c.bytesReceived.Load()
 }
 
-func (a *Agent) connect(ctx context.Context, isControlling bool, remoteUfrag, remotePwd string) (*Conn, error) {
+func (a *Agent) startConnect(isControlling bool, remoteUfrag, remotePwd string) (*Conn, error) {
 	err := a.loop.Err()
 	if err != nil {
 		return nil, err
@@ -52,15 +118,6 @@ func (a *Agent) connect(ctx context.Context, isControlling bool, remoteUfrag, re
 		return nil, err
 	}
 
-	// Block until pair selected
-	select {
-	case <-a.loop.Done():
-		return nil, a.loop.Err()
-	case <-ctx.Done():
-		return nil, ErrCanceledByCaller
-	case <-a.onConnected:
-	}
-
 	return &Conn{
 		agent: a,
 	}, nil
@@ -68,15 +125,22 @@ func (a *Agent) connect(ctx context.Context, isControlling bool, remoteUfrag, re
 
 // Read implements the Conn Read method.
 func (c *Conn) Read(p []byte) (int, error) {
-	err := c.agent.loop.Err()
-	if err != nil {
-		return 0, err
-	}
-
-	n, err := c.agent.buf.Read(p)
-	atomic.AddUint64(&c.bytesReceived, uint64(n)) //nolint:gosec // G115
+	var attrs [1]packetio.Attribute
+	n, _, err := c.ReadWithAttributes(p, attrs[:0])
 
 	return n, err
+}
+
+// ReadWithAttributes reads a packet and replaces attrs with its metadata.
+func (c *Conn) ReadWithAttributes(p []byte, attrs packetio.Attributes) (int, packetio.Attributes, error) {
+	if err := c.agent.loop.Err(); err != nil {
+		return 0, nil, err
+	}
+
+	n, attrs, err := c.agent.buf.Read(p, attrs)
+	c.bytesReceived.Add(uint64(n)) //nolint:gosec // G115
+
+	return n, attrs, err
 }
 
 // Write implements the Conn Write method.
@@ -92,20 +156,104 @@ func (c *Conn) Write(packet []byte) (int, error) {
 
 	pair := c.agent.getSelectedPair()
 	if pair == nil {
+		// Note: the closure must capture p and not pair. Whether a variable
+		// is heap-allocated is a static decision across all code paths, and
+		// the allocation happens where the variable is declared. If we were
+		// to capture pair directly in this closure, then pair would be heap
+		// allocated on every single packet write, even when there is already
+		// a selected pair. By declaring a new variable inside the fallback,
+		// we avoid allocating on most writes and only allocate when no pair
+		// is currently selected.
+		var p *CandidatePair
 		if err = c.agent.loop.Run(c.agent.loop, func(_ context.Context) {
-			pair = c.agent.getBestValidCandidatePair()
+			p = c.agent.getBestValidCandidatePair()
 		}); err != nil {
 			return 0, err
 		}
+		pair = p
 
 		if pair == nil {
-			return 0, err
+			return 0, ErrNoCandidatePairs
 		}
 	}
 
-	atomic.AddUint64(&c.bytesSent, uint64(len(packet)))
+	// Write application data via the selected pair and update stats with actual bytes written.
+	n, err := pair.Write(packet)
+	if n > 0 {
+		c.bytesSent.Add(uint64(n))
+		pair.UpdatePacketSent(n)
+	}
 
-	return pair.Write(packet)
+	return n, err
+}
+
+// GetCandidatePairsInfo returns snapshot information for all candidate pairs.
+// Use the returned ID with WriteToPair() to write to a specific pair.
+func (c *Conn) GetCandidatePairsInfo() []CandidatePairInfo {
+	var pairs []CandidatePairInfo
+
+	err := c.agent.loop.Run(c.agent.loop, func(_ context.Context) {
+		pairs = make([]CandidatePairInfo, 0, len(c.agent.checklist))
+		for _, cp := range c.agent.checklist {
+			pairs = append(pairs, CandidatePairInfo{
+				ID:                   cp.id,
+				LocalCandidateType:   cp.Local.Type(),
+				RemoteCandidateType:  cp.Remote.Type(),
+				State:                cp.state,
+				Nominated:            cp.nominated,
+				CurrentRoundTripTime: time.Duration(atomic.LoadInt64(&cp.currentRoundTripTime)),
+				RenominationQuality:  c.agent.evaluateCandidatePairQuality(cp),
+			})
+		}
+	})
+	if err != nil {
+		return nil
+	}
+
+	return pairs
+}
+
+// WriteToPair writes packet to a specific candidate pair identified by its ID.
+// Returns ErrCandidatePairNotFound if the pair ID is not found.
+// Returns ErrCandidatePairNotSucceeded if the pair is not in Succeeded state.
+// This is useful for sending packets over alternate paths
+// even if they are not nominated.
+func (c *Conn) WriteToPair(pairID uint64, packet []byte) (int, error) {
+	if err := c.agent.loop.Err(); err != nil {
+		return 0, err
+	}
+
+	if stun.IsMessage(packet) {
+		return 0, errWriteSTUNMessageToIceConn
+	}
+
+	var pair *CandidatePair
+	var lookupErr error
+
+	if err := c.agent.loop.Run(c.agent.loop, func(_ context.Context) {
+		pair = c.agent.pairsByID[pairID]
+		if pair == nil {
+			lookupErr = ErrCandidatePairNotFound
+
+			return
+		}
+		if pair.state != CandidatePairStateSucceeded {
+			lookupErr = ErrCandidatePairNotSucceeded
+		}
+	}); err != nil {
+		return 0, err
+	}
+
+	if lookupErr != nil {
+		return 0, lookupErr
+	}
+
+	n, err := pair.Write(packet)
+	if n > 0 {
+		pair.UpdatePacketSent(n)
+	}
+
+	return n, err
 }
 
 // Close implements the Conn Close method. It is used to close
@@ -134,17 +282,33 @@ func (c *Conn) RemoteAddr() net.Addr {
 	return pair.Remote.addr()
 }
 
-// SetDeadline is a stub.
-func (c *Conn) SetDeadline(time.Time) error {
-	return nil
+// SetDeadline sets both read and write deadlines on the underlying ICE connection.
+func (c *Conn) SetDeadline(t time.Time) error {
+	if err := c.SetReadDeadline(t); err != nil {
+		return err
+	}
+
+	return c.SetWriteDeadline(t)
 }
 
-// SetReadDeadline is a stub.
-func (c *Conn) SetReadDeadline(time.Time) error {
-	return nil
+// SetReadDeadline sets the read deadline on the packet buffer used for application data.
+func (c *Conn) SetReadDeadline(t time.Time) error {
+	return c.agent.buf.SetReadDeadline(t)
 }
 
-// SetWriteDeadline is a stub.
-func (c *Conn) SetWriteDeadline(time.Time) error {
+// SetWriteDeadline sets the write deadline on the currently selected local candidate connection.
+// The deadline applies to the selected candidate pair and will affect all traffic over that pair.
+func (c *Conn) SetWriteDeadline(t time.Time) error {
+	pair := c.agent.getSelectedPair()
+	if pair == nil || pair.Local == nil {
+		return nil
+	}
+
+	if d, ok := pair.Local.(interface {
+		setWriteDeadline(time.Time) error
+	}); ok {
+		return d.setWriteDeadline(t)
+	}
+
 	return nil
 }

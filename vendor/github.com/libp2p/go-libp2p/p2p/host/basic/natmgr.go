@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"strconv"
 	"sync"
-	"time"
 
 	"github.com/libp2p/go-libp2p/core/network"
 	inat "github.com/libp2p/go-libp2p/p2p/net/nat"
@@ -105,11 +104,11 @@ func (nmgr *natManager) background(ctx context.Context) {
 		}
 	}()
 
-	discoverCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	discoverCtx, cancel := context.WithTimeout(ctx, inat.DiscoveryTimeout)
 	defer cancel()
 	natInstance, err := discoverNAT(discoverCtx)
 	if err != nil {
-		log.Info("DiscoverNAT error:", err)
+		log.Info("DiscoverNAT error:", "err", err)
 		return
 	}
 
@@ -209,7 +208,7 @@ func (nmgr *natManager) doSync() {
 	// Create new mappings.
 	for _, e := range newAddresses {
 		if err := nmgr.nat.AddMapping(nmgr.ctx, e.protocol, e.port); err != nil {
-			log.Errorf("failed to port-map %s port %d: %s", e.protocol, e.port, err)
+			log.Error("failed to port-map", "protocol", e.protocol, "port", e.port, "err", err)
 		}
 		nmgr.tracked[e] = false
 	}
@@ -239,7 +238,7 @@ func (nmgr *natManager) GetMapping(addr ma.Multiaddr) ma.Multiaddr {
 
 	naddr, err := manet.ToNetAddr(transport)
 	if err != nil {
-		log.Error("error parsing net multiaddr %q: %s", transport, err)
+		log.Error("error parsing net multiaddr", "addr", transport, "err", err)
 		return nil
 	}
 
@@ -280,7 +279,7 @@ func (nmgr *natManager) GetMapping(addr ma.Multiaddr) ma.Multiaddr {
 	}
 	mappedMaddr, err := manet.FromNetAddr(mappedAddr)
 	if err != nil {
-		log.Errorf("mapped addr can't be turned into a multiaddr %q: %s", mappedAddr, err)
+		log.Error("mapped addr can't be turned into a multiaddr", "addr", mappedAddr, "err", err)
 		return nil
 	}
 	extMaddr := mappedMaddr
@@ -292,8 +291,8 @@ func (nmgr *natManager) GetMapping(addr ma.Multiaddr) ma.Multiaddr {
 
 type nmgrNetNotifiee natManager
 
-func (nn *nmgrNetNotifiee) natManager() *natManager                          { return (*natManager)(nn) }
-func (nn *nmgrNetNotifiee) Listen(network.Network, ma.Multiaddr)             { nn.natManager().sync() }
-func (nn *nmgrNetNotifiee) ListenClose(n network.Network, addr ma.Multiaddr) { nn.natManager().sync() }
-func (nn *nmgrNetNotifiee) Connected(network.Network, network.Conn)          {}
-func (nn *nmgrNetNotifiee) Disconnected(network.Network, network.Conn)       {}
+func (nn *nmgrNetNotifiee) natManager() *natManager                       { return (*natManager)(nn) }
+func (nn *nmgrNetNotifiee) Listen(network.Network, ma.Multiaddr)          { nn.natManager().sync() }
+func (nn *nmgrNetNotifiee) ListenClose(_ network.Network, _ ma.Multiaddr) { nn.natManager().sync() }
+func (nn *nmgrNetNotifiee) Connected(network.Network, network.Conn)       {}
+func (nn *nmgrNetNotifiee) Disconnected(network.Network, network.Conn)    {}

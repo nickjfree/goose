@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: 2023 The Pion community <https://pion.ly>
+// SPDX-FileCopyrightText: 2026 The Pion community <https://pion.ly>
 // SPDX-License-Identifier: MIT
 
 package ice
@@ -43,18 +43,13 @@ func NewCandidateServerReflexive(config *CandidateServerReflexiveConfig) (*Candi
 		candidateID = globalCandidateIDGenerator.Generate()
 	}
 
-	return &CandidateServerReflexive{
+	candidate := &CandidateServerReflexive{
 		candidateBase: candidateBase{
-			id:            candidateID,
-			networkType:   networkType,
-			candidateType: CandidateTypeServerReflexive,
-			address:       config.Address,
-			port:          config.Port,
-			resolvedAddr: &net.UDPAddr{
-				IP:   ipAddr.AsSlice(),
-				Port: config.Port,
-				Zone: ipAddr.Zone(),
-			},
+			id:                 candidateID,
+			networkType:        networkType,
+			candidateType:      CandidateTypeServerReflexive,
+			address:            config.Address,
+			port:               config.Port,
 			component:          config.Component,
 			foundationOverride: config.Foundation,
 			priorityOverride:   config.Priority,
@@ -62,7 +57,13 @@ func NewCandidateServerReflexive(config *CandidateServerReflexiveConfig) (*Candi
 				Address: config.RelAddr,
 				Port:    config.RelPort,
 			},
-			remoteCandidateCaches: map[AddrPort]Candidate{},
 		},
-	}, nil
+	}
+	candidate.setResolvedAddr(&net.UDPAddr{
+		IP:   ipAddr.AsSlice(),
+		Port: config.Port,
+		Zone: ipAddr.Zone(),
+	})
+
+	return candidate, nil
 }

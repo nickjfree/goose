@@ -2,221 +2,300 @@ package webtransport
 
 import (
 	"context"
-	"encoding/binary"
 	"errors"
 	"io"
-	"math/rand"
 	"net"
 	"sync"
+	"time"
 
 	"github.com/quic-go/quic-go"
 	"github.com/quic-go/quic-go/http3"
-	"github.com/quic-go/quic-go/quicvarint"
 )
 
 // sessionID is the WebTransport Session ID
 type sessionID uint64
 
-const closeWebtransportSessionCapsuleType http3.CapsuleType = 0x2843
-
-type acceptQueue[T any] struct {
-	mx sync.Mutex
-	// The channel is used to notify consumers (via Chan) about new incoming items.
-	// Needs to be buffered to preserve the notification if an item is enqueued
-	// between a call to Next and to Chan.
-	c chan struct{}
-	// Contains all the streams waiting to be accepted.
-	// There's no explicit limit to the length of the queue, but it is implicitly
-	// limited by the stream flow control provided by QUIC.
-	queue []T
+type http3Stream interface {
+	io.ReadWriteCloser
+	ReceiveDatagram(context.Context) ([]byte, error)
+	SendDatagram([]byte) error
+	CancelRead(quic.StreamErrorCode)
+	CancelWrite(quic.StreamErrorCode)
+	SetWriteDeadline(time.Time) error
+	TryWriteAll([]byte) error
 }
 
-func newAcceptQueue[T any]() *acceptQueue[T] {
-	return &acceptQueue[T]{c: make(chan struct{}, 1)}
+var (
+	_ http3Stream = &http3.Stream{}
+	_ http3Stream = &http3.RequestStream{}
+)
+
+// SessionState contains the state of a WebTransport session
+type SessionState struct {
+	// ConnectionState contains the QUIC connection state, including TLS handshake information
+	ConnectionState quic.ConnectionState
+
+	// ApplicationProtocol contains the application protocol negotiated for the session
+	ApplicationProtocol string
 }
-
-func (q *acceptQueue[T]) Add(str T) {
-	q.mx.Lock()
-	q.queue = append(q.queue, str)
-	q.mx.Unlock()
-
-	select {
-	case q.c <- struct{}{}:
-	default:
-	}
-}
-
-func (q *acceptQueue[T]) Next() T {
-	q.mx.Lock()
-	defer q.mx.Unlock()
-
-	if len(q.queue) == 0 {
-		return *new(T)
-	}
-	str := q.queue[0]
-	q.queue = q.queue[1:]
-	return str
-}
-
-func (q *acceptQueue[T]) Chan() <-chan struct{} { return q.c }
 
 type Session struct {
-	sessionID  sessionID
-	qconn      http3.Connection
-	requestStr http3.Stream
-
-	streamHdr    []byte
-	uniStreamHdr []byte
+	sessionID           sessionID
+	conn                *quic.Conn
+	str                 http3Stream
+	applicationProtocol string
+	flowControlEnabled  bool
 
 	ctx      context.Context
 	closeMx  sync.Mutex
 	closeErr error // not nil once the session is closed
-	// streamCtxs holds all the context.CancelFuncs of calls to Open{Uni}StreamSync calls currently active.
-	// When the session is closed, this allows us to cancel all these contexts and make those calls return.
-	streamCtxs map[int]context.CancelFunc
 
-	bidiAcceptQueue acceptQueue[Stream]
-	uniAcceptQueue  acceptQueue[ReceiveStream]
+	capsuleQueueMx      sync.Mutex
+	capsuleQueue        []capsule
+	pendingCloseCapsule *closeSessionCapsule
+	capsuleQueueUpdated chan struct{}
 
-	// TODO: garbage collect streams from when they are closed
-	streams streamsMap
+	incomingStreams    *incomingStreamsMap[*Stream]
+	incomingUniStreams *incomingStreamsMap[*ReceiveStream]
+	outgoingStreams    *outgoingStreamsMap[*Stream]
+	outgoingUniStreams *outgoingStreamsMap[*SendStream]
+	incomingDataFC     *incomingDataFlowController
+	outgoingDataFC     *outgoingDataFlowController
 }
 
-func newSession(sessionID sessionID, qconn http3.Connection, requestStr http3.Stream) *Session {
-	tracingID := qconn.Context().Value(quic.ConnectionTracingKey).(quic.ConnectionTracingID)
-	ctx, ctxCancel := context.WithCancel(context.WithValue(context.Background(), quic.ConnectionTracingKey, tracingID))
+const (
+	// Capsule writes can block if the peer withholds CONNECT stream flow control credit.
+	// We bound the queue to avoid unbounded memory growth.
+	// 4096 should be more than enough slack for normal loss / reordering.
+	maxQueuedOutgoingCapsules = 4096
+	closeSessionTimeout       = 10 * time.Millisecond
+)
+
+func newSession(
+	ctx context.Context,
+	sessionID sessionID,
+	conn *quic.Conn,
+	str http3Stream,
+	applicationProtocol string,
+	fc sessionFlowControl,
+) *Session {
+	ctx, ctxCancel := context.WithCancel(ctx)
 	c := &Session{
-		sessionID:       sessionID,
-		qconn:           qconn,
-		requestStr:      requestStr,
-		ctx:             ctx,
-		streamCtxs:      make(map[int]context.CancelFunc),
-		bidiAcceptQueue: *newAcceptQueue[Stream](),
-		uniAcceptQueue:  *newAcceptQueue[ReceiveStream](),
-		streams:         *newStreamsMap(),
+		sessionID:           sessionID,
+		conn:                conn,
+		str:                 str,
+		applicationProtocol: applicationProtocol,
+		flowControlEnabled:  fc.Enabled,
+		ctx:                 ctx,
+		capsuleQueueUpdated: make(chan struct{}, 1),
 	}
-	// precompute the headers for unidirectional streams
-	c.uniStreamHdr = make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID)))
-	c.uniStreamHdr = quicvarint.Append(c.uniStreamHdr, webTransportUniStreamType)
-	c.uniStreamHdr = quicvarint.Append(c.uniStreamHdr, uint64(c.sessionID))
-	// precompute the headers for bidirectional streams
-	c.streamHdr = make([]byte, 0, 2+quicvarint.Len(uint64(c.sessionID)))
-	c.streamHdr = quicvarint.Append(c.streamHdr, webTransportFrameType)
-	c.streamHdr = quicvarint.Append(c.streamHdr, uint64(c.sessionID))
+	if fc.Enabled {
+		c.incomingDataFC = newIncomingDataFlowController(0, fc.MaxIncomingData, func(maxData int64) {
+			c.queueCapsule(maxDataCapsule{MaximumData: uint64(maxData)})
+		})
+		c.outgoingDataFC = newOutgoingDataFlowController(fc.MaxOutgoingData)
+	} else {
+		fc.MaxIncomingStreams = maxStreamsLimit
+		fc.MaxIncomingUniStreams = maxStreamsLimit
+		fc.MaxOutgoingStreams = maxStreamsLimit
+		fc.MaxOutgoingUniStreams = maxStreamsLimit
+	}
+	c.incomingStreams = newIncomingStreamsMap[*Stream](fc.MaxIncomingStreams, func(limit uint64) {
+		c.queueCapsule(maxStreamsBidiCapsule{MaximumStreams: limit})
+	})
+	c.incomingUniStreams = newIncomingStreamsMap[*ReceiveStream](fc.MaxIncomingUniStreams, func(limit uint64) {
+		c.queueCapsule(maxStreamsUniCapsule{MaximumStreams: limit})
+	})
+	c.outgoingStreams = newOutgoingBidiStreamsMap(
+		conn,
+		sessionID,
+		fc.MaxOutgoingStreams,
+		c.outgoingDataFC,
+		c.incomingDataFC,
+		c.queueCapsule,
+		c.closeWithFlowControlError,
+	)
+	c.outgoingUniStreams = newOutgoingUniStreamsMap(
+		conn,
+		sessionID,
+		fc.MaxOutgoingUniStreams,
+		c.outgoingDataFC,
+		c.queueCapsule,
+	)
 
 	go func() {
 		defer ctxCancel()
-		c.handleConn()
+		c.readFromConnectStream()
+	}()
+	go func() {
+		defer ctxCancel()
+		c.writeToConnectStream()
 	}()
 	return c
 }
 
-func (s *Session) handleConn() {
-	var closeErr *SessionError
-	err := s.parseNextCapsule()
-	if !errors.As(err, &closeErr) {
-		closeErr = &SessionError{Remote: true}
-	}
-
-	s.closeMx.Lock()
-	defer s.closeMx.Unlock()
-	// If we closed the connection, the closeErr will be set in Close.
-	if s.closeErr == nil {
-		s.closeErr = closeErr
-	}
-	for _, cancel := range s.streamCtxs {
-		cancel()
-	}
-	s.streams.CloseSession()
-}
-
-// parseNextCapsule parses the next Capsule sent on the request stream.
-// It returns a SessionError, if the capsule received is a CLOSE_WEBTRANSPORT_SESSION Capsule.
-func (s *Session) parseNextCapsule() error {
+func (s *Session) readFromConnectStream() {
+	parser := http3.NewCapsuleParser(s.str)
 	for {
-		// TODO: enforce max size
-		typ, r, err := http3.ParseCapsule(quicvarint.NewReader(s.requestStr))
+		c, err := parseNextCapsule(parser)
 		if err != nil {
-			return err
+			s.closeWithError(&http3.Error{ErrorCode: http3.ErrCodeDatagramError, ErrorMessage: err.Error()}, nil)
+			return
 		}
-		switch typ {
-		case closeWebtransportSessionCapsuleType:
-			b := make([]byte, 4)
-			if _, err := io.ReadFull(r, b); err != nil {
-				return err
+		switch c := c.(type) {
+		case closeSessionCapsule:
+			s.closeWithError(c.ToSessionError(), nil)
+			return
+		case maxDataCapsule:
+			if s.outgoingDataFC == nil {
+				continue
 			}
-			appErrCode := binary.BigEndian.Uint32(b)
-			appErrMsg, err := io.ReadAll(r)
+			if err := s.outgoingDataFC.UpdateMaxData(int64(c.MaximumData)); err != nil {
+				s.closeWithFlowControlError(err)
+				return
+			}
+		case maxStreamsBidiCapsule:
+			if !s.flowControlEnabled {
+				continue
+			}
+			if err := s.outgoingStreams.UpdateStreamLimit(c.MaximumStreams); err != nil {
+				s.closeWithFlowControlError(err)
+				return
+			}
+		case maxStreamsUniCapsule:
+			if !s.flowControlEnabled {
+				continue
+			}
+			if err := s.outgoingUniStreams.UpdateStreamLimit(c.MaximumStreams); err != nil {
+				s.closeWithFlowControlError(err)
+				return
+			}
+		case streamsBlockedBidiCapsule, streamsBlockedUniCapsule:
+			if !s.flowControlEnabled {
+				continue
+			}
+			// TODO: log blocked capsules
+		}
+	}
+}
+
+func (s *Session) closeWithFlowControlError(err error) {
+	s.closeWithError(&http3.Error{
+		ErrorCode:    http3.ErrCode(WTFlowControlErrorCode),
+		ErrorMessage: err.Error(),
+	}, nil)
+}
+
+func (s *Session) writeToConnectStream() {
+	// This goroutine owns all writes to the CONNECT stream.
+	// WT_CLOSE_SESSION is sent from here so it doesn't race with capsule writes.
+	for {
+		select {
+		case <-s.ctx.Done():
+			return
+		case <-s.capsuleQueueUpdated:
+		}
+
+		for {
+			s.capsuleQueueMx.Lock()
+			if s.pendingCloseCapsule != nil {
+				closeCapsule := *s.pendingCloseCapsule
+				s.capsuleQueueMx.Unlock()
+				_ = closeSessionStream(s.str, closeCapsule)
+				return
+			}
+			if len(s.capsuleQueue) == 0 {
+				s.capsuleQueueMx.Unlock()
+				break
+			}
+			c := s.capsuleQueue[0]
+			s.capsuleQueueMx.Unlock()
+
+			n, err := s.str.Write(c.Append(nil))
 			if err != nil {
-				return err
+				if n > 0 {
+					s.str.CancelRead(WTSessionGoneErrorCode)
+					s.str.CancelWrite(WTSessionGoneErrorCode)
+					s.closeWithError(err, nil)
+					return
+				}
+				if !s.closeWithError(err, nil) {
+					s.capsuleQueueMx.Lock()
+					hasClose := s.pendingCloseCapsule != nil
+					s.capsuleQueueMx.Unlock()
+					if hasClose {
+						continue
+					}
+				}
+				return
 			}
-			return &SessionError{
-				Remote:    true,
-				ErrorCode: SessionErrorCode(appErrCode),
-				Message:   string(appErrMsg),
+			s.capsuleQueueMx.Lock()
+			if len(s.capsuleQueue) > 0 {
+				s.capsuleQueue = s.capsuleQueue[1:]
 			}
-		default:
-			// unknown capsule, skip it
-			if _, err := io.ReadAll(r); err != nil {
-				return err
-			}
+			s.capsuleQueueMx.Unlock()
 		}
 	}
 }
 
-func (s *Session) addStream(qstr quic.Stream, addStreamHeader bool) Stream {
-	var hdr []byte
-	if addStreamHeader {
-		hdr = s.streamHdr
+func (s *Session) queueCapsule(c capsule) {
+	select {
+	case <-s.ctx.Done():
+		return
+	default:
 	}
-	str := newStream(qstr, hdr, func() { s.streams.RemoveStream(qstr.StreamID()) })
-	s.streams.AddStream(qstr.StreamID(), str.closeWithSession)
-	return str
-}
 
-func (s *Session) addReceiveStream(qstr quic.ReceiveStream) ReceiveStream {
-	str := newReceiveStream(qstr, func() { s.streams.RemoveStream(qstr.StreamID()) })
-	s.streams.AddStream(qstr.StreamID(), func() {
-		str.closeWithSession()
-	})
-	return str
-}
+	s.capsuleQueueMx.Lock()
+	if len(s.capsuleQueue) >= maxQueuedOutgoingCapsules {
+		s.capsuleQueueMx.Unlock()
+		s.closeWithError(&http3.Error{
+			ErrorCode:    http3.ErrCodeExcessiveLoad,
+			ErrorMessage: "webtransport: outgoing capsule queue full",
+		}, nil)
+		return
+	}
+	s.capsuleQueue = append(s.capsuleQueue, c)
+	s.capsuleQueueMx.Unlock()
 
-func (s *Session) addSendStream(qstr quic.SendStream) SendStream {
-	str := newSendStream(qstr, s.uniStreamHdr, func() { s.streams.RemoveStream(qstr.StreamID()) })
-	s.streams.AddStream(qstr.StreamID(), str.closeWithSession)
-	return str
+	select {
+	case s.capsuleQueueUpdated <- struct{}{}:
+	default:
+	}
 }
 
 // addIncomingStream adds a bidirectional stream that the remote peer opened
-func (s *Session) addIncomingStream(qstr quic.Stream) {
-	s.closeMx.Lock()
-	closeErr := s.closeErr
-	if closeErr != nil {
-		s.closeMx.Unlock()
-		qstr.CancelRead(sessionCloseErrorCode)
-		qstr.CancelWrite(sessionCloseErrorCode)
-		return
+func (s *Session) addIncomingStream(qstr *quic.Stream, streamHeaderLen uint64) {
+	id := qstr.StreamID()
+	str := newStream(
+		qstr,
+		nil,
+		s.outgoingDataFC,
+		s.incomingDataFC,
+		s.queueCapsule,
+		s.closeWithFlowControlError,
+		func() { s.incomingStreams.RemoveStream(id) },
+		int64(streamHeaderLen),
+	)
+	if err := s.incomingStreams.AddStream(id, str); err != nil {
+		str.closeWithSession(err)
+		s.closeWithError(err, nil)
 	}
-	str := s.addStream(qstr, false)
-	s.closeMx.Unlock()
-
-	s.bidiAcceptQueue.Add(str)
 }
 
 // addIncomingUniStream adds a unidirectional stream that the remote peer opened
-func (s *Session) addIncomingUniStream(qstr quic.ReceiveStream) {
-	s.closeMx.Lock()
-	closeErr := s.closeErr
-	if closeErr != nil {
-		s.closeMx.Unlock()
-		qstr.CancelRead(sessionCloseErrorCode)
-		return
+func (s *Session) addIncomingUniStream(qstr *quic.ReceiveStream, streamHeaderLen uint64) {
+	id := qstr.StreamID()
+	str := newReceiveStream(
+		qstr,
+		int64(streamHeaderLen),
+		func() { s.incomingUniStreams.RemoveStream(id) },
+		s.incomingDataFC,
+		s.closeWithFlowControlError,
+	)
+	if err := s.incomingUniStreams.AddStream(id, str); err != nil {
+		str.closeWithSession(err)
+		s.closeWithError(err, nil)
 	}
-	str := s.addReceiveStream(qstr)
-	s.closeMx.Unlock()
-
-	s.uniAcceptQueue.Add(str)
 }
 
 // Context returns a context that is closed when the session is closed.
@@ -224,203 +303,156 @@ func (s *Session) Context() context.Context {
 	return s.ctx
 }
 
-func (s *Session) AcceptStream(ctx context.Context) (Stream, error) {
-	s.closeMx.Lock()
-	closeErr := s.closeErr
-	s.closeMx.Unlock()
-	if closeErr != nil {
-		return nil, closeErr
-	}
-
-	for {
-		// If there's a stream in the accept queue, return it immediately.
-		if str := s.bidiAcceptQueue.Next(); str != nil {
-			return str, nil
-		}
-		// No stream in the accept queue. Wait until we accept one.
-		select {
-		case <-s.ctx.Done():
-			return nil, s.closeErr
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-s.bidiAcceptQueue.Chan():
-		}
-	}
+func (s *Session) AcceptStream(ctx context.Context) (*Stream, error) {
+	return s.incomingStreams.AcceptStream(ctx)
 }
 
-func (s *Session) AcceptUniStream(ctx context.Context) (ReceiveStream, error) {
-	s.closeMx.Lock()
-	closeErr := s.closeErr
-	s.closeMx.Unlock()
-	if closeErr != nil {
-		return nil, s.closeErr
-	}
-
-	for {
-		// If there's a stream in the accept queue, return it immediately.
-		if str := s.uniAcceptQueue.Next(); str != nil {
-			return str, nil
-		}
-		// No stream in the accept queue. Wait until we accept one.
-		select {
-		case <-s.ctx.Done():
-			return nil, s.closeErr
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-s.uniAcceptQueue.Chan():
-		}
-	}
+func (s *Session) AcceptUniStream(ctx context.Context) (*ReceiveStream, error) {
+	return s.incomingUniStreams.AcceptStream(ctx)
 }
 
-func (s *Session) OpenStream() (Stream, error) {
+func (s *Session) OpenStream() (*Stream, error) {
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
 
 	if s.closeErr != nil {
 		return nil, s.closeErr
 	}
-
-	qstr, err := s.qconn.OpenStream()
-	if err != nil {
-		return nil, err
-	}
-	return s.addStream(qstr, true), nil
+	return s.outgoingStreams.OpenStream()
 }
 
-func (s *Session) addStreamCtxCancel(cancel context.CancelFunc) (id int) {
-rand:
-	id = rand.Int()
-	if _, ok := s.streamCtxs[id]; ok {
-		goto rand
-	}
-	s.streamCtxs[id] = cancel
-	return id
-}
-
-func (s *Session) OpenStreamSync(ctx context.Context) (Stream, error) {
+func (s *Session) OpenStreamSync(ctx context.Context) (*Stream, error) {
 	s.closeMx.Lock()
 	if s.closeErr != nil {
 		s.closeMx.Unlock()
 		return nil, s.closeErr
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	id := s.addStreamCtxCancel(cancel)
 	s.closeMx.Unlock()
 
-	qstr, err := s.qconn.OpenStreamSync(ctx)
-	if err != nil {
-		if s.closeErr != nil {
-			return nil, s.closeErr
-		}
-		return nil, err
-	}
+	str, err := s.outgoingStreams.OpenStreamSync(ctx)
 
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
-	delete(s.streamCtxs, id)
-	// Some time might have passed. Check if the session is still alive
+
+	// the session might have been closed concurrently with OpenStreamSync returning
 	if s.closeErr != nil {
-		qstr.CancelWrite(sessionCloseErrorCode)
-		qstr.CancelRead(sessionCloseErrorCode)
 		return nil, s.closeErr
 	}
-	return s.addStream(qstr, true), nil
+	return str, err
 }
 
-func (s *Session) OpenUniStream() (SendStream, error) {
+func (s *Session) OpenUniStream() (*SendStream, error) {
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
 
 	if s.closeErr != nil {
 		return nil, s.closeErr
 	}
-	qstr, err := s.qconn.OpenUniStream()
-	if err != nil {
-		return nil, err
-	}
-	return s.addSendStream(qstr), nil
+	return s.outgoingUniStreams.OpenStream()
 }
 
-func (s *Session) OpenUniStreamSync(ctx context.Context) (str SendStream, err error) {
+func (s *Session) OpenUniStreamSync(ctx context.Context) (str *SendStream, err error) {
 	s.closeMx.Lock()
 	if s.closeErr != nil {
 		s.closeMx.Unlock()
 		return nil, s.closeErr
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	id := s.addStreamCtxCancel(cancel)
 	s.closeMx.Unlock()
 
-	qstr, err := s.qconn.OpenUniStreamSync(ctx)
-	if err != nil {
-		if s.closeErr != nil {
-			return nil, s.closeErr
-		}
-		return nil, err
-	}
+	str, err = s.outgoingUniStreams.OpenStreamSync(ctx)
 
 	s.closeMx.Lock()
 	defer s.closeMx.Unlock()
-	delete(s.streamCtxs, id)
-	// Some time might have passed. Check if the session is still alive
+
+	// the session might have been closed concurrently with OpenStreamSync returning
 	if s.closeErr != nil {
-		qstr.CancelWrite(sessionCloseErrorCode)
 		return nil, s.closeErr
 	}
-	return s.addSendStream(qstr), nil
+	return str, err
 }
 
 func (s *Session) LocalAddr() net.Addr {
-	return s.qconn.LocalAddr()
+	return s.conn.LocalAddr()
 }
 
 func (s *Session) RemoteAddr() net.Addr {
-	return s.qconn.RemoteAddr()
+	return s.conn.RemoteAddr()
 }
 
 func (s *Session) CloseWithError(code SessionErrorCode, msg string) error {
-	first, err := s.closeWithError(code, msg)
-	if err != nil || !first {
-		return err
+	closeCapsule := closeSessionCapsule{ErrorCode: code, Message: msg}
+	if first := s.closeWithError(&SessionError{ErrorCode: code, Message: msg}, &closeCapsule); first {
+		<-s.ctx.Done()
+	}
+	return nil
+}
+
+func closeSessionStream(str http3Stream, closeCapsule closeSessionCapsule) error {
+	if err := str.TryWriteAll(closeCapsule.Append(nil)); err != nil {
+		str.CancelWrite(WTSessionGoneErrorCode)
 	}
 
-	s.requestStr.CancelRead(1337)
-	err = s.requestStr.Close()
-	<-s.ctx.Done()
-	return err
+	str.CancelRead(WTSessionGoneErrorCode)
+	return str.Close()
 }
 
 func (s *Session) SendDatagram(b []byte) error {
-	return s.requestStr.SendDatagram(b)
+	return s.str.SendDatagram(b)
 }
 
 func (s *Session) ReceiveDatagram(ctx context.Context) ([]byte, error) {
-	return s.requestStr.ReceiveDatagram(ctx)
+	return s.str.ReceiveDatagram(ctx)
 }
 
-func (s *Session) closeWithError(code SessionErrorCode, msg string) (bool /* first call to close session */, error) {
+func (s *Session) closeWithError(closeErr error, closeCapsule *closeSessionCapsule) bool {
 	s.closeMx.Lock()
-	defer s.closeMx.Unlock()
 	// Duplicate call, or the remote already closed this session.
 	if s.closeErr != nil {
-		return false, nil
+		s.closeMx.Unlock()
+		return false
 	}
-	s.closeErr = &SessionError{
-		ErrorCode: code,
-		Message:   msg,
+	s.closeErr = closeErr
+	s.closeMx.Unlock()
+
+	s.outgoingStreams.CloseSession(closeErr)
+	s.outgoingUniStreams.CloseSession(closeErr)
+	s.incomingStreams.CloseSession(closeErr)
+	s.incomingUniStreams.CloseSession(closeErr)
+
+	if closeCapsule != nil {
+		s.capsuleQueueMx.Lock()
+		s.capsuleQueue = nil
+		s.pendingCloseCapsule = closeCapsule
+		s.capsuleQueueMx.Unlock()
+
+		s.str.SetWriteDeadline(time.Now().Add(closeSessionTimeout))
+		select {
+		case s.capsuleQueueUpdated <- struct{}{}:
+		default:
+		}
+		return true
 	}
 
-	b := make([]byte, 4, 4+len(msg))
-	binary.BigEndian.PutUint32(b, uint32(code))
-	b = append(b, []byte(msg)...)
+	s.capsuleQueueMx.Lock()
+	s.capsuleQueue = nil
+	s.pendingCloseCapsule = nil
+	s.capsuleQueueMx.Unlock()
 
-	return true, http3.WriteCapsule(
-		quicvarint.NewWriter(s.requestStr),
-		closeWebtransportSessionCapsuleType,
-		b,
-	)
+	code := WTSessionGoneErrorCode
+	if h3Err, ok := errors.AsType[*http3.Error](closeErr); ok {
+		code = quic.StreamErrorCode(h3Err.ErrorCode)
+	} else if strErr, ok := errors.AsType[*quic.StreamError](closeErr); ok {
+		code = strErr.ErrorCode
+	}
+	s.str.CancelRead(code)
+	s.str.CancelWrite(code)
+	return true
 }
 
-func (s *Session) ConnectionState() quic.ConnectionState {
-	return s.qconn.ConnectionState()
+// SessionState returns the current state of the session
+func (s *Session) SessionState() SessionState {
+	return SessionState{
+		ConnectionState:     s.conn.ConnectionState(),
+		ApplicationProtocol: s.applicationProtocol,
+	}
 }
