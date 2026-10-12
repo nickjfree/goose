@@ -15,12 +15,35 @@ var (
 	logger = log.New(os.Stdout, "fakeip: ", log.LstdFlags|log.Lshortfile)
 )
 
+// RFC 9460. gopacket has no names for these. An HTTPS or SVCB answer can
+// carry the real address in ipv4hint and send the client around the fake A record.
+const (
+	dnsTypeSVCB  layers.DNSType = 64
+	dnsTypeHTTPS layers.DNSType = 65
+)
+
+func responseCarriesSVCB(dns *layers.DNS) bool {
+	for _, q := range dns.Questions {
+		if q.Type == dnsTypeSVCB || q.Type == dnsTypeHTTPS {
+			return true
+		}
+	}
+	for _, section := range [][]layers.DNSResourceRecord{dns.Answers, dns.Authorities, dns.Additionals} {
+		for _, rr := range section {
+			if rr.Type == dnsTypeSVCB || rr.Type == dnsTypeHTTPS {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // checksum layer
 type ChecksumLayer interface {
 	SetNetworkLayerForChecksum(gopacket.NetworkLayer) error
 }
 
-func (manager *FakeIPManager) fakeDnsResponse(p *message.Packet) error {
+func (manager *FakeIPManager) fakeDnsResponse(p *message.Packet) (bool, error) {
 
 	packet := gopacket.NewPacket(p.Data, layers.LayerTypeIPv4, gopacket.Default)
 
@@ -36,7 +59,11 @@ func (manager *FakeIPManager) fakeDnsResponse(p *message.Packet) error {
 				dns := dnsLayer.(*layers.DNS)
 				// we only want response packet
 				if !dns.QR {
-					return nil
+					return false, nil
+				}
+				// block SVCB/HTTPS responses. the client then uses the rewritten A record
+				if responseCarriesSVCB(dns) {
+					return true, nil
 				}
 				// modify the dns answers
 				for i, ans := range dns.Answers {
@@ -44,15 +71,15 @@ func (manager *FakeIPManager) fakeDnsResponse(p *message.Packet) error {
 						// skip matched name or ip
 						if manager.rule != nil {
 							if manager.rule.MatchDomain(string(ans.Name)) {
-								return nil
+								return false, nil
 							}
 							if manager.rule.MatchDomain(ans.IP.String()) {
-								return nil
+								return false, nil
 							}
 						}
 						fakeIP, err := manager.alloc(string(ans.Name), ans.IP)
 						if err != nil {
-							return err
+							return false, err
 						}
 						// replace anwser to fake ip
 						dns.Answers[i].IP = fakeIP
@@ -91,14 +118,14 @@ func (manager *FakeIPManager) fakeDnsResponse(p *message.Packet) error {
 					}
 					udp.SetNetworkLayerForChecksum(ip)
 					if err := gopacket.SerializePacket(buffer, options, packet); err != nil {
-						return errors.WithStack(err)
+						return false, errors.WithStack(err)
 					}
 					p.Data = buffer.Bytes()
 				}
 			}
 		}
 	}
-	return nil
+	return false, nil
 }
 
 // replace fake ip to real ip
@@ -168,13 +195,13 @@ func (manager *FakeIPManager) Ingress(p *message.Packet) (bool, error) {
 
 // replace src ipaddress
 func (manager *FakeIPManager) Egress(p *message.Packet) (bool, error) {
-	drop := false
-	if err := manager.fakeDnsResponse(p); err != nil {
+	drop, err := manager.fakeDnsResponse(p)
+	if err != nil || drop {
 		return drop, err
 	}
 	// replace src ip to fake ip
 	if err := manager.sNAT(p); err != nil {
-		return drop, err
+		return false, err
 	}
-	return drop, nil
+	return false, nil
 }
