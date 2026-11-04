@@ -225,3 +225,7 @@ func SetupNAT(tun string) error {
 
 	return nil
 }
+
+func BlockOutsideDNS() error {
+	return nil
+}

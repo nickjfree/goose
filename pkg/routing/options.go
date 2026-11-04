@@ -73,6 +73,9 @@ func WithDiscovery(namespace string) Option {
 // dns fake ip
 func WithFakeIP(network, script, db string) Option {
 	return func(r *Router) error {
+		if err := utils.BlockOutsideDNS(); err != nil {
+			return err
+		}
 		r.fakeIP = fakeip.NewFakeIPManager(network, script, db)
 		return nil
 	}
