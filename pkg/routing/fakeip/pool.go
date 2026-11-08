@@ -1,6 +1,7 @@
 package fakeip
 
 import (
+	"encoding/binary"
 	"net"
 	"sync"
 	"time"
@@ -8,6 +9,14 @@ import (
 	"github.com/nickjfree/goose/pkg/routing/rule"
 	"github.com/nickjfree/goose/pkg/utils"
 )
+
+func ipKey(ip net.IP) uint32 {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return 0
+	}
+	return binary.BigEndian.Uint32(ip4)
+}
 
 // dns record A
 type dnsRecord struct {
@@ -28,13 +37,13 @@ type FakeIPManager struct {
 	// fake ip pool
 	pool *utils.IPPool
 	// fake to real ip mapping
-	f2r map[string]*net.IP
+	f2r map[uint32]*ipTracking
 	// real to fake ip mapping
-	r2f map[string]*net.IP
+	r2f map[uint32]*ipTracking
 	// real ip to the domain name it was resolved from
-	r2d map[string]string
+	r2d map[uint32]string
 	// ip trackings
-	trackings []ipTracking
+	trackings []*ipTracking
 	// fakeip rule
 	rule *rule.Rule
 	// fale name server cache
@@ -54,10 +63,10 @@ func NewFakeIPManager(network, script, db string) *FakeIPManager {
 	m := &FakeIPManager{
 		network:    *ipNet,
 		pool:       pool,
-		f2r:        make(map[string]*net.IP),
-		r2f:        make(map[string]*net.IP),
-		r2d:        make(map[string]string),
-		trackings:  []ipTracking{},
+		f2r:        make(map[uint32]*ipTracking),
+		r2f:        make(map[uint32]*ipTracking),
+		r2d:        make(map[uint32]string),
+		trackings:  []*ipTracking{},
 		nameServer: make(map[string][]dnsRecord),
 	}
 	if script != "" && db != "" {
@@ -79,27 +88,47 @@ func (manager *FakeIPManager) run() {
 	for {
 		select {
 		case <-ticker.C:
-			now := time.Now()
-			manager.mu.Lock()
-			old := manager.trackings
-			manager.trackings = []ipTracking{}
-			for _, item := range old {
-				if now.Sub(item.Updated) < time.Second*900 {
-					manager.trackings = append(manager.trackings, item)
-				} else {
-					// free the expired item
-					manager.free_locked(&item)
-				}
+			manager.expire(time.Now())
+		}
+	}
+}
+
+func (manager *FakeIPManager) expire(now time.Time) {
+	manager.mu.Lock()
+	defer manager.mu.Unlock()
+
+	old := manager.trackings
+	manager.trackings = []*ipTracking{}
+	for _, item := range old {
+		if now.Sub(item.Updated) < time.Second*900 {
+			manager.trackings = append(manager.trackings, item)
+		} else {
+			// free the expired item
+			manager.free_locked(item)
+		}
+	}
+
+	for name, records := range manager.nameServer {
+		kept := records[:0]
+		for _, rec := range records {
+			if now.Sub(rec.Exp) < 0 {
+				kept = append(kept, rec)
 			}
-			manager.mu.Unlock()
+		}
+		if len(kept) == 0 {
+			delete(manager.nameServer, name)
+		} else {
+			manager.nameServer[name] = kept
 		}
 	}
 }
 
 func (manager *FakeIPManager) free_locked(tracking *ipTracking) {
-	delete(manager.r2f, string(tracking.Real.To4()))
-	delete(manager.f2r, string(tracking.Fake.To4()))
-	delete(manager.r2d, string(tracking.Real.To4()))
+	realKey := ipKey(tracking.Real)
+	delete(manager.r2f, realKey)
+	delete(manager.f2r, ipKey(tracking.Fake))
+	delete(manager.r2d, realKey)
+	manager.pool.Free(tracking.Fake)
 }
 
 // alloc fake ip
@@ -107,48 +136,60 @@ func (manager *FakeIPManager) alloc(domain string, real net.IP) (net.IP, error) 
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
 
-	var fake net.IP
-	var err error
-
+	realKey := ipKey(real)
 	// remember the domain this ip was resolved from. the newest one wins
 	if domain != "" {
-		manager.r2d[string(real.To4())] = domain
+		manager.r2d[realKey] = domain
 	}
 	// find fakeip from mapping
-	if f, ok := manager.r2f[string(real.To4())]; ok {
-		fake = *f
-		return fake, nil
-	} else {
-		// alloc new fake ip
-		if fake, err = manager.pool.Alloc(); err != nil {
-			return nil, err
-		}
-		// update mapping
-		manager.f2r[string(fake.To4())] = &real
-		manager.r2f[string(real.To4())] = &fake
-		return fake, nil
+	if item, ok := manager.r2f[realKey]; ok {
+		item.Updated = time.Now()
+		return item.Fake, nil
 	}
+	// alloc new fake ip
+	fake, err := manager.pool.Alloc()
+	if err != nil {
+		return nil, err
+	}
+	item := &ipTracking{
+		Real:    real,
+		Fake:    fake,
+		Updated: time.Now(),
+	}
+	// update mapping
+	manager.f2r[ipKey(fake)] = item
+	manager.r2f[realKey] = item
+	manager.trackings = append(manager.trackings, item)
+	return fake, nil
 }
 
 // get real ip by fake ip
 func (manager *FakeIPManager) toReal(fake net.IP) *net.IP {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	return manager.f2r[string(fake.To4())]
+	if item, ok := manager.f2r[ipKey(fake)]; ok {
+		item.Updated = time.Now()
+		return &item.Real
+	}
+	return nil
 }
 
 // get fake ip by real ip
 func (manager *FakeIPManager) toFake(real net.IP) *net.IP {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	return manager.r2f[string(real.To4())]
+	if item, ok := manager.r2f[ipKey(real)]; ok {
+		item.Updated = time.Now()
+		return &item.Fake
+	}
+	return nil
 }
 
 // get the domain name the ip was resolved from. empty if unknown
 func (manager *FakeIPManager) Domain(ip net.IP) string {
 	manager.mu.Lock()
 	defer manager.mu.Unlock()
-	return manager.r2d[string(ip.To4())]
+	return manager.r2d[ipKey(ip)]
 }
 
 // dns traffice routing

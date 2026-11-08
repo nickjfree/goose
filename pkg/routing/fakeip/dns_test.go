@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"net"
 	"testing"
+	"time"
 
 	"github.com/google/gopacket"
 	"github.com/google/gopacket/layers"
@@ -149,5 +150,65 @@ func TestEgressDropsSVCBAndHTTPSResponses(t *testing.T) {
 	}
 	if !bytes.Equal(queryPacket.Data, queryOriginal) {
 		t.Fatal("HTTPS query was modified")
+	}
+}
+
+func TestFakeIPExpirationAndPoolReuse(t *testing.T) {
+	manager := NewFakeIPManager("11.0.0.0/30", "", "")
+	real1 := net.IPv4(1, 1, 1, 1)
+	real2 := net.IPv4(2, 2, 2, 2)
+	real3 := net.IPv4(3, 3, 3, 3)
+
+	fake1, err := manager.alloc("one.example", real1)
+	if err != nil {
+		t.Fatalf("alloc real1: %s", err)
+	}
+	fake2, err := manager.alloc("two.example", real2)
+	if err != nil {
+		t.Fatalf("alloc real2: %s", err)
+	}
+
+	// age both entries by 600s, then touch fake1 so its timer resets
+	base := time.Now()
+	manager.mu.Lock()
+	for _, item := range manager.trackings {
+		item.Updated = base.Add(-600 * time.Second)
+	}
+	manager.mu.Unlock()
+
+	if got := manager.toReal(fake1); got == nil || !got.Equal(real1) {
+		t.Fatalf("toReal(fake1) = %v, want %s", got, real1)
+	}
+
+	// 400s later: real2 is 1000s old (>= 900s) and expires; real1 was recently touched and stays
+	manager.expire(base.Add(400 * time.Second))
+
+	if got := manager.toReal(fake2); got != nil {
+		t.Fatalf("expected fake2 to expire, still mapped to %s", got)
+	}
+	if got := manager.Domain(real2); got != "" {
+		t.Fatalf("expected domain for real2 to be cleared, got %s", got)
+	}
+	if got := manager.toReal(fake1); got == nil || !got.Equal(real1) {
+		t.Fatalf("expected fake1 to remain active, got %v", got)
+	}
+
+	// freed fake2 IP is returned to the pool and reused for real3
+	fake3, err := manager.alloc("three.example", real3)
+	if err != nil {
+		t.Fatalf("alloc real3: %s", err)
+	}
+	if !fake3.Equal(fake2) {
+		t.Fatalf("expected reused fake IP %s, got %s", fake2, fake3)
+	}
+
+	// expired custom name records are removed from nameServer map
+	manager.SetNameRecord("peer.goose", net.IPv4(192, 168, 1, 10))
+	manager.expire(time.Now().Add(4 * time.Minute))
+	manager.mu.Lock()
+	_, exists := manager.nameServer["peer.goose"]
+	manager.mu.Unlock()
+	if exists {
+		t.Fatal("expected expired nameServer entry to be deleted")
 	}
 }
