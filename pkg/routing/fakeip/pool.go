@@ -10,6 +10,10 @@ import (
 	"github.com/nickjfree/goose/pkg/utils"
 )
 
+const (
+	fakeIPExpire = time.Hour * 24
+)
+
 func ipKey(ip net.IP) uint32 {
 	ip4 := ip.To4()
 	if ip4 == nil {
@@ -100,7 +104,7 @@ func (manager *FakeIPManager) expire(now time.Time) {
 	old := manager.trackings
 	manager.trackings = []*ipTracking{}
 	for _, item := range old {
-		if now.Sub(item.Updated) < time.Second*900 {
+		if now.Sub(item.Updated) < fakeIPExpire {
 			manager.trackings = append(manager.trackings, item)
 		} else {
 			// free the expired item

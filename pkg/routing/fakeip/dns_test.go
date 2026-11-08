@@ -168,11 +168,11 @@ func TestFakeIPExpirationAndPoolReuse(t *testing.T) {
 		t.Fatalf("alloc real2: %s", err)
 	}
 
-	// age both entries by 600s, then touch fake1 so its timer resets
+	// age both entries by 20h, then touch fake1 so its timer resets
 	base := time.Now()
 	manager.mu.Lock()
 	for _, item := range manager.trackings {
-		item.Updated = base.Add(-600 * time.Second)
+		item.Updated = base.Add(-20 * time.Hour)
 	}
 	manager.mu.Unlock()
 
@@ -180,8 +180,8 @@ func TestFakeIPExpirationAndPoolReuse(t *testing.T) {
 		t.Fatalf("toReal(fake1) = %v, want %s", got, real1)
 	}
 
-	// 400s later: real2 is 1000s old (>= 900s) and expires; real1 was recently touched and stays
-	manager.expire(base.Add(400 * time.Second))
+	// 5h later: real2 is 25h old (>= 24h) and expires; real1 was recently touched and stays
+	manager.expire(base.Add(5 * time.Hour))
 
 	if got := manager.toReal(fake2); got != nil {
 		t.Fatalf("expected fake2 to expire, still mapped to %s", got)
