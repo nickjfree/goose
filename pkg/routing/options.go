@@ -5,6 +5,7 @@ import (
 	"net"
 	"time"
 
+	"github.com/nickjfree/goose/pkg/options"
 	"github.com/nickjfree/goose/pkg/routing/discovery"
 	"github.com/nickjfree/goose/pkg/routing/fakeip"
 	"github.com/nickjfree/goose/pkg/utils"
@@ -76,7 +77,11 @@ func WithFakeIP(network, script, db string) Option {
 		if err := utils.BlockOutsideDNS(); err != nil {
 			return err
 		}
-		r.fakeIP = fakeip.NewFakeIPManager(network, script, db)
+		resolvers, err := options.ParseDNSServers()
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		r.fakeIP = fakeip.NewFakeIPManager(network, script, db, resolvers)
 		return nil
 	}
 }

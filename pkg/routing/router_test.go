@@ -37,7 +37,7 @@ func countNetwork(list, network string) int {
 func TestFakeIPRoutingsStayWithoutDefaultRoute(t *testing.T) {
 
 	r := testRouter(t)
-	r.fakeIP = fakeip.NewFakeIPManager("11.0.0.0/16", "", "")
+	r.fakeIP = fakeip.NewFakeIPManager("11.0.0.0/16", "", "", nil)
 	tunnel := testPort("tun/goose")
 	exit := testPort("ipfs/QmExit")
 	peer := testPort("ipfs/QmPeer")

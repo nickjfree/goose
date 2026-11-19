@@ -498,7 +498,7 @@ func (r *Router) getRoutingsForPort(p *Port) ([]message.RoutingEntry, error) {
 			}
 		}
 	}
-	// -p keeps 8.8.8.8/32 and the fake range on the host even when
+	// -p keeps configured DNS resolvers (/32) and the fake range on the host even when
 	// no peer is advertising 0.0.0.0/0
 	if p.IsTunnel() && r.fakeIP != nil {
 		for _, network := range r.fakeIP.DNSRoutings() {

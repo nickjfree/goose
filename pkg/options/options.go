@@ -59,6 +59,7 @@ func init() {
 	flag.StringVar(&Forward, "f", "", "forward networks, comma separated CIDRs")
 	flag.StringVar(&Namespace, "n", "", "namespace")
 	flag.StringVar(&FakeRange, "p", "", "fake ip range")
+	flag.StringVar(&DNS, "dns", DNS, "comma separated DNS resolver IPv4 addresses for fake-ip")
 	flag.StringVar(&RuleScript, "r", "", "rule script")
 	flag.StringVar(&GeoipDbFile, "g", "", "geoip db file")
 	flag.StringVar(&Name, "name", "", "domain name to use, namespace must be set")

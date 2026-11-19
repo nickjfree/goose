@@ -1,11 +1,12 @@
 package utils
 
 import (
-	"github.com/pkg/errors"
+	"net"
 	"regexp"
 	"strings"
 
 	"github.com/nickjfree/goose/pkg/options"
+	"github.com/pkg/errors"
 )
 
 var (
@@ -113,6 +114,34 @@ type Rule struct {
 	Rule  []string
 }
 
+func blockDoHRules(tun string) []Rule {
+	resolvers, err := options.ParseDNSServers()
+	if err != nil {
+		logger.Printf("dns resolvers: %s", err)
+		resolvers = []net.IP{net.IPv4(8, 8, 8, 8)}
+	}
+	rules := []Rule{
+		{
+			Table: "filter",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "53", "-j", "DROP"},
+		},
+		{
+			Table: "filter",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "853", "-j", "DROP"},
+		},
+	}
+	for _, ip := range resolvers {
+		rules = append(rules, Rule{
+			Table: "filter",
+			Chain: "GOOSE-FORWARD",
+			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "443", "-d", ip.String(), "-j", "DROP"},
+		})
+	}
+	return rules
+}
+
 // set up iptables rules when running as a router
 func SetupNAT(tun string) error {
 	// enabled ip forward
@@ -145,35 +174,7 @@ func SetupNAT(tun string) error {
 		},
 	}
 
-	// block DoH, so we can intercept DNS responses
-	blockDoH := []Rule{
-		// block DoH
-		{
-			Table: "filter",
-			Chain: "GOOSE-FORWARD",
-			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "443", "-d", "8.8.8.8", "-j", "DROP"},
-		},
-		{
-			Table: "filter",
-			Chain: "GOOSE-FORWARD",
-			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "443", "-d", "8.8.4.4", "-j", "DROP"},
-		},
-		{
-			Table: "filter",
-			Chain: "GOOSE-FORWARD",
-			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "53", "-j", "DROP"},
-		},
-		{
-			Table: "filter",
-			Chain: "GOOSE-FORWARD",
-			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "853", "-j", "DROP"},
-		},
-		{
-			Table: "filter",
-			Chain: "GOOSE-FORWARD",
-			Rule:  []string{"-i", tun, "-p", "tcp", "--dport", "443", "-d", "8.8.4.4", "-j", "DROP"},
-		},
-	}
+	blockDoH := blockDoHRules(tun)
 
 	// masq
 	masq := []Rule{
