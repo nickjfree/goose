@@ -13,6 +13,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/nickjfree/goose/pkg/options"
 	"github.com/nickjfree/goose/pkg/utils"
 	"github.com/nickjfree/goose/pkg/wire"
 )
@@ -99,14 +100,11 @@ func setIPAddress(iface *water.Interface, addr string) error {
 		return errors.Wrap(err, string(out))
 	}
 	logger.Printf("set tunnel ip address to %s", addr)
-	// set tunnel dns server to 8.8.8.8
-	args = fmt.Sprintf("interface ip set dnsservers name=\"%s\" static 8.8.8.8 primary",
-		iface.Name(),
-	)
-	if out, err := utils.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
-		return errors.Wrap(err, string(out))
+	if options.FakeRange != "" {
+		if err := setTunnelDNS(iface); err != nil {
+			return err
+		}
 	}
-	logger.Printf("set tunnel dnsservers to 8.8.8.8")
 	//  set mtu to 1200
 	args = fmt.Sprintf("interface ipv4 set subinterface \"%s\" mtu=1000 store=active", iface.Name())
 	if out, err := utils.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
@@ -119,6 +117,26 @@ func setIPAddress(iface *water.Interface, addr string) error {
 		return errors.Wrap(err, string(out))
 	}
 	logger.Printf("set tunnel metric to 9")
+	return nil
+}
+
+func setTunnelDNS(iface *water.Interface) error {
+	resolvers, err := options.ParseDNSServers()
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	name := iface.Name()
+	args := fmt.Sprintf("interface ip set dnsservers name=\"%s\" static %s primary", name, resolvers[0].String())
+	if out, err := utils.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
+		return errors.Wrap(err, string(out))
+	}
+	for i := 1; i < len(resolvers); i++ {
+		args = fmt.Sprintf("interface ip add dnsservers name=\"%s\" %s index=%d", name, resolvers[i].String(), i+1)
+		if out, err := utils.RunCmd("netsh", strings.Split(args, " ")...); err != nil {
+			return errors.Wrap(err, string(out))
+		}
+	}
+	logger.Printf("set tunnel dnsservers to %s", options.DNS)
 	return nil
 }
 

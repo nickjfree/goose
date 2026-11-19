@@ -47,6 +47,8 @@ Usage of goose:
         domain name to use, namespace must be set
   -p string
         fake ip range
+  -dns string
+        comma separated DNS resolver IPv4 addresses for fake-ip (default "8.8.8.8")
   -r string
         rule script
   -wg string
@@ -155,10 +157,10 @@ function matchDomain(domain) {
 Run the following command to apply the custom rules:
 
 ```bash
-goose -n my-network -name b -g geoip-country.mmdb -r rule.js -p 11.0.0.0/16
+goose -n my-network -name b -g geoip-country.mmdb -r rule.js -p 11.0.0.0/16 -dns 8.8.8.8,8.8.4.4
 ```
 
-Explanation: This command applies the custom routing rules defined in rule.js and sets up a fake-ip range of 11.0.0.0/16.
+Explanation: This command applies the custom routing rules defined in rule.js, sets up a fake-ip range of 11.0.0.0/16, and routes DNS to the resolvers listed in `-dns` (each gets a /32 host route through the tunnel).
 
 
 Testing

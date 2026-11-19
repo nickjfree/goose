@@ -67,7 +67,7 @@ func (manager *FakeIPManager) fakeDnsResponse(p *message.Packet) (bool, error) {
 				}
 				// modify the dns answers
 				for i, ans := range dns.Answers {
-					if ans.Type == layers.DNSTypeA && !ans.IP.Equal(net.IPv4(8, 8, 8, 8)) && !ans.IP.Equal(net.IPv4(8, 8, 4, 4)) {
+					if ans.Type == layers.DNSTypeA && !manager.isResolver(ans.IP) {
 						// skip matched name or ip
 						if manager.rule != nil {
 							if manager.rule.MatchDomain(string(ans.Name)) {

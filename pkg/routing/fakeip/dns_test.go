@@ -100,7 +100,7 @@ func answerIP(t *testing.T, data []byte) net.IP {
 }
 
 func TestEgressDropsSVCBAndHTTPSResponses(t *testing.T) {
-	manager := NewFakeIPManager("11.0.0.0/16", "", "")
+	manager := NewFakeIPManager("11.0.0.0/16", "", "", nil)
 	real := net.IPv4(1, 2, 3, 4).To4()
 	hint := net.IPv4(9, 9, 9, 9).To4()
 
@@ -154,7 +154,7 @@ func TestEgressDropsSVCBAndHTTPSResponses(t *testing.T) {
 }
 
 func TestFakeIPExpirationAndPoolReuse(t *testing.T) {
-	manager := NewFakeIPManager("11.0.0.0/30", "", "")
+	manager := NewFakeIPManager("11.0.0.0/30", "", "", nil)
 	real1 := net.IPv4(1, 1, 1, 1)
 	real2 := net.IPv4(2, 2, 2, 2)
 	real3 := net.IPv4(3, 3, 3, 3)

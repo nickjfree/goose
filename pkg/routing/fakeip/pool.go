@@ -48,6 +48,8 @@ type FakeIPManager struct {
 	r2d map[uint32]string
 	// ip trackings
 	trackings []*ipTracking
+	// resolver addresses (host routes and DNS answer exclusions)
+	resolvers []net.IP
 	// fakeip rule
 	rule *rule.Rule
 	// fale name server cache
@@ -56,10 +58,13 @@ type FakeIPManager struct {
 	mu sync.Mutex
 }
 
-func NewFakeIPManager(network, script, db string) *FakeIPManager {
+func NewFakeIPManager(network, script, db string, resolvers []net.IP) *FakeIPManager {
 	_, ipNet, err := net.ParseCIDR(network)
 	if err != nil {
 		logger.Fatal(err)
+	}
+	if len(resolvers) == 0 {
+		resolvers = []net.IP{net.IPv4(8, 8, 8, 8)}
 	}
 
 	pool := utils.NewIPPool(*ipNet)
@@ -72,6 +77,7 @@ func NewFakeIPManager(network, script, db string) *FakeIPManager {
 		r2d:        make(map[uint32]string),
 		trackings:  []*ipTracking{},
 		nameServer: make(map[string][]dnsRecord),
+		resolvers:  append([]net.IP(nil), resolvers...),
 	}
 	if script != "" && db != "" {
 		m.rule = rule.New(script, db)
@@ -196,15 +202,28 @@ func (manager *FakeIPManager) Domain(ip net.IP) string {
 	return manager.r2d[ipKey(ip)]
 }
 
+func (manager *FakeIPManager) isResolver(ip net.IP) bool {
+	ip4 := ip.To4()
+	if ip4 == nil {
+		return false
+	}
+	for _, r := range manager.resolvers {
+		if r.Equal(ip4) {
+			return true
+		}
+	}
+	return false
+}
+
 // dns traffice routing
 func (manager *FakeIPManager) DNSRoutings() []net.IPNet {
-	return []net.IPNet{
-		manager.network,
-		{
-			IP:   net.IPv4(8, 8, 8, 8),
-			Mask: net.IPv4Mask(255, 255, 255, 255),
-		},
+	nets := make([]net.IPNet, 0, 1+len(manager.resolvers))
+	nets = append(nets, manager.network)
+	mask := net.CIDRMask(32, 32)
+	for _, ip := range manager.resolvers {
+		nets = append(nets, net.IPNet{IP: ip, Mask: mask})
 	}
+	return nets
 }
 
 // register custome dns record to fakeip manager
