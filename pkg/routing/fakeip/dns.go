@@ -5,7 +5,6 @@ import (
 	"github.com/google/gopacket/layers"
 	"github.com/pkg/errors"
 	"log"
-	"net"
 	"os"
 
 	"github.com/nickjfree/goose/pkg/message"
